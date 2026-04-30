@@ -1,0 +1,74 @@
+name: Terraform Apply
+
+# Triggered on push to dev (applies dev environments) or main (applies prod environments).
+# This separation ensures prod is never touched by a dev branch merge.
+on:
+  push:
+    branches: [ dev, main ]
+
+permissions:
+  id-token: write  # Required for OIDC authentication with Azure
+  contents: read
+
+env:
+  # Silences Node.js 20 deprecation warnings ahead of GitHub's forced migration to Node.js 24 in June 2026
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  apply-dev:
+    runs-on: ubuntu-latest
+    # GitHub "dev" environment provides OIDC trust and can add required reviewers if needed.
+    environment: dev
+    if: github.ref == 'refs/heads/dev'
+
+    strategy:
+      # lz_dev and dev are deployed in parallel; lz_dev is expected to already exist on the first run.
+      matrix:
+        env: [lz_dev, dev]
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - run: terraform init
+      - run: terraform apply -auto-approve -input=false
+
+
+  apply-prod:
+    runs-on: ubuntu-latest
+    # GitHub "prod" environment gates this job behind manual approval before applying.
+    environment: prod
+    if: github.ref == 'refs/heads/main'
+
+    strategy:
+      matrix:
+        env: [lz_prod, prod]
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - run: terraform init
+      - run: terraform apply -auto-approve -input=false

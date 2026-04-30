@@ -1,0 +1,50 @@
+name: Terraform Plan
+
+# Runs on every PR to give early feedback before merge.
+on:
+  pull_request:
+
+permissions:
+  id-token: write  # Required for OIDC authentication with Azure
+  contents: read
+
+env:
+  # Silences Node.js 20 deprecation warnings ahead of GitHub's forced migration to Node.js 24 in June 2026
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # fail-fast: false — all environments run even if one fails, giving more information per CI run.
+      fail-fast: false
+      matrix:
+        env: [lz_dev, dev, lz_prod, prod]
+
+    env:
+      # ARM_USE_OIDC: federated credential auth — no secrets stored in GitHub, rotates automatically.
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    # Each matrix job runs from its own environment directory.
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init
+        run: terraform init
+      - name: Terraform Fmt check
+        run: terraform fmt -check
+      - name: Terraform Validate
+        run: terraform validate
+      - name: Terraform Plan
+        run: terraform plan -input=false

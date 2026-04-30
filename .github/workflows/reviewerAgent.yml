@@ -1,0 +1,177 @@
+name: Claude Reviewer Agent
+
+# workflow_run fires after "Terraform Plan" completes — this is intentional:
+# the agent needs the plan logs to already exist before it can review them.
+# Important: workflow_run reads this file from the default branch (main), not the PR branch.
+on:
+  workflow_run:
+    workflows: ["Terraform Plan"]
+    types: [completed]
+
+permissions:
+  pull-requests: write  # Required to post reviews and comments
+  contents: read
+
+env:
+  # Silences Node.js 20 deprecation warnings ahead of GitHub's forced migration to Node.js 24 in June 2026
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # if: always() — runs regardless of plan success or failure; the script handles both cases differently.
+    if: always()
+
+    steps:
+      # Check out the PR branch (not the default branch) so the system prompt file is accessible.
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # workflow_run.pull_requests may be empty for first-time contributors or fork PRs,
+      # so we fall back to querying the API by head SHA.
+      - name: Get PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_GITHUB_TOKEN }}
+          PR_CONTEXT: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          PR_NUMBER=$(echo "$PR_CONTEXT" | jq -r '.[0].number // empty')
+
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh api "repos/${{ github.repository }}/pulls" \
+              --jq ".[] | select(.head.sha == \"$HEAD_SHA\") | .number" | head -1)
+          fi
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for SHA $HEAD_SHA — skipping review"
+            exit 1
+          fi
+
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      # REVIEWER_GITHUB_TOKEN is a PAT — GITHUB_TOKEN cannot approve its own PRs.
+      - name: Get PR diff and metadata
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+            --jq '{ title: .title, body: (.body // "") }' > /tmp/pr_meta.json
+
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+            -H "Accept: application/vnd.github.diff" > /tmp/pr.diff
+
+      # Retrieve plan logs for all 4 environments to give Claude full context.
+      - name: Get Terraform Plan logs
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p /tmp/logs
+          JOBS=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs")
+
+          for ENV in lz_dev dev lz_prod prod; do
+            JOB_ID=$(echo "$JOBS" | jq -r ".jobs[] | select(.name == \"plan ($ENV)\") | .id" | head -1)
+            if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
+              gh api "repos/${{ github.repository }}/actions/jobs/$JOB_ID/logs" \
+                > "/tmp/logs/$ENV.log" 2>/dev/null || echo "Logs unavailable" > "/tmp/logs/$ENV.log"
+            else
+              echo "Job not found for environment $ENV" > "/tmp/logs/$ENV.log"
+            fi
+          done
+
+      - name: Install Anthropic SDK
+        run: python3 -m pip install anthropic --quiet
+
+      - name: Call Claude and post review
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GH_TOKEN: ${{ secrets.REVIEWER_GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PLAN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > /tmp/reviewer.py << 'PYEOF'
+          import anthropic, json, os, subprocess, sys
+
+          repo       = os.environ["REPO"]
+          pr_number  = os.environ["PR_NUMBER"]
+          conclusion = os.environ["PLAN_CONCLUSION"]
+          api_key    = os.environ["CLAUDE_API_KEY"]
+          gh_token   = os.environ["GH_TOKEN"]
+
+          auth_headers = [
+              "-H", f"Authorization: token {gh_token}",
+              "-H", "Accept: application/vnd.github+json",
+              "-H", "X-GitHub-Api-Version: 2022-11-28",
+          ]
+
+          def gh_post(url, payload):
+              subprocess.run(
+                  ["curl", "-s", "-X", "POST", url] + auth_headers + ["-d", json.dumps(payload)],
+                  check=True,
+              )
+
+          try:
+              with open(".github/reviewer-agent/system-prompt.md") as f:
+                  system_prompt = f.read()
+
+              with open("/tmp/pr_meta.json") as f:
+                  pr_meta = json.load(f)
+
+              with open("/tmp/pr.diff") as f:
+                  diff = f.read()[:15000]
+
+              plan_succeeded = conclusion == "success"
+              envs = ["lz_dev", "dev", "lz_prod", "prod"]
+
+              logs_section = (
+                  "## Terraform Plan Output\n\n" if plan_succeeded
+                  else "## Terraform Plan FAILED — Error Logs\n\n"
+              )
+              for env in envs:
+                  with open(f"/tmp/logs/{env}.log") as f:
+                      content = f.read()[-6000:]
+                  logs_section += f"### {env}\n```\n{content}\n```\n\n"
+
+              user_message = (
+                  f"## PR #{pr_number}: {pr_meta['title']}\n\n"
+                  f"### Description\n{pr_meta['body'] or '_No description provided._'}\n\n"
+                  f"### Diff\n```diff\n{diff}\n```\n\n"
+                  + logs_section
+              )
+
+              # System prompt is cached (ephemeral) — reduces API cost when the same prompt is reused
+              # across multiple PR runs within the cache TTL window.
+              client = anthropic.Anthropic(api_key=api_key)
+              response = client.messages.create(
+                  model="claude-sonnet-4-6",
+                  max_tokens=4096,
+                  system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                  messages=[{"role": "user", "content": user_message}],
+              )
+              review_text = response.content[0].text
+
+              # If the plan succeeded, post a formal review (APPROVE or REQUEST_CHANGES).
+              # If the plan failed, post a comment only — a failed plan cannot be approved.
+              if plan_succeeded:
+                  event = "APPROVE" if "APPROVE" in review_text else "REQUEST_CHANGES"
+                  gh_post(
+                      f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
+                      {"body": review_text, "event": event},
+                  )
+                  print(f"Review submitted: {event}")
+              else:
+                  gh_post(
+                      f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments",
+                      {"body": review_text},
+                  )
+                  print("Comment posted (plan failed — no review action taken)")
+          except Exception as e:
+              print(f"ERROR: {e}")
+              sys.exit(1)
+          PYEOF
+          python3 /tmp/reviewer.py
