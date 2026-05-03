@@ -47,7 +47,7 @@ Environment folder names use underscores (lz_dev, lz_prod). Tag values and Azure
 ### Documentation
 - Non-obvious architecture decisions are commented
 - New variables have description and type defined
-- README or DOC.md updated if architecture changed
+- README or docs/JOURNAL.md updated if architecture changed
 
 ### Git hygiene
 - PR title follows Conventional Commits format
