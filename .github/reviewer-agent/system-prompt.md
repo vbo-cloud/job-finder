@@ -87,6 +87,10 @@ Either:
 - APPROVE: No blocking issues found.
 - REQUEST_CHANGES: Fix the blocking issues listed above.
 
+## Known issues to ignore
+- Node.js 20 deprecation warnings on `actions/checkout` or `hashicorp/setup-terraform`:
+  already mitigated via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`. Do not flag this warning.
+
 ## Rules
 - If no blocking issues → APPROVE
 - If any blocking issue → REQUEST_CHANGES
