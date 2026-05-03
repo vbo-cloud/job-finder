@@ -27,3 +27,15 @@ variable "owner" {
   type        = string
   description = "Owner tag value (email)"
 }
+
+variable "sku_name" {
+  type        = string
+  description = "Key Vault SKU: standard or premium"
+  default     = "standard"
+}
+
+variable "soft_delete_retention_days" {
+  type        = number
+  description = "Soft delete retention in days (7-90)"
+  default     = 7
+}
