@@ -297,6 +297,21 @@ Closed without merging. Was incorrectly targeting `main` instead of `dev`. Reope
 
 ---
 
+### PR #19 — docs: add architecture documentation (ADRs, ROADMAP, SUMMARY)
+**Date:** 2026-05-03
+
+**What was done:**
+- Added 13 Architecture Decision Records (`docs/adr/ADR-001` through `ADR-013`) covering every major technical choice for the job-finder application: database (PostgreSQL on Azure), compute platform (AKS), vector search (pgvector), schema migration (Alembic), container registry (ACR), LLM provider (Claude API), agent orchestration (LangGraph), embedding model (text-embedding-3-small), API framework (FastAPI), job offer collection (scraping via Playwright), user authentication (Clerk), monitoring (Azure Monitor + Prometheus), and Git/Terraform CI/CD (existing template)
+- Added `docs/ROADMAP.md` listing the planned milestones and their order of delivery
+- Added `docs/adr/SUMMARY.md` as an index table linking each ADR to its title and decision outcome
+
+**Technical decisions:**
+- ADRs are the single authoritative source for architectural choices — all decisions are documented before implementation begins
+- `SUMMARY.md` provides a quick overview so contributors don't have to read all 13 ADRs to understand the stack
+- Documentation lives in `docs/` to keep the repo root clean
+
+---
+
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
