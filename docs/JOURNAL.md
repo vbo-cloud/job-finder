@@ -255,7 +255,7 @@ Mise à jour du journal uniquement. Aucun changement de code.
 
 ---
 
-### PR #19 — docs: add architecture documentation (ADRs, ROADMAP, JOURNAL)
+### PR #1 — docs: add architecture documentation (ADRs, ROADMAP, JOURNAL)
 **Date :** 2026-05-03
 
 **Réalisé :**
@@ -279,3 +279,20 @@ Mise à jour du journal uniquement. Aucun changement de code.
 - ADR-011 : Azure AD B2C — 50K MAU gratuit, données EU, login social
 - ADR-012 : Azure Monitor + Application Insights — 5Go/mois gratuit, métriques infra auto
 - ADR-013 : Release branch + composants Terraform + staging éphémère (implémentation prévue transition M1→M2)
+
+---
+
+### PR #2 — feat: add Key Vault module
+**Date :** 2026-05-03
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/keyvault/` : `main.tf`, `variables.tf`, `outputs.tf`
+- La data source `azurerm_client_config` est internalisée dans le module — `tenant_id` n'est pas exposé comme variable d'input
+- Module appelé depuis `envs/dev/keyvault.tf` et `envs/prod/keyvault.tf` sans passer `tenant_id`
+- Key Vault déployé dans le resource group `rg_core` de chaque environnement
+
+**Décisions techniques :**
+- `enable_rbac_authorization = true` — contrôle d'accès via Azure RBAC (pas les access policies legacy)
+- `purge_protection_enabled = true` et `soft_delete_retention_days = 7` — conformes aux exigences de sécurité du projet
+- `prevent_destroy = true` dans le lifecycle — ressource critique, destruction bloquée par convention
+- `azurerm_client_config` dans le module plutôt qu'à l'appelant : le `tenant_id` est un détail d'implémentation interne, pas une préoccupation du caller
