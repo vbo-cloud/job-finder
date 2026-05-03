@@ -1,0 +1,281 @@
+# Journal de bord — job-finder
+
+Ce fichier trace l'évolution du projet PR par PR. Il est mis à jour à chaque PR mergée.
+Le contenu historique (template phase, PRs #1–18) est conservé en anglais. Les nouvelles entrées sont en français.
+
+---
+
+## Mise en place initiale
+
+Réalisée avant l'ouverture du premier PR.
+
+### Sécurité de base
+- Mots de passe et codes de récupération stockés dans un gestionnaire de mots de passe
+- Tous les mots de passe existants rotés à complexité maximale
+- 2FA activé avec une application Authenticator sur tous les comptes
+
+### Domaine et email
+- Domaine professionnel enregistré
+- Adresse email professionnelle associée au domaine créée
+
+### Tenant Azure et abonnements
+- Nouveau tenant Azure créé
+- Resource group, storage account et blob container créés pour le state Terraform distant
+- Resource locks appliqués sur le resource group et le storage account
+- Un Management Group créé pour le projet, avec un sous-groupe et un abonnement par environnement (Dev et Prod)
+
+### Dépôt Git
+- Nouvelle organisation GitHub et dépôt privé créés
+- `.gitignore` configuré pour Terraform (state files, `.terraform/`, etc.)
+- Authentification par clé SSH configurée
+
+### Structure Terraform de base
+- Deux environnements : `dev` et `prod`
+- Un dossier landing zone (`lz_dev`, `lz_prod`) et un dossier infrastructure applicative par environnement
+- Backend state distant via le storage account Azure créé ci-dessus
+
+### Pipelines CI/CD
+- Credentials Azure créés (service principal + OIDC) pour authentifier les runners GitHub Actions
+- **Workflow Terraform Plan** — se déclenche sur chaque PR, tourne sur les 4 environnements (`lz-dev`, `dev`, `lz-prod`, `prod`) : `terraform init`, `fmt -check`, `validate`, `plan`
+- **Workflow Terraform Apply** — se déclenche sur push vers `main`, tourne par environnement avec contexte spécifique ; exécute `terraform init` et `apply`
+- Objectif : aucun apply manuel — toutes les modifications passent par la CI/CD
+
+---
+
+## Journal des PRs
+
+### PR #1 — feat: migrate state backend and enforce resource naming convention
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Migration du state Terraform de local vers un backend Azure Storage distant (`stjftfstatefrc`, container `tfstate`), avec un state file par environnement
+- Convention de nommage appliquée : `{type}-{projet}-{environnement}-{région}` (ex: `rg-jf-dev-frc`, `vnet-jf-lz-dev-frc`)
+- Formatage Terraform corrigé sur tous les environnements et modules
+- Suppression de `fail-fast: true` dans la matrix du workflow Plan
+
+**Décisions techniques :**
+- Chaque environnement a son propre state file pour isoler le blast radius
+- Les storage accounts omettent les tirets et sont limités à 24 caractères (`stjftfstatefrc`)
+
+---
+
+### PR #2 — docs: add CLAUDE.md with project conventions
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Ajout de `CLAUDE.md` à la racine documentant les conventions du projet pour Claude Code : stack technique, règles de nommage Terraform, structure des modules, aperçu CI/CD, et règle no-local-apply
+- Ajout d'une section Git workflow couvrant le branching, le rebase, et les Conventional Commits
+
+**Décisions techniques :**
+- `CLAUDE.md` est commité pour que les conventions soient accessibles à tous les contributeurs et à Claude Code dans toute session
+
+---
+
+### PR #3 — fix: compute module AWS artifact + scaffold prod environments
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Correction d'un artefact copy-paste dans `modules/compute/variables.tf` : remplacement du type d'instance AWS `t2.micro` par l'équivalent Azure (`Standard_B2s`)
+- Scaffold des environnements `lz_prod` et `prod` en miroir de `lz_dev` / `dev`
+
+**Décisions techniques :**
+- `lz_prod` utilise l'espace d'adressage `10.1.0.0/16` pour éviter les conflits avec `lz_dev` (`10.0.0.0/16`)
+
+---
+
+### PR #4 — chore: add JOURNAL.md project log and enforce update rule in CLAUDE.md
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Ajout de `DOC.md` (renommé `docs/JOURNAL.md` en PR #19) : log de mise en place initiale + journal des PRs
+- Ajout d'une règle dans `CLAUDE.md` imposant la mise à jour du journal à chaque PR
+
+---
+
+### PR #5 — chore: set up GitFlow and branch protection
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Création de la branche `dev` depuis `main`
+- Ajout de la section Git Flow dans `CLAUDE.md` : stratégie de branches, versioning sémantique, workflow de release
+- Branch protection rules sur `main` et `dev` : les 4 jobs de plan CI doivent passer avant le merge, force push et suppressions bloqués
+
+**Décisions techniques :**
+- `dev` est la branche d'intégration : toutes les features y mergent en premier ; `main` n'est touché qu'aux releases et hotfixes
+
+---
+
+### PR #6 — fix: correct JOURNAL.md branch protection note
+**Date :** 2026-04-29
+
+**Réalisé :**
+- Correction de l'entrée PR #5 : la branch protection a été appliquée avec succès après la mise en public du repo
+
+---
+
+### PR #7 — ANNULÉE
+**Date :** 2026-04-30 | **Titre :** docs: Add project description to README.md
+
+Fermée sans merge. Mise à jour du README hors scope à ce stade.
+
+---
+
+### PR #8 — ANNULÉE
+**Date :** 2026-04-30 | **Titre :** feat: Create PR reviewer agent
+
+Fermée sans merge. Ciblait `main` au lieu de `dev`. Réouverte en PR #9.
+
+---
+
+### PR #9 — feat: Create PR reviewer agent
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Ajout de `.github/workflows/reviewerAgent.yml` : workflow déclenchée après Terraform Plan, récupère le diff et les logs de plan des 4 environnements, appelle l'API Claude, et poste la review directement sur la PR (approve / request changes)
+- Ajout de `.github/reviewer-agent/system-prompt.md` : persona du reviewer, contexte projet, checklist de review, format de sortie structuré
+
+**Décisions techniques :**
+- Le workflow utilise `workflow_run` pour se déclencher après `Terraform Plan` — le reviewer a toujours l'output de plan disponible avant de commenter
+- Le system prompt est envoyé avec `cache_control: ephemeral` pour bénéficier du prompt caching Claude
+- Un `REVIEWER_GITHUB_TOKEN` dédié est utilisé — `GITHUB_TOKEN` ne peut pas approuver ses propres PRs
+- Le diff envoyé à Claude est plafonné à 15 000 caractères et chaque log de plan à 6 000 caractères
+
+---
+
+### PR #10 — feat: Add Azure allowed-locations policy across all environments
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Module Terraform réutilisable `modules/policy/` avec `azurerm_policy_definition` et `azurerm_subscription_policy_assignment` scopée à la subscription
+- Appelé depuis les 4 environnements via un fichier `policy.tf` dédié, restreignant les déploiements à `francecentral` et `northeurope`
+
+**Décisions techniques :**
+- Assignment au scope subscription (pas resource group) — couvre tous les resource groups actuels et futurs
+- Les tags requis sont embarqués dans le champ `metadata` JSON (seule solution pour `azurerm_subscription_policy_assignment` qui n'a pas de bloc `tags`)
+
+---
+
+### PR #11 — docs: update JOURNAL.md entries
+**Date :** 2026-04-30
+
+Mise à jour du journal uniquement. Aucun changement de code.
+
+---
+
+### PR #12 — chore: sync dev to main to activate reviewer agent
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Merge de `dev` vers `main` pour rendre l'agent reviewer opérationnel — le trigger `workflow_run` ne se déclenche que sur les workflows présents sur la branche par défaut (`main`)
+
+---
+
+### PR #13 — chore: bump actions/checkout and setup-terraform to v4
+**Date :** 2026-04-30
+
+**Réalisé :**
+- `actions/checkout@v3 → @v4` et `hashicorp/setup-terraform@v3 → @v4` dans les workflows Plan et Apply pour résoudre les warnings de dépréciation Node.js 20
+
+---
+
+### PR #14 — feat: trigger Terraform Apply on push to dev for dev environments
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Extension de `terraformApply.yml` pour se déclencher aussi sur push vers `dev`, appliquant automatiquement `lz_dev` et `dev` quand une feature branch est mergée
+- Conditions `if: github.ref` au niveau des jobs pour que chaque job tourne uniquement sur sa branche cible
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   ⚠️   CHANGEMENT DE DIRECTION                                               ║
+║                                                                              ║
+║   L'infrastructure job-finder a été extraite en template réutilisable       ║
+║   (azure-terraform-template). Les PRs #15–18 appartiennent à cette phase.   ║
+║   Le développement de job-finder reprend après MILESTONE 0 COMPLETE.        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### PR #15 — chore: transform codebase into reusable infrastructure template
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Remplacement de toutes les valeurs hardcodées par des variables Terraform avec `default = "CHANGE_ME"`
+- Valeurs concrètes déplacées dans les `terraform.tfvars` de chaque environnement
+- Commentaires explicatifs ajoutés sur tous les fichiers Terraform et workflows CI/CD
+- Tags requis ajoutés sur toutes les ressources non taggées
+- Modèle Claude du reviewer agent passé de `claude-sonnet-4-5` à `claude-sonnet-4-6`
+- Appel API et post GitHub enveloppés dans un `try/except` avec `sys.exit(1)` sur erreur
+
+---
+
+### PR #16 — feat: add variable validation and GETTING_STARTED guide
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Blocs `validation` ajoutés dans les 4 `variables.tf` : `project` (2-4 lettres minuscules), `location_short`, `location` (pas CHANGE_ME), `owner` (doit contenir @)
+- `GETTING_STARTED.md` créé : guide d'onboarding en 5 étapes (Azure OIDC, GitHub config, substitution CHANGE_ME, init local, première PR)
+
+---
+
+### PR #17 — docs: add professional README and reset DOC.md as template changelog
+**Date :** 2026-04-30
+
+**Réalisé :**
+- `README.md` professionnel avec badges CI/CD, diagramme ASCII, structure du repo, quick start, table des workflows et stack technique
+- `DOC.md` remis à zéro comme changelog du template à partir de `v0.1.0`
+
+---
+
+### PR #18 — release: v0.1.0 — initial template release
+**Date :** 2026-04-30
+
+**Réalisé :**
+- Promotion de `dev` vers `main`, marquant la release `v0.1.0` de `azure-terraform-template`
+- Repo renommé `azure-terraform-template` sur GitHub et marqué comme Template Repository
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   ✅  MILESTONE 0 TERMINÉ — azure-terraform-template v0.1.0 publié          ║
+║                                                                              ║
+║   ▶▶  MILESTONE 1 DÉMARRE — reprise du développement job-finder             ║
+║                                                                              ║
+║   Repo : vbo-cloud/job-finder (créé depuis azure-terraform-template)        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### PR #19 — docs: add architecture documentation (ADRs, ROADMAP, JOURNAL)
+**Date :** 2026-05-03
+
+**Réalisé :**
+- Ajout de 13 Architecture Decision Records (`docs/adr/ADR-001` à `ADR-013`) couvrant l'ensemble des décisions techniques du projet job-finder
+- Ajout de `docs/ROADMAP.md` : planning jour par jour calibré à 10h/jour, de M1 à M5
+- Ajout de `docs/adr/SUMMARY.md` : table récapitulative des 13 ADRs
+- Déplacement de `DOC.md` (racine) vers `docs/JOURNAL.md` avec nom plus explicite
+- Mise à jour de `CLAUDE.md` et du system prompt reviewer pour référencer le nouveau chemin
+
+**Décisions techniques :**
+- ADR-001 : PostgreSQL Flexible Server B1ms (vs CosmosDB, MySQL)
+- ADR-002 : Container Apps (M1) → AKS (M3) (vs VM, ACI)
+- ADR-003 : pgvector dans PostgreSQL (vs Azure AI Search, Qdrant)
+- ADR-004 : Alembic + SQLAlchemy (vs Flyway, migrations manuelles)
+- ADR-005 : Azure Container Registry Basic (vs Docker Hub, GitHub Container Registry)
+- ADR-006 : Azure OpenAI GPT-4o-mini via francecentral — données CVs/utilisateurs en EU (RGPD)
+- ADR-007 : Azure Service Bus — découplage total des 4 agents via queues
+- ADR-008 : text-embedding-3-small 1536 dims (~0.02$/M tokens)
+- ADR-009 : FastAPI + uvicorn — async natif pour appels LLM non bloquants
+- ADR-010 : France Travail API (~500K offres, gratuit, légal, structuré)
+- ADR-011 : Azure AD B2C — 50K MAU gratuit, données EU, login social
+- ADR-012 : Azure Monitor + Application Insights — 5Go/mois gratuit, métriques infra auto
+- ADR-013 : Release branch + composants Terraform + staging éphémère (implémentation prévue transition M1→M2)

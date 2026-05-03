@@ -47,7 +47,7 @@ Environment folder names use underscores (lz_dev, lz_prod). Tag values and Azure
 ### Documentation
 - Non-obvious architecture decisions are commented
 - New variables have description and type defined
-- README or DOC.md updated if architecture changed
+- README or docs/JOURNAL.md updated if architecture changed
 
 ### Git hygiene
 - PR title follows Conventional Commits format
@@ -86,6 +86,10 @@ Optional improvements for the future.
 Either:
 - APPROVE: No blocking issues found.
 - REQUEST_CHANGES: Fix the blocking issues listed above.
+
+## Known issues to ignore
+- Node.js 20 deprecation warnings on `actions/checkout` or `hashicorp/setup-terraform`:
+  already mitigated via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`. Do not flag this warning.
 
 ## Rules
 - If no blocking issues → APPROVE
