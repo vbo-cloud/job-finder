@@ -326,6 +326,19 @@ Mise à jour du journal uniquement. Aucun changement de code.
 
 ---
 
+### PR #10 — fix: ignore availability zone drift on PostgreSQL Flexible Server
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Ajout de `ignore_changes = [zone]` dans le bloc `lifecycle` de `azurerm_postgresql_flexible_server`
+
+**Décisions techniques :**
+- À la création, Azure assigne automatiquement une availability zone au serveur (ex. zone 1). Cette valeur existe dans Azure mais n'est pas spécifiée dans le code Terraform
+- Terraform détecte une différence entre l'état Azure et le code et tente de la corriger — or Azure interdit de changer la zone sur un serveur existant (cela provoquerait une erreur ou un replace)
+- `ignore_changes = [zone]` indique à Terraform d'ignorer cet attribut après la création initiale
+
+---
+
 ### PR #9 — feat: add KV Secrets Officer role assignment and fix data source placement
 **Date :** 2026-05-04
 
