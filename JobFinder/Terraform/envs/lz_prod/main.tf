@@ -19,6 +19,10 @@ provider "azurerm" {
 
 data "azurerm_client_config" "current" {}
 
+# ==============================================================================
+# Resource Group
+# ==============================================================================
+
 resource "azurerm_resource_group" "rg" {
   name     = "rg-${var.project}-lz-prod-${var.location_short}"
   location = var.location
@@ -29,6 +33,10 @@ resource "azurerm_resource_group" "rg" {
     owner       = var.owner
   }
 }
+
+# ==============================================================================
+# Key Vault
+# ==============================================================================
 
 # Upgrade to Premium SKU when prod requires HSM-backed secrets or private endpoints.
 resource "azurerm_key_vault" "kv" {

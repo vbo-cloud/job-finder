@@ -20,6 +20,10 @@ provider "azurerm" {
 # Needed to retrieve the current client's tenant_id for the Key Vault access policy.
 data "azurerm_client_config" "current" {}
 
+# ==============================================================================
+# Resource Group
+# ==============================================================================
+
 resource "azurerm_resource_group" "rg" {
   name     = "rg-${var.project}-lz-dev-${var.location_short}"
   location = var.location
@@ -30,6 +34,10 @@ resource "azurerm_resource_group" "rg" {
     owner       = var.owner
   }
 }
+
+# ==============================================================================
+# Key Vault
+# ==============================================================================
 
 # Standard SKU is sufficient for dev; Premium (HSM-backed) is reserved for prod secrets.
 resource "azurerm_key_vault" "kv" {

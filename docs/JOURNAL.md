@@ -296,3 +296,30 @@ Mise à jour du journal uniquement. Aucun changement de code.
 - `purge_protection_enabled = true` et `soft_delete_retention_days = 7` — conformes aux exigences de sécurité du projet
 - `prevent_destroy = true` dans le lifecycle — ressource critique, destruction bloquée par convention
 - `azurerm_client_config` dans le module plutôt qu'à l'appelant : le `tenant_id` est un détail d'implémentation interne, pas une préoccupation du caller
+
+---
+
+### PR #3 — feat: add PostgreSQL Flexible Server module with pgvector and private networking
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/postgresql/` : `main.tf`, `variables.tf`, `outputs.tf`
+  - `random_password` pour le mot de passe administrateur (32 chars, stocké dans Key Vault, jamais exposé en output)
+  - `azurerm_postgresql_flexible_server` : PostgreSQL 16, SKU B_Standard_B1ms, 32 Go, VNet injection via subnet délégué et DNS privée
+  - `azurerm_postgresql_flexible_server_database` : base `jobfinder`, charset UTF8
+  - `azurerm_postgresql_flexible_server_configuration` : activation de l'extension `VECTOR` (pgvector)
+  - `azurerm_key_vault_secret` : connection string complète stockée dans le Key Vault de l'environnement
+- Prérequis réseau créés dans `envs/dev/postgresql-network.tf` et `envs/prod/postgresql-network.tf` :
+  - Subnet délégué `snet-jf-postgresql-{env}-frc` dans le VNet de la landing zone (10.0.3.0/24 pour dev, 10.1.3.0/24 pour prod)
+  - `azurerm_private_dns_zone` : `privatelink.postgres.database.azure.com`
+  - `azurerm_private_dns_zone_virtual_network_link` liant la zone DNS au VNet de la landing zone
+- Module appelé depuis `envs/dev/postgresql.tf` et `envs/prod/postgresql.tf`
+- Outputs `vnet_name` ajoutés à `lz_dev/outputs.tf` et `lz_prod/outputs.tf` (lz_prod n'avait aucun fichier outputs)
+- Provider `random` ajouté aux `required_providers` de `envs/dev/main.tf` et `envs/prod/main.tf`
+
+**Décisions techniques :**
+- VNet injection plutôt que private endpoint : recommandé par Azure pour PostgreSQL Flexible Server, intégration réseau native sans règle NSG supplémentaire
+- Subnet et DNS zone dans le resource group de la landing zone : ces ressources appartiennent à la couche réseau partagée (hub), pas à la couche applicative
+- `random_password` dans le module : le mot de passe n'est jamais passé comme variable d'input — seule la connection string (stockée dans Key Vault) est exposée à l'appelant
+- `prevent_destroy = true` sur le serveur et la base : ressources critiques avec état (données), destruction bloquée par convention
+- `geo_redundant_backup_enabled = true` uniquement en prod : non disponible sur le tier Burstable B1ms en dev (limitation Azure) ; activé avec `backup_retention_days = 35` en prod pour la durabilité des données
