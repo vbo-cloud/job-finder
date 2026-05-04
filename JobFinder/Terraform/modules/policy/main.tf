@@ -36,9 +36,6 @@ resource "azurerm_policy_definition" "allowed_locations" {
   }
 }
 
-# Subscription ID is resolved from the active OIDC session — no need to pass it explicitly.
-data "azurerm_client_config" "current" {}
-
 # Subscription-level assignment: one assignment covers all resource groups, including
 # ones created after this policy is applied. Per-RG assignments would require a new
 # assignment for each resource group, which is error-prone at scale.
@@ -46,7 +43,7 @@ resource "azurerm_subscription_policy_assignment" "allowed_locations" {
   name                 = "pa-${var.project}-${var.environment}-${var.location_short}-allowed-locations"
   display_name         = "Allowed locations - ${var.environment}"
   policy_definition_id = azurerm_policy_definition.allowed_locations.id
-  subscription_id      = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+  subscription_id      = "/subscriptions/${var.subscription_id}"
   not_scopes           = var.not_scopes
 
   # Tags embedded in metadata — azurerm_subscription_policy_assignment has no tags block
