@@ -10,6 +10,10 @@ data "azurerm_virtual_network" "lz_vnet" {
   resource_group_name = "rg-${var.project}-lz-prod-${var.location_short}"
 }
 
+# ==============================================================================
+# PostgreSQL Flexible Server
+# ==============================================================================
+
 resource "azurerm_subnet" "postgresql" {
   name                 = "snet-${var.project}-postgresql-prod-${var.location_short}"
   resource_group_name  = "rg-${var.project}-lz-prod-${var.location_short}"

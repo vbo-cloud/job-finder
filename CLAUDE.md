@@ -26,6 +26,12 @@ Az-104 certification obtained.
 - Modules: compute / network / data / resource-group
 - Remote state: Azure Storage Backend
 - Naming pattern: `{type}-{project}-{environment}-{region}-{index}`
+- Section separators in `.tf` files: use the following format to separate logical groups of resources within a file:
+  ```hcl
+  # ==============================================================================
+  # Section Name
+  # ==============================================================================
+  ```
   - Project: `jf`
   - Environments: `dev`, `prod`, `lz-dev`, `lz-prod`
   - Region: `frc` (France Central)

@@ -10,6 +10,10 @@ data "azurerm_virtual_network" "lz_vnet" {
   resource_group_name = "rg-${var.project}-lz-dev-${var.location_short}"
 }
 
+# ==============================================================================
+# PostgreSQL Flexible Server
+# ==============================================================================
+
 # Dedicated subnet with delegation — PostgreSQL Flexible Server in VNet injection mode
 # requires an exclusive delegated subnet (no other resource types allowed in it).
 resource "azurerm_subnet" "postgresql" {

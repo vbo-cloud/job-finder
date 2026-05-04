@@ -11,6 +11,10 @@ terraform {
   }
 }
 
+# ==============================================================================
+# Admin Password
+# ==============================================================================
+
 resource "random_password" "admin" {
   length           = 32
   special          = true
@@ -20,6 +24,10 @@ resource "random_password" "admin" {
   min_numeric      = 2
   min_special      = 2
 }
+
+# ==============================================================================
+# Flexible Server
+# ==============================================================================
 
 resource "azurerm_postgresql_flexible_server" "this" {
   name                = var.name
@@ -67,6 +75,10 @@ resource "azurerm_postgresql_flexible_server_configuration" "vector" {
   server_id = azurerm_postgresql_flexible_server.this.id
   value     = "VECTOR"
 }
+
+# ==============================================================================
+# Key Vault Secret
+# ==============================================================================
 
 resource "azurerm_key_vault_secret" "connection_string" {
   name         = "postgresql-connection-string"
