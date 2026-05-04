@@ -123,7 +123,7 @@ jobs:
                   pr_meta = json.load(f)
 
               with open("/tmp/pr.diff") as f:
-                  diff = f.read()[:15000]
+                  diff = f.read()[:40000]
 
               plan_succeeded = conclusion == "success"
               envs = ["lz_dev", "dev", "lz_prod", "prod"]
@@ -134,12 +134,18 @@ jobs:
               )
               for env in envs:
                   with open(f"/tmp/logs/{env}.log") as f:
-                      content = f.read()[-6000:]
+                      content = f.read()[-10000:]
                   logs_section += f"### {env}\n```\n{content}\n```\n\n"
+
+              file_list = subprocess.check_output(
+                  ["git", "ls-files", "--", "*.tf", "*.py", "*.yml", "*.yaml"],
+                   text=True
+                   )[:3000]
 
               user_message = (
                   f"## PR #{pr_number}: {pr_meta['title']}\n\n"
                   f"### Description\n{pr_meta['body'] or '_No description provided._'}\n\n"
+                  f"### Repository structure (git ls-files)\n{file_list}\n\n"
                   f"### Diff\n```diff\n{diff}\n```\n\n"
                   + logs_section
               )
