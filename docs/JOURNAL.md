@@ -326,31 +326,65 @@ Mise à jour du journal uniquement. Aucun changement de code.
 
 ---
 
-### PR #10 — fix: ignore availability zone drift on PostgreSQL Flexible Server
+### PR #4 — chore: increase reviewer agent context limits and add repo structure
 **Date :** 2026-05-04
 
 **Réalisé :**
-- Ajout de `ignore_changes = [zone]` dans le bloc `lifecycle` de `azurerm_postgresql_flexible_server`
+- Plafond du diff envoyé à Claude : 15 000 → 40 000 caractères
+- Plafond des logs de plan par environnement : 6 000 → 10 000 caractères
+- Ajout de `git ls-files` dans le contexte utilisateur (section `### Repository structure`) avant le diff — permet au reviewer de connaître la structure complète du repo
 
 **Décisions techniques :**
-- À la création, Azure assigne automatiquement une availability zone au serveur (ex. zone 1). Cette valeur existe dans Azure mais n'est pas spécifiée dans le code Terraform
-- Terraform détecte une différence entre l'état Azure et le code et tente de la corriger — or Azure interdit de changer la zone sur un serveur existant (cela provoquerait une erreur ou un replace)
-- `ignore_changes = [zone]` indique à Terraform d'ignorer cet attribut après la création initiale
+- `subprocess.check_output(["git", "ls-files"])` exécuté dans le script Python du workflow — pas de step shell supplémentaire, output directement injecté dans le message utilisateur
 
 ---
 
-### PR #11 — fix: enable public network access on Key Vault for CI/CD runners
-**Date :** 2026-05-05
+### PR #5 — fix: remove duplicate policy assignments and allow global location
+**Date :** 2026-05-04
 
 **Réalisé :**
-- `public_network_access_enabled` passé à `true` dans `modules/keyvault/main.tf`
-- Suppression du bloc `network_acls` (plus pertinent sans restriction réseau)
-- Commentaire ajouté expliquant le compromis
+- Suppression de `envs/dev/policy.tf` et `envs/prod/policy.tf` : la policy `allowed-locations` est assignée au scope subscription depuis `lz_dev` et `lz_prod` — les assignments dans la couche applicative étaient des doublons
+- Ajout de `"global"` à `allowed_locations` dans `lz_dev/policy.tf` et `lz_prod/policy.tf`
 
 **Décisions techniques :**
-- Les runners GitHub-hosted ont besoin d'accéder au data plane du Key Vault pour écrire les secrets via Terraform (ex. connection string PostgreSQL). Avec `public_network_access_enabled = false`, l'appel échoue depuis un runner externe au VNet
-- La sécurité est assurée par RBAC (`enable_rbac_authorization = true`) — seul le SP Terraform avec le rôle "Key Vault Secrets Officer" peut écrire des secrets
-- Un self-hosted runner dans le VNet permettrait de repasser à `false` — documenté dans BACKLOG.md
+- `Microsoft.Network/privateDnsZones` est enregistré par Azure avec la location `"global"` — sans cet ajout, la policy `mode = "All"` bloquait leur création
+- La policy est correctement scopée au niveau subscription depuis les landing zones ; les app layers ne doivent pas redéfinir leurs propres assignments
+
+---
+
+### PR #6 — fix: enforce landing zone apply order before app environments
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Refactoring de `terraformApply.yml` : remplacement des matrix `[lz_dev, dev]` et `[lz_prod, prod]` par 4 jobs séquentiels distincts
+- `apply-lz-dev` → `apply-dev` (avec `needs: apply-lz-dev`) sur push vers `dev`
+- `apply-lz-prod` → `apply-prod` (avec `needs: apply-lz-prod`) sur push vers `main`
+
+**Décisions techniques :**
+- La matrix déployait lz et app en parallèle — la landing zone pouvait ne pas être prête (VNet, subnets, Key Vault) quand l'app layer démarrait
+- Si la landing zone échoue, GitHub Actions annule automatiquement le job dépendant
+
+---
+
+### PR #7 — fix: disable public network access on PostgreSQL Flexible Server
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Ajout de `public_network_access_enabled = false` dans `azurerm_postgresql_flexible_server` du module `modules/postgresql/`
+
+**Décisions techniques :**
+- Azure exige cet attribut explicite quand `delegated_subnet_id` est défini — le serveur est en mode VNet injection et ne doit accepter aucune connexion publique
+
+---
+
+### PR #8 — docs: update JOURNAL.md for PRs #4 to #7
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Rattrapage des entrées manquantes dans le journal pour les PRs #4 à #7 — ces PRs avaient été mergées sans mise à jour du journal
+
+**Décisions techniques :**
+- Le journal doit être mis à jour dans le même commit que les changements de code, avant toute ouverture de PR — règle désormais appliquée systématiquement
 
 ---
 
@@ -358,12 +392,37 @@ Mise à jour du journal uniquement. Aucun changement de code.
 **Date :** 2026-05-04
 
 **Réalisé :**
-- Ajout d'un `azurerm_role_assignment` "Key Vault Secrets Officer" dans `envs/dev/keyvault.tf` et `envs/prod/keyvault.tf`, ciblant le SP Terraform via `data.azurerm_client_config.current.object_id`
-- Déplacement de `data "azurerm_client_config" "current"` hors des modules (`modules/keyvault/` et `modules/policy/`) vers les root modules appelants
-- `data "azurerm_client_config" "current"` centralisé dans `envs/dev/main.tf` et `envs/prod/main.tf` (déjà présent dans `lz_dev/main.tf` et `lz_prod/main.tf`)
-- `tenant_id` ajouté comme variable d'input du module keyvault ; `subscription_id` ajouté comme variable d'input du module policy
-- `subscription_id` passé explicitement depuis `lz_dev/policy.tf` et `lz_prod/policy.tf`
+- Ajout d'un `azurerm_role_assignment` "Key Vault Secrets Officer" pour le service principal Terraform dans `envs/dev/keyvault.tf` et `envs/prod/keyvault.tf`
+- Refactoring de `data "azurerm_client_config" "current"` : retiré des modules (`keyvault`, `policy`) et des fichiers de ressource (`keyvault.tf`), centralisé dans les `main.tf` de chaque environnement appelant
+- `tenant_id` et `subscription_id` passés comme variables d'input dans les modules `keyvault` et `policy`
 
 **Décisions techniques :**
-- Les data sources ne doivent pas vivre dans les modules — un module ne doit dépendre que de ses variables d'input pour rester réutilisable et testable
-- La data source `azurerm_client_config` appartient au root module (main.tf) car elle reflète le contexte d'exécution du caller, pas une dépendance interne du module
+- `data "azurerm_client_config"` appartient au root module (`main.tf`) — pas aux fichiers de ressource ni aux modules child, qui n'ont pas à connaître l'identité du caller
+- Le service principal Terraform a besoin du rôle "Key Vault Secrets Officer" pour écrire les secrets depuis le workflow CI/CD
+
+---
+
+### PR #10 — fix: ignore availability zone drift on PostgreSQL Flexible Server
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Ajout de `ignore_changes = [zone]` dans le bloc `lifecycle` de `azurerm_postgresql_flexible_server`
+
+**Décisions techniques :**
+- Azure assigne automatiquement une availability zone au moment de la création du serveur, mais interdit ensuite tout changement de zone sur un serveur existant
+- Sans `ignore_changes = [zone]`, Terraform détecte un drift et tente un update qui échoue systématiquement — cette règle supprime ce faux positif
+
+---
+
+### PR #11 — fix: enable public network access on Key Vault for CI/CD runners
+**Date :** 2026-05-05
+
+**Réalisé :**
+- `public_network_access_enabled` passé de `false` à `true` dans le module `modules/keyvault/`
+- Suppression du bloc `network_acls`
+- Commentaire explicatif ajouté dans le code
+
+**Décisions techniques :**
+- Les runners GitHub-hosted ont besoin d'accéder au data plane du Key Vault pour écrire les secrets Terraform via la CI/CD
+- `enable_rbac_authorization = true` est le contrôle d'accès primaire — la restriction réseau est une couche defense-in-depth, pas la barrière principale
+- L'utilisation d'un runner self-hosted dans le VNet permettrait de désactiver l'accès public — voir BACKLOG.md
