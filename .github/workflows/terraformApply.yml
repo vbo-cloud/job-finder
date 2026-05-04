@@ -15,16 +15,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  apply-dev:
+  # Landing zone must be fully applied before the app layer — it provisions the VNet,
+  # Key Vault, and subnets that app-layer resources depend on.
+  apply-lz-dev:
     runs-on: ubuntu-latest
     # GitHub "dev" environment provides OIDC trust and can add required reviewers if needed.
     environment: dev
     if: github.ref == 'refs/heads/dev'
-
-    strategy:
-      # lz_dev and dev are deployed in parallel; lz_dev is expected to already exist on the first run.
-      matrix:
-        env: [lz_dev, dev]
 
     env:
       ARM_USE_OIDC: true
@@ -34,7 +31,57 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+        working-directory: ./JobFinder/Terraform/envs/lz_dev
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - run: terraform init
+      - run: terraform apply -auto-approve -input=false
+
+
+  apply-dev:
+    runs-on: ubuntu-latest
+    environment: dev
+    if: github.ref == 'refs/heads/dev'
+    needs: apply-lz-dev
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/dev
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - run: terraform init
+      - run: terraform apply -auto-approve -input=false
+
+
+  apply-lz-prod:
+    runs-on: ubuntu-latest
+    # GitHub "prod" environment gates this job behind manual approval before applying.
+    environment: prod
+    if: github.ref == 'refs/heads/main'
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/lz_prod
 
     steps:
       - uses: actions/checkout@v4
@@ -47,13 +94,9 @@ jobs:
 
   apply-prod:
     runs-on: ubuntu-latest
-    # GitHub "prod" environment gates this job behind manual approval before applying.
     environment: prod
     if: github.ref == 'refs/heads/main'
-
-    strategy:
-      matrix:
-        env: [lz_prod, prod]
+    needs: apply-lz-prod
 
     env:
       ARM_USE_OIDC: true
@@ -63,7 +106,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+        working-directory: ./JobFinder/Terraform/envs/prod
 
     steps:
       - uses: actions/checkout@v4
