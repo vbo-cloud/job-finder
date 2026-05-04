@@ -339,6 +339,21 @@ Mise à jour du journal uniquement. Aucun changement de code.
 
 ---
 
+### PR #11 — fix: enable public network access on Key Vault for CI/CD runners
+**Date :** 2026-05-05
+
+**Réalisé :**
+- `public_network_access_enabled` passé à `true` dans `modules/keyvault/main.tf`
+- Suppression du bloc `network_acls` (plus pertinent sans restriction réseau)
+- Commentaire ajouté expliquant le compromis
+
+**Décisions techniques :**
+- Les runners GitHub-hosted ont besoin d'accéder au data plane du Key Vault pour écrire les secrets via Terraform (ex. connection string PostgreSQL). Avec `public_network_access_enabled = false`, l'appel échoue depuis un runner externe au VNet
+- La sécurité est assurée par RBAC (`enable_rbac_authorization = true`) — seul le SP Terraform avec le rôle "Key Vault Secrets Officer" peut écrire des secrets
+- Un self-hosted runner dans le VNet permettrait de repasser à `false` — documenté dans BACKLOG.md
+
+---
+
 ### PR #9 — feat: add KV Secrets Officer role assignment and fix data source placement
 **Date :** 2026-05-04
 
