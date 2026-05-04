@@ -1,3 +1,8 @@
+variable "tenant_id" {
+  type        = string
+  description = "Azure AD tenant ID for the Key Vault"
+}
+
 variable "name" {
   type        = string
   description = "Key Vault name (globally unique, 3-24 chars)"

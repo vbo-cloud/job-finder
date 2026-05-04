@@ -323,3 +323,19 @@ Mise à jour du journal uniquement. Aucun changement de code.
 - `random_password` dans le module : le mot de passe n'est jamais passé comme variable d'input — seule la connection string (stockée dans Key Vault) est exposée à l'appelant
 - `prevent_destroy = true` sur le serveur et la base : ressources critiques avec état (données), destruction bloquée par convention
 - `geo_redundant_backup_enabled = true` uniquement en prod : non disponible sur le tier Burstable B1ms en dev (limitation Azure) ; activé avec `backup_retention_days = 35` en prod pour la durabilité des données
+
+---
+
+### PR #9 — feat: add KV Secrets Officer role assignment and fix data source placement
+**Date :** 2026-05-04
+
+**Réalisé :**
+- Ajout d'un `azurerm_role_assignment` "Key Vault Secrets Officer" dans `envs/dev/keyvault.tf` et `envs/prod/keyvault.tf`, ciblant le SP Terraform via `data.azurerm_client_config.current.object_id`
+- Déplacement de `data "azurerm_client_config" "current"` hors des modules (`modules/keyvault/` et `modules/policy/`) vers les root modules appelants
+- `data "azurerm_client_config" "current"` centralisé dans `envs/dev/main.tf` et `envs/prod/main.tf` (déjà présent dans `lz_dev/main.tf` et `lz_prod/main.tf`)
+- `tenant_id` ajouté comme variable d'input du module keyvault ; `subscription_id` ajouté comme variable d'input du module policy
+- `subscription_id` passé explicitement depuis `lz_dev/policy.tf` et `lz_prod/policy.tf`
+
+**Décisions techniques :**
+- Les data sources ne doivent pas vivre dans les modules — un module ne doit dépendre que de ses variables d'input pour rester réutilisable et testable
+- La data source `azurerm_client_config` appartient au root module (main.tf) car elle reflète le contexte d'exécution du caller, pas une dépendance interne du module

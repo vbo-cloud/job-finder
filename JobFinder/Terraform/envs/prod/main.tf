@@ -20,3 +20,5 @@ provider "azurerm" {
   # Authentication is handled via ARM_* environment variables injected by CI/CD (OIDC).
   # No explicit tenant_id, subscription_id, or client_id needed here.
 }
+
+data "azurerm_client_config" "current" {}

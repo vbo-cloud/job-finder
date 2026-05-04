@@ -2,6 +2,11 @@
 # CHANGE_ME defaults are intentional: terraform validate succeeds without a tfvars file,
 # but the placeholder makes it obvious which values must be substituted before deploying.
 
+variable "subscription_id" {
+  type        = string
+  description = "Azure subscription ID for the policy assignment scope"
+}
+
 variable "environment" {
   type        = string
   description = "Environment name used in resource naming (e.g. lz-dev, dev, lz-prod, prod)"
