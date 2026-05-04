@@ -6,7 +6,8 @@ module "policy_allowed_locations" {
   environment       = "dev"
   project           = var.project
   location_short    = var.location_short
-  allowed_locations = [var.location, "northeurope"]
+  # global is required for Microsoft.Network/privateDnsZones (Azure registers them as location "global").
+  allowed_locations = [var.location, "northeurope", "global"]
 
   tags = {
     environment = "dev"
