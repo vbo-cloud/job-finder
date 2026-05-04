@@ -43,6 +43,8 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # VNet injection mode — no public endpoint, traffic stays on the private subnet.
   delegated_subnet_id = var.delegated_subnet_id
   private_dns_zone_id = var.private_dns_zone_id
+  # Required when using delegated_subnet_id — Azure enforces private-only access with VNet integration.
+  public_network_access_enabled = false
 
   backup_retention_days        = var.backup_retention_days
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
