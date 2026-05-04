@@ -137,7 +137,10 @@ jobs:
                       content = f.read()[-10000:]
                   logs_section += f"### {env}\n```\n{content}\n```\n\n"
 
-              file_list = subprocess.check_output(["git", "ls-files"], text=True)
+              file_list = subprocess.check_output(
+                  ["git", "ls-files", "--", "*.tf", "*.py", "*.yml", "*.yaml"],
+                   text=True
+                   )[:3000]
 
               user_message = (
                   f"## PR #{pr_number}: {pr_meta['title']}\n\n"
