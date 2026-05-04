@@ -38,6 +38,10 @@ resource "azurerm_subnet" "postgresql" {
   }
 }
 
+# The subnet above lives in the lz_dev RG because it is attached to the LZ VNet —
+# Azure requires subnet and VNet to share the same resource group.
+# The DNS zone and VNet link live in rg_core (app layer) because they are
+# app-specific concerns. This split is intentional.
 resource "azurerm_private_dns_zone" "postgresql" {
   name                = "privatelink.postgres.database.azure.com"
   resource_group_name = azurerm_resource_group.rg_core.name
