@@ -1,7 +1,3 @@
-# Expose lz_dev identifiers so app environments can reference shared resources
-# without hardcoding names — avoids drift if naming conventions change.
-# keyvault_uri is consumed by the app layer to retrieve secrets at deploy time.
-
 output "rg_name" {
   value = azurerm_resource_group.rg.name
 }

@@ -26,6 +26,12 @@ Az-104 certification obtained.
 - Modules: compute / network / data / resource-group
 - Remote state: Azure Storage Backend
 - Naming pattern: `{type}-{project}-{environment}-{region}-{index}`
+- Section separators in `.tf` files: use the following format to separate logical groups of resources within a file:
+  ```hcl
+  # ==============================================================================
+  # Section Name
+  # ==============================================================================
+  ```
   - Project: `jf`
   - Environments: `dev`, `prod`, `lz-dev`, `lz-prod`
   - Region: `frc` (France Central)
@@ -39,7 +45,7 @@ Az-104 certification obtained.
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
-- Always update `DOC.md` at the root of the project when creating or updating a PR. `DOC.md` is a clean and concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
+- Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
 
 ## Project Overview
 
