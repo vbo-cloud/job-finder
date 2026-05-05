@@ -20,9 +20,6 @@ module "subnet_postgresql" {
   resource_group_name  = "rg-${var.project}-lz-prod-${var.location_short}"
   virtual_network_name = data.azurerm_virtual_network.lz_vnet.name
   address_prefixes     = ["10.1.3.0/24"]
-  environment          = "prod"
-  project              = var.project
-  owner                = var.owner
   delegation_name      = "postgresql-delegation"
   delegation_service   = "Microsoft.DBforPostgreSQL/flexibleServers"
   delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]

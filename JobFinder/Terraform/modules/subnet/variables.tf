@@ -18,21 +18,6 @@ variable "address_prefixes" {
   description = "CIDR address prefixes for the subnet"
 }
 
-variable "environment" {
-  type        = string
-  description = "Environment tag value"
-}
-
-variable "project" {
-  type        = string
-  description = "Project tag value"
-}
-
-variable "owner" {
-  type        = string
-  description = "Owner tag value (email)"
-}
-
 variable "delegation_name" {
   type        = string
   description = "Name of the delegation block (null = no delegation)"
