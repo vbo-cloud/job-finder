@@ -46,6 +46,7 @@ Az-104 certification obtained.
 - Every resource must have tags: environment, project, owner
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
+- During Milestone 1, only implement changes in `envs/dev/`. Do not mirror to `envs/prod/` until dev is stable and testable (end of M1). A single prod mirror + apply will be done at v1.0.0, with prod-specific adjustments (SKUs, retention, geo-redundancy).
 
 ## Project Overview
 

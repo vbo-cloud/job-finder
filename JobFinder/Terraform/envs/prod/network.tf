@@ -14,26 +14,15 @@ data "azurerm_virtual_network" "lz_vnet" {
 # PostgreSQL Flexible Server
 # ==============================================================================
 
-resource "azurerm_subnet" "postgresql" {
+module "subnet_postgresql" {
+  source               = "../../modules/subnet"
   name                 = "snet-${var.project}-postgresql-prod-${var.location_short}"
   resource_group_name  = "rg-${var.project}-lz-prod-${var.location_short}"
   virtual_network_name = data.azurerm_virtual_network.lz_vnet.name
   address_prefixes     = ["10.1.3.0/24"]
-
-  delegation {
-    name = "postgresql-delegation"
-
-    service_delegation {
-      name = "Microsoft.DBforPostgreSQL/flexibleServers"
-      actions = [
-        "Microsoft.Network/virtualNetworks/subnets/join/action",
-      ]
-    }
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
+  delegation_name      = "postgresql-delegation"
+  delegation_service   = "Microsoft.DBforPostgreSQL/flexibleServers"
+  delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
 }
 
 # The subnet above lives in the lz_prod RG because it is attached to the LZ VNet —

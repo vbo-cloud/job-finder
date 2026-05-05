@@ -435,3 +435,76 @@ Fermée sans merge. Réouverte en PR #12 avec un périmètre élargi (#4 à #11)
 
 **Décisions techniques :**
 - Le journal doit être mis à jour dans le même commit que les changements de code, avant toute ouverture de PR — règle désormais appliquée systématiquement
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🏷️   RELEASE v0.1.0 — job-finder                                          ║
+║   Date : 2026-05-05                                                          ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Infrastructure déployée                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Key Vault          SKU configurable, RBAC, purge protection,             ║
+║                        soft delete, Key Vault Secrets Officer assigné        ║
+║   • PostgreSQL         PostgreSQL 16, pgvector, VNet injection,              ║
+║                        DNS privée, connection string dans Key Vault          ║
+║   • Policy Azure       Restriction francecentral / northeurope / global      ║
+║                        assignée au scope subscription depuis les LZ          ║
+║                                                                              ║
+║   CI/CD                                                                      ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Ordering enforced  apply-lz-dev → apply-dev                              ║
+║                        apply-lz-prod → apply-prod (via needs:)               ║
+║   • Reviewer agent     Diff 40k chars, logs 10k/env, git ls-files injecté    ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • 13 ADRs couvrant l'ensemble des décisions d'architecture                 ║
+║   • docs/ROADMAP.md, docs/JOURNAL.md, docs/MANUAL_OPERATIONS.md              ║
+║                                                                              ║
+║   Correctifs                                                                 ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • ignore_changes = [zone] sur PostgreSQL (drift availability zone)         ║
+║   • public_network_access_enabled = true sur Key Vault (runners GitHub)      ║
+║   • Suppression des doublons de policy dans dev/ et prod/                    ║
+║   • data "azurerm_client_config" centralisé dans les main.tf root            ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### Changement de process — Mirror prod différé
+
+**Date :** 2026-05-05
+
+Décision : pendant le Milestone 1, les changements sont implémentés uniquement dans `envs/dev/`. Le mirror vers `envs/prod/` est différé à la fin du M1, lors du passage en v1.0.0.
+
+**Raison :** déployer prod en parallèle de dev n'apporte aucune valeur tant qu'il n'y a pas d'application fonctionnelle et testable. Cela ajoute de la complexité à chaque PR et multiplie les erreurs de bootstrap. Un seul apply prod massif sera effectué quand dev sera stable, avec les ajustements prod appropriés (SKUs, rétention, geo-redundancy).
+
+---
+
+### PR #13 — feat: add vnet and subnet modules with prevent_destroy and migrate existing resources
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/vnet/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_virtual_network` avec `prevent_destroy = true` et variables `name`, `location`, `resource_group_name`, `address_space`, `environment`, `project`, `owner`
+- Ajout du module Terraform réutilisable `modules/subnet/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_subnet` avec `prevent_destroy = true`, bloc `dynamic "delegation"` conditionnel (`delegation_name != null`), validation empêchant `delegation_name` sans `delegation_service` ; variables `environment`/`project`/`owner` absentes (`azurerm_subnet` ne supporte pas les tags)
+- Migration de `lz_dev/network.tf` et `lz_prod/network.tf` : remplacement des ressources inline `azurerm_virtual_network` et `azurerm_subnet` par des appels aux modules `vnet` et `subnet`
+- Création de `lz_dev/keyvault.tf` et `lz_prod/keyvault.tf` : appels au module `keyvault` avec les valeurs appropriées (`soft_delete_retention_days = 90` en lz_prod) ; suppression des ressources `azurerm_key_vault` inline des `main.tf`
+- Migration de `dev/network.tf` et `prod/network.tf` : remplacement du `azurerm_subnet.postgresql` inline par un appel au module `subnet` avec délégation PostgreSQL
+- Mise à jour des `outputs.tf` de `lz_dev` et `lz_prod` pour référencer les outputs des modules
+- Mise à jour de `dev/postgresql.tf` et `prod/postgresql.tf` : `azurerm_subnet.postgresql.id` → `module.subnet_postgresql.id`
+- Ajout de `moved {}` blocks dans `lz_dev/moved.tf`, `lz_prod/moved.tf`, `dev/moved.tf` et `prod/moved.tf` (exception M1) pour migrer les adresses de state sans destroy
+
+**Décisions techniques :**
+- Les modules `vnet` et `subnet` sont séparés (un module = une ressource) pour permettre de les composer librement — une VNet peut avoir N subnets sans que le module vnet ait à les connaître
+- Le bloc `dynamic "delegation"` est conditionnel sur `var.delegation_name != null` : les subnets sans délégation n'ont pas à passer ces variables ; une validation Terraform bloque le cas `delegation_name` fourni sans `delegation_service`
+- `prevent_destroy = true` dans les modules garantit qu'aucun destroy accidentel ne peut supprimer VNets, subnets ou Key Vaults — même si l'appelant oublie de le mettre
+- `moved {}` blocks : migration sans destroy des ressources inline existantes vers les nouveaux chemins de module — ces blocs peuvent être supprimés après le premier apply réussi (voir BACKLOG.md)
+- `prod/moved.tf` ajouté exceptionnellement pour éviter un destroy au plan malgré la règle M1 de ne pas toucher prod — le fichier sera supprimé lors du mirror prod en fin de M1
+- `soft_delete_retention_days = 90` en lz_prod (vs 7 par défaut en lz_dev) : rétention maximale sur l'environnement de production
