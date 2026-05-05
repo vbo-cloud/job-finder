@@ -16,26 +16,18 @@ data "azurerm_virtual_network" "lz_vnet" {
 
 # Dedicated subnet with delegation — PostgreSQL Flexible Server in VNet injection mode
 # requires an exclusive delegated subnet (no other resource types allowed in it).
-resource "azurerm_subnet" "postgresql" {
+module "subnet_postgresql" {
+  source               = "../../modules/subnet"
   name                 = "snet-${var.project}-postgresql-dev-${var.location_short}"
   resource_group_name  = "rg-${var.project}-lz-dev-${var.location_short}"
   virtual_network_name = data.azurerm_virtual_network.lz_vnet.name
   address_prefixes     = ["10.0.3.0/24"]
-
-  delegation {
-    name = "postgresql-delegation"
-
-    service_delegation {
-      name = "Microsoft.DBforPostgreSQL/flexibleServers"
-      actions = [
-        "Microsoft.Network/virtualNetworks/subnets/join/action",
-      ]
-    }
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
+  environment          = "dev"
+  project              = var.project
+  owner                = var.owner
+  delegation_name      = "postgresql-delegation"
+  delegation_service   = "Microsoft.DBforPostgreSQL/flexibleServers"
+  delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
 }
 
 # The subnet above lives in the lz_dev RG because it is attached to the LZ VNet —
