@@ -508,3 +508,19 @@ Décision : pendant le Milestone 1, les changements sont implémentés uniquemen
 - `moved {}` blocks : migration sans destroy des ressources inline existantes vers les nouveaux chemins de module — ces blocs peuvent être supprimés après le premier apply réussi (voir BACKLOG.md)
 - `prod/moved.tf` ajouté exceptionnellement pour éviter un destroy au plan malgré la règle M1 de ne pas toucher prod — le fichier sera supprimé lors du mirror prod en fin de M1
 - `soft_delete_retention_days = 90` en lz_prod (vs 7 par défaut en lz_dev) : rétention maximale sur l'environnement de production
+
+---
+
+### PR #16 — feat: separate IAM into a dedicated Terraform project
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Scaffold de `JobFinder/Terraform/iam/dev/` et `iam/prod/` : deux projets Terraform indépendants dédiés à la gestion des role assignments, chacun avec son propre state (`iam-dev.tfstate`, `iam-prod.tfstate`)
+- `iam/dev/main.tf` : data source sur `kv-jf-dev-frc`, `azurerm_role_assignment` "Key Vault Secrets Officer" pour le service principal
+- `iam/prod/main.tf` : idem pour `kv-jf-prod-frc` (déployé lors du mirror prod)
+- Suppression du `azurerm_role_assignment` de `envs/dev/keyvault.tf` — la responsabilité RBAC quitte la couche applicative
+- Documentation ajoutée dans `docs/MANUAL_OPERATIONS.md` : procédure d'apply IAM manuel et révocation du rôle temporaire `User Access Administrator`
+
+**Décisions techniques :**
+- Les role assignments sont appliqués manuellement avec le compte utilisateur (pas via `sp-jf-github`) : le service principal ne peut pas s'auto-assigner des droits sans `User Access Administrator`, et ce rôle temporaire sera révoqué après l'apply IAM
+- `iam/` est un projet Terraform racine distinct (pas un module, pas sous `envs/`) : le périmètre IAM est orthogonal aux environnements applicatifs et mérite son propre cycle de vie et son propre state

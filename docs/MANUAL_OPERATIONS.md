@@ -42,3 +42,20 @@ Même opération que dev, à effectuer après le premier apply prod qui créera 
 ## Policy Azure — Ajout manuel de "global"
 
 La policy `allowed-locations` de `lz_prod` ne contenait pas `"global"` au moment où les Private DNS Zones ont été créées. La policy a été mise à jour manuellement dans Azure pour débloquer l'apply, puis le code Terraform a été mis à jour en conséquence.
+
+---
+
+## IAM — Projet Terraform séparé
+
+Les role assignments sont gérés dans `JobFinder/Terraform/iam/`, appliqué
+manuellement avec le compte utilisateur (pas via sp-jf-github).
+
+```bash
+cd JobFinder/Terraform/iam/dev
+terraform init
+terraform apply
+```
+
+Faire de même pour `iam/prod/` lors du mirror prod.
+Révoquer `User Access Administrator` sur kv-jf-dev-frc et kv-jf-lz-dev-frc
+depuis le portail une fois l'apply IAM confirmé.
