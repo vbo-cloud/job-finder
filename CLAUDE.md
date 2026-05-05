@@ -21,6 +21,7 @@ Az-104 certification obtained.
 - dev/      → Application infrastructure dev
 - lz-prod/  → (coming soon)
 - prod/     → (coming soon)
+- iam/dev/, iam/prod/ → RBAC management, applied manually by the user (not via CI/CD, not via sp-jf-github). The identity running `terraform apply` is the current session user (`data.azurerm_client_config.current`). Never add iam/ to the Plan/Apply workflows.
 
 ## Terraform Conventions
 - Modules: compute / network / data / resource-group
@@ -45,6 +46,7 @@ Az-104 certification obtained.
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
+- `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
 - During Milestone 1, only implement changes in `envs/dev/`. Do not mirror to `envs/prod/` until dev is stable and testable (end of M1). A single prod mirror + apply will be done at v1.0.0, with prod-specific adjustments (SKUs, retention, geo-redundancy).
 
@@ -81,6 +83,8 @@ Reusable modules live in `JobFinder/Terraform/modules/`:
 - `network/` — VNets and subnets
 - `compute/` — Compute resources (partially implemented)
 - `data/` — Data resources (partially implemented)
+
+**Module design rule:** one primary resource per module, plus resources intrinsically linked that have no meaning without it. If a secondary resource cannot exist independently of the primary, it goes in the module. If it can exist alone or be shared between multiple resources, it stays outside the module.
 
 ### State Backend
 
