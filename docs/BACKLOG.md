@@ -12,6 +12,14 @@ Garantit que ce qui est appliqué est exactement ce qui a été reviewé.
 
 ---
 
+## Terraform
+
+### [refacto M1→M2] Upgrade provider azurerm ~> 3.0 → ~> 4.0
+Nécessite de traiter les breaking changes (storage_account_id, etc.).
+À faire pendant la phase de refactoring Terraform, pas en cours de M1.
+
+---
+
 ## Nettoyage
 
 ### [post-apply] Supprimer les blocs `moved {}` après leur premier apply réussi
