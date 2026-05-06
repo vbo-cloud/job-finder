@@ -569,3 +569,17 @@ Décision : pendant le Milestone 1, les changements sont implémentés uniquemen
 **Décisions techniques :**
 - Les role assignments sont appliqués manuellement avec le compte utilisateur (pas via `sp-jf-github`) : le service principal ne peut pas s'auto-assigner des droits sans `User Access Administrator`, et ce rôle temporaire sera révoqué après l'apply IAM
 - `iam/` est un projet Terraform racine distinct (pas un module, pas sous `envs/`) : le périmètre IAM est orthogonal aux environnements applicatifs et mérite son propre cycle de vie et son propre state
+
+---
+
+### PR #17 — fix: remove shared_access_key_enabled=false — blocked by azurerm 3.x provider limitation
+**Date :** 2026-05-06
+
+**Réalisé :**
+- Suppression de `shared_access_key_enabled = false` dans `modules/storage/main.tf`
+- Ajout d'une entrée BACKLOG pour réactiver ce paramètre lors de la migration vers azurerm ~> 4.0
+
+**Décisions techniques :**
+- Le provider azurerm 3.x utilise les access keys en interne lors de la création du storage account — positionner `shared_access_key_enabled = false` provoque une erreur à l'apply
+- Le paramètre est fonctionnellement souhaitable (désactiver les clés partagées renforce la sécurité) mais nécessite azurerm ~> 4.0 qui a revu cette dépendance interne
+- Tracé en BACKLOG pour ne pas perdre l'intention sécurité ; à traiter en même temps que la migration provider

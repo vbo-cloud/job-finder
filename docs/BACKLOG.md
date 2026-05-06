@@ -18,6 +18,11 @@ Garantit que ce qui est appliqué est exactement ce qui a été reviewé.
 Nécessite de traiter les breaking changes (storage_account_id, etc.).
 À faire pendant la phase de refactoring Terraform, pas en cours de M1.
 
+### [refacto M1→M2] Désactiver les access keys sur le storage account
+`shared_access_key_enabled = false` — nécessite azurerm ~> 4.0 (le provider 3.x
+utilise les clés en interne à la création). À combiner avec la migration provider.
+**Fichier :** `modules/storage/main.tf`
+
 ---
 
 ## Nettoyage
