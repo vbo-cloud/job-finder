@@ -16,6 +16,8 @@ La couche IA de job-finder a besoin d'un LLM pour analyser les offres d'emploi, 
 
 **Azure OpenAI Service** pour la couche applicative de job-finder.
 
+> **Note (2026-05-07) :** les modèles gpt-4o-mini et text-embedding-3-small ne sont pas disponibles en SKU Standard régional en francecentral — seul GlobalStandard est supporté. Le compute peut transiter hors francecentral mais reste sur l'infrastructure EU Azure. La facturation et la résidence des données restent en francecentral. À réévaluer quand Microsoft déploie Standard régional pour ces modèles.
+
 ---
 
 ## Options considérées

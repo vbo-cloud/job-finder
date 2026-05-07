@@ -730,6 +730,11 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - `capacity_tpm = 10` (10K TPM) : suffisant pour le volume dev ; à ajuster selon la charge réelle
 - `for_each` sur une map d'objets : ajout/suppression de déploiements sans recréer le compte OpenAI
 
+**Correctif post-merge (2026-05-07) :**
+- L'apply a échoué avec une 400 — SKU `Standard` non disponible pour gpt-4o-mini et text-embedding-3-small en `francecentral` ; seul `GlobalStandard` est supporté
+- `scale_type` extrait en variable dans le module (`modules/openai/`) et passé à `"GlobalStandard"` dans `envs/dev/openai.tf`
+- Note ajoutée dans ADR-006 (résidence des données : le compute peut transiter hors francecentral mais la facturation et les données restent en EU)
+
 ---
 
 ### PR #24 — feat: add Container Registry module and deploy ACR in dev

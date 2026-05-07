@@ -40,5 +40,6 @@ variable "deployments" {
     model_name    = string
     model_version = string
     capacity_tpm  = number # Tokens per minute in thousands (e.g. 10 = 10K TPM)
+    scale_type    = string # "Standard" or "GlobalStandard"
   }))
 }
