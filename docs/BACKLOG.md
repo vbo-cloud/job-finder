@@ -50,8 +50,29 @@ Les fichiers `moved.tf` sont temporaires — ils migrent les adresses de state s
 Azure déconseille le tier Burstable pour la production. Acceptable tant que le trafic prod reste faible.
 **Fichier :** `envs/prod/postgresql.tf`
 
-### [optional] Self-hosted runner dans le VNet pour isoler le storage account Terraform state
-Permettrait de fermer l'accès public au storage account. Coût : une VM Azure supplémentaire.
+### [optional] Self-hosted runner dans le VNet pour fermer l'accès public des resources data plane
+
+**Problème actuel**
+
+Le provider azurerm utilise le **data plane** (et non l'API ARM management) pour certaines ressources :
+- `azurerm_storage_container` → appelle `https://{account}.blob.core.windows.net/{container}`
+- `azurerm_key_vault_secret` → appelle `https://{vault}.vault.azure.net/secrets/{name}`
+
+Ces endpoints sont sur réseau privé (`public_network_access_enabled = false`). Le runner GitHub-hosted étant public, il ne peut pas les atteindre → 403 à l'apply.
+
+**Workaround actuel (M1)**
+
+`public_network_access_enabled = true` sur le storage account et le Key Vault. La protection reste assurée par le RBAC (rôles data-plane requis). Identique au compromis déjà documenté pour le Key Vault (PR #11).
+**Fichiers :** `modules/storage/main.tf`, `modules/keyvault/main.tf`
+
+**Solution cible**
+
+Un runner self-hosted dans le VNet peut atteindre les endpoints privés. Options par ordre de coût croissant :
+- **Container Apps Jobs** (runner éphémère) — quelques centimes par run, s'arrête après le workflow. Pattern recommandé par GitHub pour Azure. Non trivial à mettre en place.
+- **VM scale set à zéro** — scale à zéro au repos, coût de stockage résiduel uniquement.
+- **VM permanente** — ~100€/mois. Disproportionné pour un projet portfolio.
+
+Une fois un runner VNet en place : passer `public_network_access_enabled = false` sur le storage et le Key Vault, et supprimer les commentaires de workaround.
 
 ---
 

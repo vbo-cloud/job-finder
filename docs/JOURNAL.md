@@ -646,3 +646,17 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Décision : User Access Administrator permet à sp-jf-github de gérer les
   role assignments sans Owner ; la permission `elevateAccess` (auto-élévation
   Owner) n't est plus présente
+
+---
+
+### PR #19 — fix: enable public network access on storage account for CI/CD runners
+**Date :** 2026-05-07
+
+**Réalisé :**
+- `public_network_access_enabled` passé de `false` à `true` dans `modules/storage/main.tf`
+- Commentaire explicatif ajouté dans le code
+
+**Décisions techniques :**
+- Les runners GitHub-hosted ont besoin d'accéder au data plane blob du storage account pour créer les containers (`azurerm_storage_container` appelle l'API blob, pas l'API ARM management) — sans accès public, l'apply échoue avec une 403 sur l'endpoint blob
+- Même pattern que le Key Vault : RBAC (`Storage Blob Data Contributor`) est le contrôle d'accès primaire, l'accès réseau public est une concession opérationnelle temporaire
+- Tracé en BACKLOG pour désactivation quand un runner self-hosted dans le VNet sera disponible
