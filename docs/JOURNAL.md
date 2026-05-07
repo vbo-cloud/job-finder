@@ -713,3 +713,19 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - `prod` et `lz_prod` laissés intentionnellement intacts — la migration prod se fera en bloc à la fin de M1
 - Le bloc `moved {}` est la seule façon de renommer une adresse d'état sans détruire la ressource Azure sous-jacente
 - `modules/resource_group/` étendu plutôt que de créer un nouveau module — backward-compatible car les nouvelles variables n'ont pas de `default` mais les seuls appelants sont mis à jour dans ce même PR
+
+---
+
+### PR #23 — feat: add Azure OpenAI module and deploy gpt-4o-mini + text-embedding-3-small
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/openai/` : `azurerm_cognitive_account` (kind OpenAI, `prevent_destroy = true`, tag `protect=true`) + `azurerm_cognitive_deployment` en `for_each` sur une map d'objets
+- Déploiement depuis `envs/dev/openai.tf` avec 2 modèles : `gpt-4o-mini` (Agent 3 — matching) et `text-embedding-3-small` (Agent 2 — embeddings), 10K TPM chacun
+- Clé API et endpoint stockés dans le Key Vault via `modules/keyvault_secret/` (`openai-api-key`, `openai-endpoint`)
+
+**Décisions techniques :**
+- `public_network_access_enabled = true` : les agents tournent hors VNet en M1 ; commentaire de rappel pour restriction via private endpoint dès que les runners self-hosted seront disponibles
+- Région `francecentral` : conformité GDPR — les données CV/utilisateur restent en EU (ADR-006)
+- `capacity_tpm = 10` (10K TPM) : suffisant pour le volume dev ; à ajuster selon la charge réelle
+- `for_each` sur une map d'objets : ajout/suppression de déploiements sans recréer le compte OpenAI
