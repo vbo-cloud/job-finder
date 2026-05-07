@@ -16,3 +16,13 @@ moved {
   from = azurerm_key_vault.kv
   to   = module.keyvault.azurerm_key_vault.this
 }
+
+moved {
+  from = azurerm_policy_definition.auto_lock
+  to   = module.policy_auto_lock.azurerm_policy_definition.this
+}
+
+moved {
+  from = azurerm_subscription_policy_assignment.auto_lock
+  to   = module.policy_auto_lock.azurerm_subscription_policy_assignment.this
+}
