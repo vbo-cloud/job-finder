@@ -12,7 +12,7 @@ module "servicebus" {
 
   name                = "sb-${var.project}-${var.env}-${var.location_short}"
   location            = var.location
-  resource_group_name = azurerm_resource_group.rg_app.name
+  resource_group_name = module.rg_app.name
   sku                 = "Standard"
   environment         = var.env
   project             = var.project
@@ -26,8 +26,12 @@ module "servicebus" {
 }
 
 # Store connection string in Key Vault for agents to consume
-resource "azurerm_key_vault_secret" "servicebus_connection_string" {
+module "secret_servicebus" {
+  source       = "../../modules/keyvault_secret"
   name         = "servicebus-connection-string"
   value        = module.servicebus.primary_connection_string
   key_vault_id = module.keyvault.id
+  environment  = var.env
+  project      = var.project
+  owner        = var.owner
 }

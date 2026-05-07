@@ -24,14 +24,12 @@ data "azurerm_client_config" "current" {}
 # Resource Group
 # ==============================================================================
 
-resource "azurerm_resource_group" "rg" {
-  name     = "rg-${var.project}-lz-dev-${var.location_short}"
-  location = var.location
-
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
+module "rg" {
+  source      = "../../modules/resource_group"
+  name        = "rg-${var.project}-lz-dev-${var.location_short}"
+  location    = var.location
+  environment = var.env
+  project     = var.project
+  owner       = var.owner
 }
 

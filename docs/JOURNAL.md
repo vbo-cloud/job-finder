@@ -694,3 +694,22 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 **Décisions techniques :**
 - Le `default` de `var.env` est codé en dur dans chaque `variables.tf` (ex. `default = "dev"`), ce qui évite d'injecter une variable supplémentaire via CI/CD — les `terraform.tfvars` sont gitignorés et non committés
 - Le tag `environment` reflètera maintenant toujours la valeur réelle de l'environnement, sans risque de dérive si une ressource est copiée d'un env à l'autre
+
+---
+
+### PR #22 — refactor: enforce module consistency for resource groups and KV secrets
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module `modules/keyvault_secret/` : wrapper réutilisable autour de `azurerm_key_vault_secret` avec tags standardisés
+- Remplacement de la ressource `azurerm_key_vault_secret` inline dans `envs/dev/servicebus.tf` par un appel au module (`module "secret_servicebus"`)
+- Extension du module `modules/resource_group/` : ajout des variables `environment`, `project`, `owner` (tags) et output `location`
+- Remplacement des 3 ressources `azurerm_resource_group` inline dans `envs/dev/` par des appels au module (`rg_core`, `rg_app`, `rg_data`)
+- Remplacement de la ressource `azurerm_resource_group` inline dans `envs/lz_dev/` par un appel au module (`rg`)
+- Mise à jour de toutes les références dans `envs/dev/` et `envs/lz_dev/` (`keyvault.tf`, `network.tf`, `outputs.tf`, `postgresql.tf`, `servicebus.tf`, `storage.tf`)
+- Blocs `moved {}` ajoutés dans `envs/dev/moved.tf` (3 blocs) et `envs/lz_dev/moved.tf` (1 bloc) pour la migration d'état sans destroy
+
+**Décisions techniques :**
+- `prod` et `lz_prod` laissés intentionnellement intacts — la migration prod se fera en bloc à la fin de M1
+- Le bloc `moved {}` est la seule façon de renommer une adresse d'état sans détruire la ressource Azure sous-jacente
+- `modules/resource_group/` étendu plutôt que de créer un nouveau module — backward-compatible car les nouvelles variables n'ont pas de `default` mais les seuls appelants sont mis à jour dans ce même PR

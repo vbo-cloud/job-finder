@@ -3,8 +3,8 @@
 module "vnet" {
   source              = "../../modules/vnet"
   name                = "vnet-${var.project}-lz-dev-${var.location_short}"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  location            = module.rg.location
+  resource_group_name = module.rg.name
   address_space       = ["10.0.0.0/16"]
   environment         = var.env
   project             = var.project
@@ -15,7 +15,7 @@ module "vnet" {
 module "subnet_app" {
   source               = "../../modules/subnet"
   name                 = "snet-${var.project}-lz-dev-${var.location_short}-app"
-  resource_group_name  = azurerm_resource_group.rg.name
+  resource_group_name  = module.rg.name
   virtual_network_name = module.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
 }

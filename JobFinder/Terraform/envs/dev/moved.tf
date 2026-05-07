@@ -6,3 +6,23 @@ moved {
   from = azurerm_subnet.postgresql
   to   = module.subnet_postgresql.azurerm_subnet.this
 }
+
+moved {
+  from = azurerm_resource_group.rg_core
+  to   = module.rg_core.azurerm_resource_group.rg
+}
+
+moved {
+  from = azurerm_resource_group.rg_app
+  to   = module.rg_app.azurerm_resource_group.rg
+}
+
+moved {
+  from = azurerm_resource_group.rg_data
+  to   = module.rg_data.azurerm_resource_group.rg
+}
+
+moved {
+  from = azurerm_key_vault_secret.servicebus_connection_string
+  to   = module.secret_servicebus.azurerm_key_vault_secret.this
+}

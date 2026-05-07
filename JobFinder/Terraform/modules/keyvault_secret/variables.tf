@@ -1,14 +1,23 @@
-# Inputs for the resource_group module.
-# Both are required (no defaults) so callers are always explicit about name and location.
-
 variable "name" {
   type        = string
-  description = "Resource group's name"
+  description = "Secret name in Key Vault."
 }
 
-variable "location" {
+variable "value" {
   type        = string
-  description = "Resource group's location"
+  sensitive   = true
+  description = "Secret value."
+}
+
+variable "key_vault_id" {
+  type        = string
+  description = "Resource ID of the Key Vault."
+}
+
+variable "content_type" {
+  type        = string
+  default     = "text/plain"
+  description = "Content type hint for consumers."
 }
 
 variable "environment" {
