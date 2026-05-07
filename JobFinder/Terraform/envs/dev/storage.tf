@@ -10,7 +10,7 @@ resource "azurerm_private_dns_zone" "blob" {
   resource_group_name = azurerm_resource_group.rg_core.name
 
   tags = {
-    environment = "dev"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -23,7 +23,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   virtual_network_id    = data.azurerm_virtual_network.lz_vnet.id
 
   tags = {
-    environment = "dev"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -39,7 +39,7 @@ module "storage" {
   name                = "st${var.project}dev${var.location_short}"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg_data.name
-  environment         = "dev"
+  environment         = var.env
   project             = var.project
   owner               = var.owner
 }
@@ -73,7 +73,7 @@ module "private_endpoint_blob" {
   private_connection_resource_id = module.storage.id
   subresource_name               = "blob"
   private_dns_zone_ids           = [azurerm_private_dns_zone.blob.id]
-  environment                    = "dev"
+  environment                    = var.env
   project                        = var.project
   owner                          = var.owner
 }

@@ -7,7 +7,7 @@ resource "azurerm_private_dns_zone" "postgresql" {
   resource_group_name = azurerm_resource_group.rg_core.name
 
   tags = {
-    environment = "dev"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -20,7 +20,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "postgresql" {
   virtual_network_id    = data.azurerm_virtual_network.lz_vnet.id
 
   tags = {
-    environment = "dev"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -31,7 +31,7 @@ module "postgresql" {
   name                = "psql-${var.project}-dev-${var.location_short}"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg_data.name
-  environment         = "dev"
+  environment         = var.env
   project             = var.project
   owner               = var.owner
   key_vault_id        = module.keyvault.id
