@@ -42,4 +42,6 @@ resource "azurerm_cognitive_deployment" "this" {
     type     = each.value.scale_type
     capacity = each.value.capacity_tpm
   }
+
+  rai_policy_name = "Microsoft.DefaultV2"
 }

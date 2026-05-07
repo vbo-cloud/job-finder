@@ -14,6 +14,10 @@ resource "azurerm_log_analytics_workspace" "this" {
     project     = var.project
     owner       = var.owner
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ==============================================================================
@@ -27,6 +31,7 @@ resource "azurerm_application_insights" "this" {
   resource_group_name = var.resource_group_name
   workspace_id        = azurerm_log_analytics_workspace.this.id
   application_type    = "other"
+  retention_in_days   = var.retention_in_days
 
   tags = {
     environment = var.environment
