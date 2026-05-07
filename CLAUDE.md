@@ -45,6 +45,11 @@ Az-104 certification obtained.
 - Always write reusable modules
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
+- Always reference other resources through their module outputs, never directly.
+  For example: `module.keyvault.id` not `azurerm_key_vault.this.id`,
+  `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
+  Before writing any reference to another resource, check whether a module
+  already manages it and use its output.
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
 - `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
