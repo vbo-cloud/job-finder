@@ -660,3 +660,20 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Les runners GitHub-hosted ont besoin d'accéder au data plane blob du storage account pour créer les containers (`azurerm_storage_container` appelle l'API blob, pas l'API ARM management) — sans accès public, l'apply échoue avec une 403 sur l'endpoint blob
 - Même pattern que le Key Vault : RBAC (`Storage Blob Data Contributor`) est le contrôle d'accès primaire, l'accès réseau public est une concession opérationnelle temporaire
 - Tracé en BACKLOG pour désactivation quand un runner self-hosted dans le VNet sera disponible
+
+---
+
+### PR #21 — refactor: introduce var.env and replace hardcoded environment strings
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout de `variable "env"` dans les `variables.tf` des 4 environnements, avec une valeur par défaut correspondant à l'environnement (`"dev"`, `"lz-dev"`, `"lz-prod"`, `"prod"`)
+- Remplacement de tous les strings d'environnement hardcodés (`environment = "dev"`, etc.) par `var.env` dans tous les fichiers `.tf` des 4 environnements :
+  - `envs/dev/` : `keyvault.tf`, `postgresql.tf`, `resourcegroups.tf`, `storage.tf`
+  - `envs/lz_dev/` : `main.tf`, `keyvault.tf`, `network.tf`, `policies.tf`
+  - `envs/lz_prod/` : `main.tf`, `keyvault.tf`, `network.tf`, `policies.tf`
+  - `envs/prod/` : `keyvault.tf`, `network.tf`, `postgresql.tf`, `resourcegroups.tf`
+
+**Décisions techniques :**
+- Le `default` de `var.env` est codé en dur dans chaque `variables.tf` (ex. `default = "dev"`), ce qui évite d'injecter une variable supplémentaire via CI/CD — les `terraform.tfvars` sont gitignorés et non committés
+- Le tag `environment` reflètera maintenant toujours la valeur réelle de l'environnement, sans risque de dérive si une ressource est copiée d'un env à l'autre
