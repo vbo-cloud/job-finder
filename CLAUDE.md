@@ -45,6 +45,7 @@ Az-104 certification obtained.
 - Always write reusable modules
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
+- Every `variable` and `output` block in a module must have a `description`. No exceptions.
 - Always reference other resources through their module outputs, never directly.
   For example: `module.keyvault.id` not `azurerm_key_vault.this.id`,
   `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
