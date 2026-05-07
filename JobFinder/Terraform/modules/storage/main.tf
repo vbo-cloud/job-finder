@@ -6,7 +6,10 @@ resource "azurerm_storage_account" "this" {
   account_replication_type        = "LRS"
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
-  public_network_access_enabled   = false
+  # Public access required for GitHub-hosted runners to reach the blob data plane
+  # (azurerm_storage_container uses blob endpoint, not ARM management API).
+  # Disable when self-hosted runner in VNet is available — see BACKLOG.md.
+  public_network_access_enabled = true
 
   blob_properties {
     delete_retention_policy {
