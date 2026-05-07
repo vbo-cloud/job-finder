@@ -7,43 +7,37 @@
 # Core
 # ==============================================================================
 
-resource "azurerm_resource_group" "rg_core" {
-  name     = "rg-${var.project}-dev-${var.location_short}-core"
-  location = var.location
-
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
+module "rg_core" {
+  source      = "../../modules/resource_group"
+  name        = "rg-${var.project}-dev-${var.location_short}-core"
+  location    = var.location
+  environment = var.env
+  project     = var.project
+  owner       = var.owner
 }
 
 # ==============================================================================
 # Application
 # ==============================================================================
 
-resource "azurerm_resource_group" "rg_app" {
-  name     = "rg-${var.project}-dev-${var.location_short}-app"
-  location = var.location
-
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
+module "rg_app" {
+  source      = "../../modules/resource_group"
+  name        = "rg-${var.project}-dev-${var.location_short}-app"
+  location    = var.location
+  environment = var.env
+  project     = var.project
+  owner       = var.owner
 }
 
 # ==============================================================================
 # Data
 # ==============================================================================
 
-resource "azurerm_resource_group" "rg_data" {
-  name     = "rg-${var.project}-dev-${var.location_short}-data"
-  location = var.location
-
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
+module "rg_data" {
+  source      = "../../modules/resource_group"
+  name        = "rg-${var.project}-dev-${var.location_short}-data"
+  location    = var.location
+  environment = var.env
+  project     = var.project
+  owner       = var.owner
 }

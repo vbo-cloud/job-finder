@@ -7,7 +7,7 @@
 
 resource "azurerm_private_dns_zone" "blob" {
   name                = "privatelink.blob.core.windows.net"
-  resource_group_name = azurerm_resource_group.rg_core.name
+  resource_group_name = module.rg_core.name
 
   tags = {
     environment = var.env
@@ -18,7 +18,7 @@ resource "azurerm_private_dns_zone" "blob" {
 
 resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   name                  = "pdns-link-${var.project}-lz-dev-${var.location_short}-blob"
-  resource_group_name   = azurerm_resource_group.rg_core.name
+  resource_group_name   = module.rg_core.name
   private_dns_zone_name = azurerm_private_dns_zone.blob.name
   virtual_network_id    = data.azurerm_virtual_network.lz_vnet.id
 
@@ -38,7 +38,7 @@ module "storage" {
   # Storage accounts omit hyphens, max 24 chars: st{project}{env}{region}
   name                = "st${var.project}dev${var.location_short}"
   location            = var.location
-  resource_group_name = azurerm_resource_group.rg_data.name
+  resource_group_name = module.rg_data.name
   environment         = var.env
   project             = var.project
   owner               = var.owner
@@ -68,7 +68,7 @@ module "private_endpoint_blob" {
   source                         = "../../modules/private_endpoint"
   name                           = "pe-${module.storage.name}-blob"
   location                       = var.location
-  resource_group_name            = azurerm_resource_group.rg_data.name
+  resource_group_name            = module.rg_data.name
   subnet_id                      = data.azurerm_subnet.lz_vnet_app.id
   private_connection_resource_id = module.storage.id
   subresource_name               = "blob"

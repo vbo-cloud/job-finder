@@ -12,7 +12,7 @@ module "servicebus" {
 
   name                = "sb-${var.project}-${var.env}-${var.location_short}"
   location            = var.location
-  resource_group_name = azurerm_resource_group.rg_app.name
+  resource_group_name = module.rg_app.name
   sku                 = "Standard"
   environment         = var.env
   project             = var.project
