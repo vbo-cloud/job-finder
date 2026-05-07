@@ -34,7 +34,7 @@ resource "azurerm_private_dns_zone" "postgresql" {
   resource_group_name = azurerm_resource_group.rg_core.name
 
   tags = {
-    environment = "prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -47,7 +47,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "postgresql" {
   virtual_network_id    = data.azurerm_virtual_network.lz_vnet.id
 
   tags = {
-    environment = "prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }

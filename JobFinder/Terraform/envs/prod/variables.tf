@@ -46,3 +46,9 @@ variable "owner" {
     error_message = "owner must be a valid email address (e.g. user@example.com)."
   }
 }
+
+variable "env" {
+  type        = string
+  description = "Environment identifier applied to all resource tags (e.g. prod)"
+  default     = "prod"
+}

@@ -12,7 +12,7 @@ resource "azurerm_resource_group" "rg_core" {
   location = var.location
 
   tags = {
-    environment = "prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -27,7 +27,7 @@ resource "azurerm_resource_group" "rg_app" {
   location = var.location
 
   tags = {
-    environment = "prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
@@ -42,7 +42,7 @@ resource "azurerm_resource_group" "rg_data" {
   location = var.location
 
   tags = {
-    environment = "prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
