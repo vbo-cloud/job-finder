@@ -47,6 +47,12 @@ variable "owner" {
   }
 }
 
+variable "env" {
+  type        = string
+  description = "Environment identifier applied to all resource tags (e.g. lz-dev)"
+  default     = "lz-dev"
+}
+
 variable "sp_github_object_id" {
   description = "Object ID of sp-jf-github. Used to assign roles via rbac.tf."
   type        = string

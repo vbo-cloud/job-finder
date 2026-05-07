@@ -3,7 +3,7 @@ module "postgresql" {
   name                         = "psql-${var.project}-prod-${var.location_short}"
   location                     = var.location
   resource_group_name          = azurerm_resource_group.rg_data.name
-  environment                  = "prod"
+  environment                  = var.env
   project                      = var.project
   owner                        = var.owner
   key_vault_id                 = module.keyvault.id
