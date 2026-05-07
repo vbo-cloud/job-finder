@@ -12,4 +12,8 @@ resource "azurerm_resource_group" "rg" {
     project     = var.project
     owner       = var.owner
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

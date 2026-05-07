@@ -21,13 +21,16 @@ variable "content_type" {
 }
 
 variable "environment" {
-  type = string
+  type        = string
+  description = "Environment identifier applied to resource tags (e.g. dev)."
 }
 
 variable "project" {
-  type = string
+  type        = string
+  description = "Short project identifier applied to resource tags (e.g. jf)."
 }
 
 variable "owner" {
-  type = string
+  type        = string
+  description = "Owner email address applied to resource tags."
 }
