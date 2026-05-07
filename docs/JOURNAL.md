@@ -749,3 +749,19 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - `admin_enabled = false` : les agents s'authentifient via Managed Identity avec le rôle AcrPull (M2) — pas de credentials statiques
 - SKU Basic : suffisant pour le volume dev ; Standard/Premium pour prod (geo-replication, Private Link)
 - Login server en KV : les Container Apps récupèrent l'URL du registry sans hardcoder de valeur
+
+---
+
+### PR #25 — feat: add Application Insights and Log Analytics module for agent telemetry
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/application_insights/` : `azurerm_log_analytics_workspace` (SKU PerGB2018, rétention configurable, quota journalier 1 GB) + `azurerm_application_insights` (type `other`, `prevent_destroy = true`) liés par `workspace_id`
+- Déploiement depuis `envs/dev/monitoring.tf` : une seule instance partagée par les 4 agents, rétention 30 jours
+- Connection string stockée dans le Key Vault via `modules/keyvault_secret/` (`appinsights-connection-string`)
+
+**Décisions techniques :**
+- Une seule ressource Application Insights pour tous les agents : chaque agent se différencie via `cloud_role_name` dans son code — évite la multiplication de ressources et centralise les dashboards
+- `application_type = "other"` : les agents sont des workers Python, pas des apps web
+- Log Analytics Workspace en mode PerGB2018 : facturation à la donnée ingérée, pas de commitment tier nécessaire en dev
+- `daily_quota_gb = 1` : plafond d'ingestion pour éviter les coûts incontrôlés en cas de boucle d'agent
