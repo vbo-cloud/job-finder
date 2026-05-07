@@ -663,6 +663,23 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 
 ---
 
+### PR #20 — feat: add Service Bus module with 3 queues for agent pipeline
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/servicebus/` : `azurerm_servicebus_namespace` (SKU Standard, `prevent_destroy = true`, tag `protect=true`) + `azurerm_servicebus_queue` en `for_each` (TTL 7j, dead-letter après 10 tentatives)
+- Appel du module depuis `envs/dev/servicebus.tf` avec 3 queues pour le pipeline d'agents : `offer-ready`, `cv-ready`, `match-ready`
+- Connection string stockée dans le Key Vault (`servicebus-connection-string`) via `azurerm_key_vault_secret`
+- Règle ajoutée dans `CLAUDE.md` : toujours référencer les ressources via les outputs de module
+
+**Décisions techniques :**
+- SKU Standard : le Basic ne supporte pas les topics ; Standard suffit pour le volume M1
+- `for_each = toset(var.queues)` : ajout/suppression de queues sans recréer le namespace
+- `default_message_ttl = "P7D"` + `enable_dead_lettering_on_message_expiration = true` : les messages non consommés ne sont pas silencieusement perdus — ils partent en dead-letter queue pour investigation
+- Agent 4 (daily cleanup) est timer-triggered et ne passe pas par une queue
+
+---
+
 ### PR #21 — refactor: introduce var.env and replace hardcoded environment strings
 **Date :** 2026-05-07
 
