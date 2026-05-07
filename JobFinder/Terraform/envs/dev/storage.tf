@@ -45,17 +45,6 @@ module "storage" {
 }
 
 # ==============================================================================
-# Management Lock
-# ==============================================================================
-
-resource "azurerm_management_lock" "storage" {
-  name       = "lock-st${var.project}dev${var.location_short}"
-  scope      = module.storage.id
-  lock_level = "CanNotDelete"
-  notes      = "Protects blob storage from accidental deletion. Remove manually before destroying."
-}
-
-# ==============================================================================
 # Containers
 # ==============================================================================
 
