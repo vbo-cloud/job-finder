@@ -8,7 +8,8 @@ resource "azurerm_container_registry" "this" {
   sku                 = var.sku
 
   # Admin account disabled — agents authenticate via Managed Identity (AcrPull role)
-  admin_enabled = false
+  admin_enabled                 = false
+  public_network_access_enabled = var.public_network_access_enabled
 
   tags = {
     environment = var.environment

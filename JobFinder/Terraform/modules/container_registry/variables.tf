@@ -1,6 +1,6 @@
 variable "name" {
   type        = string
-  description = "Name of the Azure Container Registry."
+  description = "Name of the Azure Container Registry. Must be globally unique and alphanumeric only (ACR constraint — hyphens not allowed). Convention: cr{project}{env}{region} e.g. crjfdevfrc"
 }
 
 variable "location" {
@@ -17,6 +17,12 @@ variable "sku" {
   type        = string
   default     = "Basic"
   description = "ACR SKU. Basic for dev, Standard or Premium for prod."
+}
+
+variable "public_network_access_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether public network access is enabled. Set to false for prod (requires Premium SKU + Private Endpoint)."
 }
 
 variable "environment" {
