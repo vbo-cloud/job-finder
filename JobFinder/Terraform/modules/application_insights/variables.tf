@@ -24,6 +24,12 @@ variable "retention_in_days" {
   description = "Log retention in days. 30 for dev, 90+ for prod."
 }
 
+variable "daily_quota_gb" {
+  type        = number
+  default     = 1
+  description = "Daily ingestion cap in GB for the Log Analytics Workspace. -1 = unlimited. Keep low in dev to avoid runaway agent costs."
+}
+
 variable "environment" {
   type        = string
   description = "Environment identifier applied to resource tags (e.g. dev)."
