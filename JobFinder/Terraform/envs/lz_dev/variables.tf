@@ -46,3 +46,8 @@ variable "owner" {
     error_message = "owner must be a valid email address (e.g. user@example.com)."
   }
 }
+
+variable "sp_github_object_id" {
+  description = "Object ID of sp-jf-github. Used to assign roles via rbac.tf."
+  type        = string
+}
