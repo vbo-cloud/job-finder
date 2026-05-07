@@ -3,6 +3,11 @@
 # Safe to delete after the first successful apply that picks up these moves.
 
 moved {
+  from = azurerm_resource_group.rg
+  to   = module.rg.azurerm_resource_group.rg
+}
+
+moved {
   from = azurerm_virtual_network.vnet
   to   = module.vnet.azurerm_virtual_network.this
 }

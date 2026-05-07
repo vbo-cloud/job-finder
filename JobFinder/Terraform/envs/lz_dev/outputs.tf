@@ -3,7 +3,7 @@
 # keyvault_uri is consumed by the app layer to retrieve secrets at deploy time.
 
 output "rg_name" {
-  value = azurerm_resource_group.rg.name
+  value = module.rg.name
 }
 
 output "vnet_id" {
