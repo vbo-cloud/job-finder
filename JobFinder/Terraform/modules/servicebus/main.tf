@@ -33,5 +33,5 @@ resource "azurerm_servicebus_queue" "this" {
   # Dead-letter after 10 failed delivery attempts
   max_delivery_count = 10
 
-  enable_dead_lettering_on_message_expiration = true
+  dead_lettering_on_message_expiration = true
 }
