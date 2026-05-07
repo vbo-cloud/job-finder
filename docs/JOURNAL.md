@@ -729,3 +729,18 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Région `francecentral` : conformité GDPR — les données CV/utilisateur restent en EU (ADR-006)
 - `capacity_tpm = 10` (10K TPM) : suffisant pour le volume dev ; à ajuster selon la charge réelle
 - `for_each` sur une map d'objets : ajout/suppression de déploiements sans recréer le compte OpenAI
+
+---
+
+### PR #24 — feat: add Container Registry module and deploy ACR in dev
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/container_registry/` : `azurerm_container_registry` (admin désactivé, `prevent_destroy = true`, tag `protect=true`)
+- Déploiement depuis `envs/dev/container_registry.tf` : ACR Basic pour stocker les images des 4 agents (`agent-offer-fetching`, `agent-embedding`, `agent-matching`, `agent-cleanup`)
+- Login server stocké dans le Key Vault via `modules/keyvault_secret/` (`acr-login-server`)
+
+**Décisions techniques :**
+- `admin_enabled = false` : les agents s'authentifient via Managed Identity avec le rôle AcrPull (M2) — pas de credentials statiques
+- SKU Basic : suffisant pour le volume dev ; Standard/Premium pour prod (geo-replication, Private Link)
+- Login server en KV : les Container Apps récupèrent l'URL du registry sans hardcoder de valeur
