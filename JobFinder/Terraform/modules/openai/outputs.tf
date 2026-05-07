@@ -1,6 +1,15 @@
-output "id" { value = azurerm_cognitive_account.this.id }
-output "endpoint" { value = azurerm_cognitive_account.this.endpoint }
+output "id" {
+  description = "Resource ID of the Azure OpenAI cognitive account."
+  value       = azurerm_cognitive_account.this.id
+}
+
+output "endpoint" {
+  description = "Endpoint URL of the Azure OpenAI cognitive account."
+  value       = azurerm_cognitive_account.this.endpoint
+}
+
 output "primary_key" {
-  value     = azurerm_cognitive_account.this.primary_access_key
-  sensitive = true
+  description = "Primary access key of the Azure OpenAI cognitive account."
+  value       = azurerm_cognitive_account.this.primary_access_key
+  sensitive   = true
 }
