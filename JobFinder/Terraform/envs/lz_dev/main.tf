@@ -29,7 +29,7 @@ resource "azurerm_resource_group" "rg" {
   location = var.location
 
   tags = {
-    environment = "lz-dev"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
