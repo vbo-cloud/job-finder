@@ -47,4 +47,6 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
       - name: Terraform Plan
+        env:
+          TF_VAR_sp_github_object_id: ${{ matrix.env == 'lz_dev' && vars.SP_GITHUB_OBJECT_ID || '' }}
         run: terraform plan -input=false
