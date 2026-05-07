@@ -5,14 +5,14 @@
 module "policy_allowed_locations" {
   source = "../../modules/policy/allowed_locations"
 
-  environment       = "lz-prod"
+  environment       = var.env
   project           = var.project
   location_short    = var.location_short
   subscription_id   = data.azurerm_client_config.current.subscription_id
   allowed_locations = [var.location, "northeurope", "global"]
 
   tags = {
-    environment = "lz-prod"
+    environment = var.env
     project     = var.project
     owner       = var.owner
   }
