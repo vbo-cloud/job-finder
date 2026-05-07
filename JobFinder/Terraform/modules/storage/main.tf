@@ -21,6 +21,7 @@ resource "azurerm_storage_account" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {

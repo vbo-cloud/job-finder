@@ -53,11 +53,12 @@ resource "azurerm_postgresql_flexible_server" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {
     prevent_destroy = true
-    ignore_changes = [zone] 
+    ignore_changes  = [zone]
   }
 }
 
