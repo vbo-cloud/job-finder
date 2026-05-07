@@ -39,7 +39,7 @@ resource "azurerm_cognitive_deployment" "this" {
   }
 
   scale {
-    type     = "Standard"
+    type     = each.value.scale_type
     capacity = each.value.capacity_tpm
   }
 }

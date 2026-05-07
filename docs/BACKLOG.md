@@ -128,6 +128,28 @@ Deux SPs distincts, deux pipelines :
 
 ---
 
+## Azure OpenAI
+
+### [refacto M1→M2] Passer local_auth_enabled = false + Managed Identity sur OpenAI
+
+**Contexte**
+
+En M1, `local_auth_enabled = true` sur le compte Azure OpenAI — les agents s'authentifient avec une clé API stockée dans Key Vault. C'est acceptable en dev mais pas idéal en prod : une clé API est une secret à gérer, stocker et rotater.
+
+**Solution cible (M2)**
+
+Quand les Container Apps existent avec une Managed Identity :
+1. Passer `local_auth_enabled = false` dans `modules/openai/main.tf`
+2. Assigner le rôle `Cognitive Services OpenAI User` à la Managed Identity de chaque agent sur le compte OpenAI
+3. Les agents s'authentifient via token Entra ID — plus de clé API
+4. Supprimer les secrets `openai-api-key` du Key Vault — ils deviennent inutiles
+
+Exposer `local_auth_enabled` comme variable dans le module pour pouvoir le différencier par environnement si besoin.
+
+**Fichier :** `modules/openai/main.tf`
+
+---
+
 ## ADRs à rédiger
 
 - **ADR-014** : Stratégie de cache (Redis vs cache applicatif)
