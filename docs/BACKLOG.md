@@ -18,10 +18,18 @@ Garantit que ce qui est appliqué est exactement ce qui a été reviewé.
 Nécessite de traiter les breaking changes (storage_account_id, etc.).
 À faire pendant la phase de refactoring Terraform, pas en cours de M1.
 
-### [refacto M1→M2] Désactiver les access keys sur le storage account
+### [refacto M1→M2] Désactiver les access keys sur le storage account applicatif
 `shared_access_key_enabled = false` — nécessite azurerm ~> 4.0 (le provider 3.x
 utilise les clés en interne à la création). À combiner avec la migration provider.
 **Fichier :** `modules/storage/main.tf`
+
+### [optional] Authentification Entra ID pour le backend Terraform state
+Ajouter `use_azuread_auth = true` dans tous les `backend.tf` pour que Terraform
+accède au storage account de state via token Entra ID plutôt que via access keys.
+Nécessite le rôle `Storage Blob Data Contributor` sur `stjftfstatefrc` pour :
+- `sp-jf-github` (applies CI/CD)
+- Le compte utilisateur personnel (applies manuels `iam/`)
+**Fichiers :** tous les `backend.tf`
 
 ---
 
@@ -51,6 +59,51 @@ Permettrait de fermer l'accès public au storage account. Coût : une VM Azure s
 
 ### [optional] Renommer l'App Registration Azure → `sp-jf-github`
 Purement cosmétique. `az ad app update --id <app-id> --display-name sp-jf-github`
+
+---
+
+## Architecture IAM / Gouvernance
+
+### [refacto M1→M2] Créer un SP platform dédié et migrer la gouvernance
+
+**Contexte du problème**
+
+Actuellement, `sp-jf-github` est le SP unique qui gère à la fois les landing zones (`lz_dev/`, `lz_prod/`) et les couches applicatives (`dev/`, `prod/`). Ce SP est limité à Contributor + rôles data-plane, ce qui crée des blocages dès qu'une opération de gouvernance requiert des droits élevés :
+- Créer une policy assignment avec `roleDefinitionIds` → le caller doit posséder le rôle délégué (Owner pour déléguer Owner à la Managed Identity)
+- Poser des management locks directement → nécessite `Microsoft.Authorization/locks/write` (Owner ou rôle custom)
+- Assigner des rôles à d'autres SPs → nécessite `Microsoft.Authorization/roleAssignments/write`
+
+En entreprise suivant Azure CAF, la landing zone est gérée par un SP platform dédié avec des droits élevés. La sécurité est compensée par des contrôles stricts sur le pipeline (branch protection, approvals obligatoires, audit log). Le SP applicatif reste limité au strict nécessaire.
+
+**État actuel (2026-05-06)**
+- `sp-jf-github` dispose de Contributor + User Access Administrator + Storage Blob Data Contributor au niveau subscription
+- Rôle Owner révoqué
+- `iam/dev/` supprimé — les role assignments et la policy assignment sont désormais gérés directement par CI/CD depuis `lz_dev/rbac.tf` et `lz_dev/lock-policy.tf`
+
+**Travail restant pour M1→M2**
+- Créer `sp-jf-platform` dans Entra ID avec Owner au niveau subscription et OIDC configuré pour GitHub Actions
+- Migrer les jobs `apply-lz-dev` et `apply-lz-prod` vers `sp-jf-platform` dans `.github/workflows/terraformApply.yml`
+- Révoquer User Access Administrator sur `sp-jf-github` — retour au Contributor + rôles data-plane uniquement
+- Documenter la création de `sp-jf-platform` dans `docs/MANUAL_OPERATIONS.md`
+- Utiliser `iam/prod/` pour le bootstrap one-shot de `sp-jf-platform` (opération manuelle, une seule fois)
+
+**Solution cible**
+
+Deux SPs distincts, deux pipelines :
+
+- **`sp-jf-platform`** — Owner au niveau subscription. Déploie uniquement `lz_dev/` et `lz_prod/` via CI/CD. Crée les policies, les assignments, les locks, les role assignments pour les autres SPs.
+- **`sp-jf-github`** — Contributor + rôles data-plane. Déploie uniquement `dev/` et `prod/`. Ne touche pas à la gouvernance.
+
+**Ce que ça élimine**
+- Le rôle User Access Administrator sur `sp-jf-github`
+- Toute dépendance à `iam/` pour la gestion courante des droits
+
+**Comportement de la policy de lock à connaître**
+- Tag `protect=true` retiré → le lock **reste** (la policy ne supprime pas les locks existants)
+- Lock supprimé manuellement → Azure Policy le **repose** à la prochaine évaluation (~24h ou au prochain événement sur la ressource)
+- Compléter avec une alerte Azure Monitor sur l'événement `Microsoft.Authorization/locks/delete` pour détecter toute suppression en temps réel
+
+**Fichiers concernés :** `.github/workflows/terraformApply.yml`, `envs/lz_dev/lock-policy.tf`, `envs/lz_dev/rbac.tf` (à créer), `iam/dev/` (à supprimer), `docs/MANUAL_OPERATIONS.md`
 
 ---
 

@@ -583,3 +583,66 @@ Décision : pendant le Milestone 1, les changements sont implémentés uniquemen
 - Le provider azurerm 3.x utilise les access keys en interne lors de la création du storage account — positionner `shared_access_key_enabled = false` provoque une erreur à l'apply
 - Le paramètre est fonctionnellement souhaitable (désactiver les clés partagées renforce la sécurité) mais nécessite azurerm ~> 4.0 qui a revu cette dépendance interne
 - Tracé en BACKLOG pour ne pas perdre l'intention sécurité ; à traiter en même temps que la migration provider
+
+---
+
+### PR #18 — feat: auto-lock policy on protect=true resources and storage RBAC
+**Date :** 2026-05-06
+
+**Réalisé :**
+- Ajout de `azurerm_role_assignment` "Storage Blob Data Contributor" dans `iam/dev/main.tf` scopé sur `rg-jf-dev-frc-data` — le service principal `sp-jf-github` peut lire et écrire les blobs
+- Suppression de l'`azurerm_management_lock` manuel dans `envs/dev/storage.tf` — remplacé par la policy auto-lock
+- Création de `envs/lz_dev/lock-policy.tf` :
+  - `azurerm_policy_definition` : effect `deployIfNotExists`, cible toute ressource taguée `protect=true`, déploie un lock `CanNotDelete` via un ARM template inline si aucun lock n'existe déjà
+  - `azurerm_subscription_policy_assignment` : identity `SystemAssigned` — Azure attribue automatiquement le rôle `Owner` à cette identité managée pour pouvoir déployer le lock
+  - `prevent_destroy = true` sur les deux ressources
+- Ajout du tag `protect = "true"` dans les modules `storage`, `postgresql` et `keyvault` — toutes les ressources critiques déclenchent automatiquement la policy
+
+**Décisions techniques :**
+- `azurerm_management_lock` en Terraform nécessite que le service principal dispose du rôle `User Access Administrator` pour être posé — contrainte difficile à justifier durablement. La policy `deployIfNotExists` avec Managed Identity délègue ce droit uniquement à l'identité de la policy, pas au SP Terraform
+- L'approche policy est plus robuste qu'un lock Terraform : elle s'applique à toute ressource taguée `protect=true`, même créée hors Terraform ou manuellement
+- Le tag `protect=true` est posé dans les modules (pas chez l'appelant) : toute instance de ces modules critiques bénéficie automatiquement du lock sans que l'appelant ait à s'en souvenir
+- `roleDefinitionId` `8e3af657-a8ff-443c-a75c-2fe8c4bcb635` = Owner built-in role — requis pour que la Managed Identity de la policy puisse poser un lock au niveau ressource
+
+---
+
+### Décision technique — Owner temporaire sur sp-jf-github pour Milestone 1
+
+**Date :** 2026-05-06
+
+**Contexte :**
+Le développement du M1 a mis en évidence une limite structurelle : `sp-jf-github` est le SP unique qui gère à la fois les landing zones et les couches applicatives. En entreprise suivant Azure CAF, ces responsabilités sont portées par deux SPs distincts — un SP platform avec des droits élevés pour la gouvernance (lz), un SP applicatif limité pour les ressources métier (dev/prod). Faute de cette séparation, chaque opération de gouvernance (policy assignment, management lock, role assignment) échoue avec une 403.
+
+**Décision :**
+Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit temporairement le rôle **Owner** au niveau subscription. Cette décision est délibérée, documentée, et bornée dans le temps.
+
+**Justification :**
+- La valeur de M1 est dans les modules applicatifs (Service Bus, Azure OpenAI, Container Apps), pas dans la résolution de la dette IAM
+- Le workaround `iam/` (apply manuel avec compte Owner) crée plus de friction que le rôle Owner temporaire sur le SP
+- La migration vers un SP platform dédié est planifiée et documentée en BACKLOG
+
+**Ce qui sera fait à la transition M1→M2 :**
+- Création de `sp-jf-platform` avec Owner, OIDC configuré pour GitHub Actions
+- Migration des jobs lz_dev/lz_prod vers `sp-jf-platform` dans les workflows CI/CD
+- Déplacement des policy assignments et role assignments de `iam/` vers `lz_dev/` (géré par `sp-jf-platform`)
+- Révocation du rôle Owner sur `sp-jf-github` — retour au Contributor + rôles data-plane
+
+**Voir BACKLOG.md** — section "Architecture IAM / Gouvernance" pour le processus détaillé.
+
+---
+
+### Opération — Migration IAM vers lz_dev
+**Date :** 2026-05-06
+
+- sp-jf-github reçoit les rôles Contributor + User Access Administrator +
+  Storage Blob Data Contributor au niveau subscription
+- Rôle Owner révoqué sur sp-jf-github
+- Contenu de `iam/dev/` migré dans `lz_dev/` :
+  - `lz_dev/rbac.tf` : role assignments Key Vault Secrets Officer (x2) et
+    Storage Blob Data Contributor gérés directement par CI/CD
+  - `lz_dev/lock-policy.tf` : policy assignment déplacé depuis iam/dev/
+- `iam/dev/` supprimé — le projet iam/ est désormais réservé au bootstrap
+  one-shot de sp-jf-platform lors de la transition M1→M2
+- Décision : User Access Administrator permet à sp-jf-github de gérer les
+  role assignments sans Owner ; la permission `elevateAccess` (auto-élévation
+  Owner) n't est plus présente
