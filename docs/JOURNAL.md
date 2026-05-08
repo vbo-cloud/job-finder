@@ -795,3 +795,21 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Images placeholder en M1 : l'infrastructure est provisionnée et validée avant que les images agents n'existent — découplage infrastructure / code applicatif
 - `job-offer-fetching` reçoit le secret via `env_vars` (pas via KEDA) : il n'a pas de bloc `authentication` car il n'est pas déclenché par une queue, il l'alimente
 - M2 : basculer `local.servicebus_connection_string` sur `key_vault_secret_id` avec Managed Identity dès que les identités managées des agents seront configurées
+
+---
+
+### PR #27 — chore: post-M1 cleanup — remove prod envs, moved.tf blocks, update CI/CD matrix
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Correction du `resource_group_name` du backend state : `rg-tfstate` → `rg-jf-tfstate-frc` dans les 4 `backend.tf` (dev, lz_dev, lz_prod, prod)
+- Suppression de `envs/lz_prod/` et `envs/prod/` : environnements nettoyés dans Azure, recréés from scratch à la release/1.0.0
+- Suppression de `envs/iam/dev/` et `envs/iam/prod/` : projet IAM devenu obsolète après la migration des role assignments vers `lz_dev/rbac.tf`
+- Retrait de `lz_prod` et `prod` de la matrice `terraformPlan.yml` : seuls `lz_dev` et `dev` actifs jusqu'à la release
+- Suppression des jobs `apply-lz-prod` et `apply-prod` de `terraformApply.yml` et retrait de `main` du trigger — le workflow ne se déclenche plus que sur `dev`
+- Suppression de `envs/lz_dev/moved.tf` et `envs/dev/moved.tf` : blocs `moved {}` temporaires devenus inutiles après apply réussi
+- Mise à jour de `CLAUDE.md` (ajout de la règle `validation` sur les variables de module) et `docs/BACKLOG.md`
+
+**Décisions techniques :**
+- Les environnements prod sont supprimés du dépôt plutôt que maintenus vides : évite les faux positifs dans les plans CI et clarifie le périmètre actif du projet
+- Un seul apply prod massif sera effectué à la release/1.0.0 avec les ajustements prod appropriés (SKUs, rétention, geo-redundancy)
