@@ -813,3 +813,22 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 **Décisions techniques :**
 - Les environnements prod sont supprimés du dépôt plutôt que maintenus vides : évite les faux positifs dans les plans CI et clarifie le périmètre actif du projet
 - Un seul apply prod massif sera effectué à la release/1.0.0 avec les ajustements prod appropriés (SKUs, rétention, geo-redundancy)
+
+---
+
+### PR #28 — chore: upgrade azurerm provider to ~> 4.0
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Bump du provider azurerm `~> 3.0` → `~> 4.0` dans `envs/dev/main.tf` et `envs/lz_dev/main.tf`
+- Suppression du bloc `required_providers` dans `modules/postgresql/main.tf` — les versions de providers se déclarent uniquement au root module
+- Mise à jour des `.terraform.lock.hcl` de `dev` et `lz_dev` : azurerm v4.72.0
+- Breaking changes azurerm 4.0 corrigés :
+  - `modules/openai/` : bloc `scale {}` renommé en `sku {}`, attribut `type` renommé en `name` ; variable `scale_type` renommée en `sku_name` dans le module et son appelant (`envs/dev/openai.tf`)
+  - `envs/dev/storage.tf` : `storage_account_name` remplacé par `storage_account_id` sur les deux `azurerm_storage_container`
+  - `modules/keyvault/` : `enable_rbac_authorization` renommé en `rbac_authorization_enabled` (déprécié en 4.x, supprimé en 5.0)
+- `terraform validate` passe sur `lz_dev` et `dev` — aucune erreur bloquante
+
+**Décisions techniques :**
+- Migration ciblée 3.x → 4.x uniquement : les breaking changes 4.x sont limités et tous corrigés dans cette PR
+- `required_providers` dans les modules child est une mauvaise pratique en Terraform : le root module est le seul responsable de la sélection des versions — supprimé de `modules/postgresql/` qui était le dernier module à en avoir un

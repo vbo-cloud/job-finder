@@ -38,8 +38,8 @@ resource "azurerm_cognitive_deployment" "this" {
     version = each.value.model_version
   }
 
-  scale {
-    type     = each.value.scale_type
+  sku {
+    name     = each.value.sku_name
     capacity = each.value.capacity_tpm
   }
 

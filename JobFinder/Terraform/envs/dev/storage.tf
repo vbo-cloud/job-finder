@@ -50,13 +50,13 @@ module "storage" {
 
 resource "azurerm_storage_container" "cvs" {
   name                  = "cvs"
-  storage_account_name  = module.storage.name
+  storage_account_id    = module.storage.id
   container_access_type = "private"
 }
 
 resource "azurerm_storage_container" "offers" {
   name                  = "offers"
-  storage_account_name  = module.storage.name
+  storage_account_id    = module.storage.id
   container_access_type = "private"
 }
 
