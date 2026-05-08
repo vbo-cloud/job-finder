@@ -156,6 +156,45 @@ Exposer `local_auth_enabled` comme variable dans le module pour pouvoir le diff�
 
 ---
 
+## Qualité du code Terraform
+
+### [refacto M1→M2] Ajouter des blocs `validation` sur les variables de modules
+Les modules Terraform n'ont pas systématiquement de blocs `validation` sur leurs variables. Ajouter des validations sur tous les champs qui ont des contraintes évidentes (formats, plages de valeurs, valeurs acceptées) pour faire échouer le `plan` avec un message clair plutôt qu'un comportement inattendu à l'apply ou au runtime. Ne pas valider les champs sans contrainte (`name`, `location`) qui sont de toute façon validés par Azure.
+**Fichiers :** tous les `modules/*/variables.tf`
+
+---
+
+## Release 1.0.0 — Environnement Staging
+
+### [release/1.0.0] Créer un environnement staging éphémère pour la validation pre-prod
+
+En entreprise, une branche release déclenche un environnement staging — copie isolée de prod créée from scratch pour valider l'application avant mise en production réelle.
+
+**Workflow cible**
+
+1. Ouverture de `release/1.0.0` → CI/CD déploie automatiquement `lz_staging/` + `staging/`
+2. Données de test injectées (offres fictives, CV de test)
+3. Tests end-to-end automatisés dans la pipeline :
+   - Les agents tournent avec de vraies offres de test
+   - Un CV de test est soumis via l'API
+   - Le mail de matching est reçu et vérifié
+4. Validation humaine
+5. Merge `release/1.0.0` → `main` → CI/CD déploie prod
+6. Tag `v1.0.0`, environnement staging détruit automatiquement
+
+**Principes**
+- Staging est **éphémère** — créé à l'ouverture de la release, détruit après le merge. Zéro coût résiduel.
+- Même code Terraform que prod, uniquement `env = "staging"` différent.
+- Tests end-to-end automatisés, pas manuels.
+
+**Fichiers à créer**
+- `envs/lz_staging/` — landing zone staging
+- `envs/staging/`    — infra applicative staging
+- `.github/workflows/terraformStaging.yml` — déploiement et destruction automatiques
+- `tests/e2e/`       — tests end-to-end à définir en M2
+
+---
+
 ## ADRs à rédiger
 
 - **ADR-014** : Stratégie de cache (Redis vs cache applicatif)

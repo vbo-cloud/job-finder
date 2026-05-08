@@ -46,6 +46,7 @@ Az-104 certification obtained.
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
 - Every `variable` and `output` block in a module must have a `description`. No exceptions.
+- Add `validation` blocks to module variables that have obvious constraints (accepted values, value ranges, expected formats). Do not validate unconstrained fields like `name` or `location` — those are validated by Azure at apply time.
 - Always reference other resources through their module outputs, never directly.
   For example: `module.keyvault.id` not `azurerm_key_vault.this.id`,
   `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
