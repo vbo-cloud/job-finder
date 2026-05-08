@@ -19,8 +19,9 @@ jobs:
     strategy:
       # fail-fast: false — all environments run even if one fails, giving more information per CI run.
       fail-fast: false
+      # prod and lz_prod removed — environments will be recreated from scratch at release/1.0.0.
       matrix:
-        env: [lz_dev, dev, lz_prod, prod]
+        env: [lz_dev, dev]
 
     env:
       # ARM_USE_OIDC: federated credential auth — no secrets stored in GitHub, rotates automatically.

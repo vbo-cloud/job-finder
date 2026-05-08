@@ -1,10 +1,10 @@
 name: Terraform Apply
 
-# Triggered on push to dev (applies dev environments) or main (applies prod environments).
-# This separation ensures prod is never touched by a dev branch merge.
+# Triggered on push to dev (applies dev environments).
+# prod and lz_prod removed — environments will be recreated from scratch at release/1.0.0.
 on:
   push:
-    branches: [ dev, main ]
+    branches: [ dev ]
 
 permissions:
   id-token: write  # Required for OIDC authentication with Azure
@@ -67,52 +67,3 @@ jobs:
       - run: terraform init
       - run: terraform apply -auto-approve -input=false
 
-
-  apply-lz-prod:
-    runs-on: ubuntu-latest
-    # GitHub "prod" environment gates this job behind manual approval before applying.
-    environment: prod
-    if: github.ref == 'refs/heads/main'
-
-    env:
-      ARM_USE_OIDC: true
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-    defaults:
-      run:
-        working-directory: ./JobFinder/Terraform/envs/lz_prod
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
-
-      - run: terraform init
-      - run: terraform apply -auto-approve -input=false
-
-
-  apply-prod:
-    runs-on: ubuntu-latest
-    environment: prod
-    if: github.ref == 'refs/heads/main'
-    needs: apply-lz-prod
-
-    env:
-      ARM_USE_OIDC: true
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-    defaults:
-      run:
-        working-directory: ./JobFinder/Terraform/envs/prod
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
-
-      - run: terraform init
-      - run: terraform apply -auto-approve -input=false
