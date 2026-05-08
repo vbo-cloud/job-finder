@@ -52,6 +52,7 @@ Az-104 certification obtained.
   `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
   Before writing any reference to another resource, check whether a module
   already manages it and use its output.
+- Every provider used in an environment — directly or via a module — must be declared explicitly in the `required_providers` block of the root environment (`envs/*/main.tf`). Modules must not be the sole place where a provider is declared. This ensures all provider dependencies are visible at the environment level and versions are controlled centrally.
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
 - `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
