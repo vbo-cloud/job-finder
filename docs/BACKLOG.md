@@ -50,6 +50,12 @@ Les fichiers `moved.tf` sont temporaires — ils migrent les adresses de state s
 Azure déconseille le tier Burstable pour la production. Acceptable tant que le trafic prod reste faible.
 **Fichier :** `envs/prod/postgresql.tf`
 
+### [prod] Augmenter max_executions sur les jobs queue
+En dev, `max_executions = 1` sur tous les jobs queue. À revisiter pour prod :
+- `job-jf-prod-frc-embedding-offer` et `job-jf-prod-frc-matching` : prévoir `max_executions = 5`
+  selon le volume d'offres traitées.
+**Fichier :** `envs/prod/container_apps.tf` (à créer lors du mirror prod)
+
 ### [optional] Self-hosted runner dans le VNet pour fermer l'accès public des resources data plane
 
 **Problème actuel**

@@ -765,3 +765,33 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - `application_type = "other"` : les agents sont des workers Python, pas des apps web
 - Log Analytics Workspace en mode PerGB2018 : facturation à la donnée ingérée, pas de commitment tier nécessaire en dev
 - `daily_quota_gb = 1` : plafond d'ingestion pour éviter les coûts incontrôlés en cas de boucle d'agent
+
+---
+
+### PR #26 — feat: add Container App Jobs module and deploy 5 agent jobs
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/container_app_job/` : `azurerm_container_app_job` avec support des triggers `timer` (cron) et `queue` (Service Bus via KEDA) via blocs `dynamic`
+- Ajout de l'output `workspace_id` sur `modules/application_insights/`
+- Déploiement dans `envs/dev/container_apps.tf` :
+  - `azurerm_container_app_environment` partagé par tous les agents, lié au Log Analytics Workspace
+  - 5 Container App Jobs avec images placeholder (`containerapps-helloworld`) — images réelles construites et poussées en M2 :
+    - `job-offer-fetching` — timer, 06:00 et 18:00 UTC (écrit dans `offer-ready`)
+    - `job-embedding-offer` — queue `offer-ready`
+    - `job-embedding-cv` — queue `cv-ready`
+    - `job-matching` — queue `match-ready`
+    - `job-cleanup` — timer, 02:00 UTC
+- Bloc `validation` ajouté sur `trigger_type` dans le module : valeurs acceptées `"timer"` et `"queue"` uniquement
+- Variable `env_vars` étendue pour supporter les deux types : `value` (plain-text) et `secret_name` (secret-backed) en `optional(string)`
+- Secret Service Bus câblé dans les 4 jobs qui interagissent avec les queues :
+  - `job-embedding-offer`, `job-embedding-cv`, `job-matching` : secret injecté via le bloc KEDA `authentication`
+  - `job-offer-fetching` : secret injecté comme variable d'environnement `AZURE_SERVICEBUS_CONNECTION_STRING` (le job écrit dans la queue, pas de bloc KEDA)
+- `local.servicebus_connection_string` utilise `module.servicebus.primary_connection_string` directement — la syntaxe `@Microsoft.KeyVault(SecretUri=...)` est propre à App Service, non supportée par Container Apps en M1
+
+**Décisions techniques :**
+- Un job par agent : scaling, trigger et lifecycle indépendants dans le même environment
+- Trigger queue via KEDA (`azure-servicebus`) : scale-to-zero natif, pas de polling permanent
+- Images placeholder en M1 : l'infrastructure est provisionnée et validée avant que les images agents n'existent — découplage infrastructure / code applicatif
+- `job-offer-fetching` reçoit le secret via `env_vars` (pas via KEDA) : il n'a pas de bloc `authentication` car il n'est pas déclenché par une queue, il l'alimente
+- M2 : basculer `local.servicebus_connection_string` sur `key_vault_secret_id` avec Managed Identity dès que les identités managées des agents seront configurées

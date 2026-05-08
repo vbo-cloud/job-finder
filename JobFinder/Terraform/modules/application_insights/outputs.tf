@@ -14,3 +14,8 @@ output "app_id" {
   description = "App ID of the Application Insights resource."
   value       = azurerm_application_insights.this.app_id
 }
+
+output "workspace_id" {
+  description = "Resource ID of the Log Analytics Workspace backing Application Insights."
+  value       = azurerm_log_analytics_workspace.this.id
+}
