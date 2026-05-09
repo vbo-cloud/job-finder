@@ -20,12 +20,12 @@ data "azurerm_storage_account" "tfstate" {
   resource_group_name = "rg-jf-tfstate-frc"
 }
 
-data "azurerm_storage_container" "app_tfstates" {
-  name                 = "app-tfstates"
-  storage_account_name = data.azurerm_storage_account.tfstate.name
-}
-
 locals {
+  # azurerm_storage_container data source uses the Blob data-plane API and
+  # requires listKeys, which sp-jf-platform does not have. Build the ARM
+  # resource ID directly from the storage account ID instead.
+  app_tfstates_container_id = "${data.azurerm_storage_account.tfstate.id}/blobServices/default/containers/app-tfstates"
+
   sp_role_assignments = {
     kv_app_secrets_officer = {
       scope                = data.azurerm_key_vault.app_dev.id
@@ -42,7 +42,7 @@ locals {
       role_definition_name = "Storage Blob Data Contributor"
     }
     tfstate_blob_contributor = {
-      scope                = data.azurerm_storage_container.app_tfstates.id
+      scope                = local.app_tfstates_container_id
       role_definition_name = "Storage Blob Data Contributor"
     }
     # Contributor scoped to each app resource group — replaces the former
