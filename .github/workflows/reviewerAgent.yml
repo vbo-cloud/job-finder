@@ -73,13 +73,21 @@ jobs:
           mkdir -p /tmp/logs
           JOBS=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs")
 
-          for ENV in lz_dev dev lz_prod prod; do
-            JOB_ID=$(echo "$JOBS" | jq -r ".jobs[] | select(.name == \"plan ($ENV)\") | .id" | head -1)
+          # lz_prod and prod are intentionally absent — deferred to v1.0.0.
+          # Add them here when production environments are introduced.
+          declare -A JOB_MAP=(
+            [lz_dev]="plan-platform"
+            [dev]="plan-app"
+          )
+
+          for ENV in lz_dev dev; do
+            JOB_NAME="${JOB_MAP[$ENV]}"
+            JOB_ID=$(echo "$JOBS" | jq -r ".jobs[] | select(.name == \"$JOB_NAME\") | .id" | head -1)
             if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
               gh api "repos/${{ github.repository }}/actions/jobs/$JOB_ID/logs" \
                 > "/tmp/logs/$ENV.log" 2>/dev/null || echo "Logs unavailable" > "/tmp/logs/$ENV.log"
             else
-              echo "Job not found for environment $ENV" > "/tmp/logs/$ENV.log"
+              echo "Job not found or skipped (no changes in $ENV)" > "/tmp/logs/$ENV.log"
             fi
           done
 
@@ -126,7 +134,7 @@ jobs:
                   diff = f.read()[:40000]
 
               plan_succeeded = conclusion == "success"
-              envs = ["lz_dev", "dev", "lz_prod", "prod"]
+              envs = ["lz_dev", "dev"]
 
               logs_section = (
                   "## Terraform Plan Output\n\n" if plan_succeeded

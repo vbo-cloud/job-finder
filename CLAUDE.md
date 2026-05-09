@@ -125,6 +125,9 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub secrets:
 - `feature/*` → PR to `dev`
 - `hotfix/*` → PR to `main`, then sync to `dev`
 - `dev` → PR to `main` only when stable (triggers a version tag)
+- A PR never mixes platform (`envs/lz_*`) and app (`envs/dev/`, `envs/prod/`) changes.
+  If a feature touches both layers, use two separate PRs — platform first, app second.
+  Module changes (`modules/`) that accompany an app feature go in a dedicated PR first.
 
 ### Versioning (Semantic Versioning)
 - `v1.0.0` → MAJOR.MINOR.PATCH
