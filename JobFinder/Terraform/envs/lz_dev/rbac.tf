@@ -20,6 +20,11 @@ data "azurerm_storage_account" "tfstate" {
   resource_group_name = "rg-jf-tfstate-frc"
 }
 
+data "azurerm_storage_container" "app_tfstates" {
+  name                 = "app-tfstates"
+  storage_account_name = data.azurerm_storage_account.tfstate.name
+}
+
 locals {
   sp_role_assignments = {
     kv_app_secrets_officer = {
@@ -37,7 +42,7 @@ locals {
       role_definition_name = "Storage Blob Data Contributor"
     }
     tfstate_blob_contributor = {
-      scope                = "${data.azurerm_storage_account.tfstate.id}/blobServices/default/containers/app-tfstates"
+      scope                = data.azurerm_storage_container.app_tfstates.id
       role_definition_name = "Storage Blob Data Contributor"
     }
     # Contributor scoped to each app resource group — replaces the former
