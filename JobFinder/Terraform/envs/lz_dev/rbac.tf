@@ -45,6 +45,10 @@ locals {
       scope                = local.app_tfstates_container_id
       role_definition_name = "Storage Blob Data Contributor"
     }
+    tfstate_reader = {
+      scope                = data.azurerm_storage_account.tfstate.id
+      role_definition_name = "Reader"
+    }
     # Contributor scoped to each app resource group — replaces the former
     # subscription-level Contributor now that lz_dev pre-provisions these RGs.
     rg_core_contributor = {

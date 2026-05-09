@@ -5,6 +5,18 @@ Le contenu historique (template phase, PRs #1–18) est conservé en anglais. Le
 
 ---
 
+### PR #32 — feat(lz_dev): grant Reader on tfstate storage account to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `tfstate_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le storage account `stjftfstatefrc` pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` au scope du storage account permet à sp-jf-github d'énumérer le compte via l'API ARM sans `listKeys` — nécessaire pour `terraform init` avec `use_azuread_auth = true`
+- Scope volontairement limité au storage account (pas au resource group) pour respecter le principe de moindre privilège
+
+---
+
 ## Mise en place initiale
 
 Réalisée avant l'ouverture du premier PR.
