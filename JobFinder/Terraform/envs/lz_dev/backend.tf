@@ -3,9 +3,10 @@
 # Each environment has its own state key to prevent cross-environment state interference.
 terraform {
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate"
+    resource_group_name  = "rg-jf-tfstate-frc"
     storage_account_name = "stjftfstatefrc" # Template users: replace with your own Terraform state storage account name
-    container_name       = "tfstate"
+    container_name       = "lz-tfstates"
     key                  = "lz-dev.tfstate"
+    use_azuread_auth     = true
   }
 }

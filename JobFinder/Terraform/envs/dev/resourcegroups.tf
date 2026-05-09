@@ -1,49 +1,41 @@
-# Three resource groups enforce separation of concerns and allow fine-grained RBAC:
-# - core: infrastructure and shared services (AKS, networking attachments)
-# - app:  application workloads and containers
-# - data: databases, storage accounts, and other stateful resources
-
 # ==============================================================================
-# Core
+# Resource Groups — data sources only
 # ==============================================================================
+# Resource groups are provisioned by lz_dev (sp-jf-platform).
+# envs/dev reads them as data sources so all resources can reference the same
+# name and location outputs without hardcoding strings.
 
-resource "azurerm_resource_group" "rg_core" {
-  name     = "rg-${var.project}-dev-${var.location_short}-core"
-  location = var.location
+data "azurerm_resource_group" "rg_core" {
+  name = "rg-${var.project}-dev-${var.location_short}-core"
+}
 
-  tags = {
-    environment = "dev"
-    project     = var.project
-    owner       = var.owner
+data "azurerm_resource_group" "rg_app" {
+  name = "rg-${var.project}-dev-${var.location_short}-app"
+}
+
+data "azurerm_resource_group" "rg_data" {
+  name = "rg-${var.project}-dev-${var.location_short}-data"
+}
+
+# Remove the module-managed resource groups from dev.tfstate without destroying
+# them — ownership transferred to lz_dev. Requires Terraform >= 1.7.
+removed {
+  from = module.rg_core.azurerm_resource_group.rg
+  lifecycle {
+    destroy = false
   }
 }
 
-# ==============================================================================
-# Application
-# ==============================================================================
-
-resource "azurerm_resource_group" "rg_app" {
-  name     = "rg-${var.project}-dev-${var.location_short}-app"
-  location = var.location
-
-  tags = {
-    environment = "dev"
-    project     = var.project
-    owner       = var.owner
+removed {
+  from = module.rg_app.azurerm_resource_group.rg
+  lifecycle {
+    destroy = false
   }
 }
 
-# ==============================================================================
-# Data
-# ==============================================================================
-
-resource "azurerm_resource_group" "rg_data" {
-  name     = "rg-${var.project}-dev-${var.location_short}-data"
-  location = var.location
-
-  tags = {
-    environment = "dev"
-    project     = var.project
-    owner       = var.owner
+removed {
+  from = module.rg_data.azurerm_resource_group.rg
+  lifecycle {
+    destroy = false
   }
 }

@@ -1,16 +1,3 @@
-terraform {
-  required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 3.0"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
-  }
-}
-
 # ==============================================================================
 # Admin Password
 # ==============================================================================
@@ -53,11 +40,12 @@ resource "azurerm_postgresql_flexible_server" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {
     prevent_destroy = true
-    ignore_changes = [zone] 
+    ignore_changes  = [zone]
   }
 }
 

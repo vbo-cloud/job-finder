@@ -1,12 +1,12 @@
 resource "azurerm_key_vault" "this" {
-  name                          = var.name
-  location                      = var.location
-  resource_group_name           = var.resource_group_name
-  tenant_id                     = var.tenant_id
-  sku_name                      = var.sku_name
-  enable_rbac_authorization     = true
-  purge_protection_enabled      = true
-  soft_delete_retention_days    = var.soft_delete_retention_days
+  name                       = var.name
+  location                   = var.location
+  resource_group_name        = var.resource_group_name
+  tenant_id                  = var.tenant_id
+  sku_name                   = var.sku_name
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = true
+  soft_delete_retention_days = var.soft_delete_retention_days
   # Public access is required for GitHub-hosted runners to reach the Key Vault data plane
   # and write secrets via Terraform. Access control is enforced by RBAC
   # (enable_rbac_authorization = true) — network restriction is a defence-in-depth layer,
@@ -18,6 +18,7 @@ resource "azurerm_key_vault" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {

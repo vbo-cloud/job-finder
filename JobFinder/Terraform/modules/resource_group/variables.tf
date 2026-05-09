@@ -10,3 +10,18 @@ variable "location" {
   type        = string
   description = "Resource group's location"
 }
+
+variable "environment" {
+  type        = string
+  description = "Environment identifier applied to resource tags (e.g. dev)."
+}
+
+variable "project" {
+  type        = string
+  description = "Short project identifier applied to resource tags (e.g. jf)."
+}
+
+variable "owner" {
+  type        = string
+  description = "Owner email address applied to resource tags."
+}

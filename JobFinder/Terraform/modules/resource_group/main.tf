@@ -6,4 +6,14 @@
 resource "azurerm_resource_group" "rg" {
   name     = var.name
   location = var.location
+
+  tags = {
+    environment = var.environment
+    project     = var.project
+    owner       = var.owner
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

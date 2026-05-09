@@ -1,6 +1,8 @@
 name: Terraform Plan
 
-# Runs on every PR to give early feedback before merge.
+# Runs on every PR regardless of which files changed.
+# Change detection inside the workflow determines which plan jobs execute.
+# The gate job is always the single required status check for branch protection.
 on:
   pull_request:
 
@@ -13,26 +15,67 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  plan:
-    runs-on: ubuntu-latest
 
-    strategy:
-      # fail-fast: false — all environments run even if one fails, giving more information per CI run.
-      fail-fast: false
-      matrix:
-        env: [lz_dev, dev, lz_prod, prod]
+  # ============================================================
+  # 1. Detect which Terraform layer(s) changed
+  # ============================================================
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect changed paths
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          platform=false
+          app=false
+
+          while IFS= read -r file; do
+            # platform: lz_dev + modules only — lz_prod deferred to v1.0.0 (see CLAUDE.md)
+            if [[ "$file" == JobFinder/Terraform/envs/lz_dev/* || \
+                  "$file" == JobFinder/Terraform/modules/* ]]; then
+              platform=true
+            fi
+            if [[ "$file" == JobFinder/Terraform/envs/dev/* ]]; then
+              app=true
+            fi
+          done <<< "$CHANGED"
+
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # 2. Plan — platform layer (lz_dev)
+  # ============================================================
+  plan-platform:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
 
     env:
-      # ARM_USE_OIDC: federated credential auth — no secrets stored in GitHub, rotates automatically.
       ARM_USE_OIDC: true
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLATFORM_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_sp_github_object_id: ${{ vars.SP_GITHUB_OBJECT_ID }}
 
-    # Each matrix job runs from its own environment directory.
     defaults:
       run:
-        working-directory: ./JobFinder/Terraform/envs/${{ matrix.env }}
+        working-directory: ./JobFinder/Terraform/envs/lz_dev
 
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +85,83 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
+
       - name: Terraform Fmt check
         run: terraform fmt -check
+
       - name: Terraform Validate
         run: terraform validate
+
       - name: Terraform Plan
-        run: terraform plan -input=false
+        id: plan
+        # pipefail: pipe exit code reflects terraform's exit code, not tee's.
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color
+
+  # ============================================================
+  # 3. Plan — app layer (dev)
+  # ============================================================
+  plan-app:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    defaults:
+      run:
+        working-directory: ./JobFinder/Terraform/envs/dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Fmt check
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color
+
+  # ============================================================
+  # 4. Gate — single required status check for branch protection
+  # ============================================================
+  gate:
+    needs: [plan-platform, plan-app]
+    # always() ensures this job runs even when plan jobs are skipped or failed,
+    # so branch protection always has a result to evaluate.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check plan results
+        run: |
+          platform="${{ needs.plan-platform.result }}"
+          app="${{ needs.plan-app.result }}"
+          echo "plan-platform : $platform"
+          echo "plan-app      : $app"
+          for result in "$platform" "$app"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "❌ A plan job failed or was cancelled."
+              exit 1
+            fi
+          done
+          echo "✅ All plan jobs passed or were skipped."

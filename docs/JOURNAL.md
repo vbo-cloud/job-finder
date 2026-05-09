@@ -5,6 +5,29 @@ Le contenu historique (template phase, PRs #1–18) est conservé en anglais. Le
 
 ---
 
+### PR #33 — fix(lz_dev): grant Reader on lz_dev resource group to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `lz_rg_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le resource group principal de lz_dev (`module.rg.id`) pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` sur le RG de lz_dev permet à sp-jf-github de résoudre les data sources qui lisent des ressources de la landing zone (Key Vault, storage account) via l'API ARM sans avoir de droits de modification sur ce RG
+
+---
+
+### PR #32 — feat(lz_dev): grant Reader on tfstate storage account to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `tfstate_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le storage account `stjftfstatefrc` pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` au scope du storage account permet à sp-jf-github d'énumérer le compte via l'API ARM sans `listKeys` — nécessaire pour `terraform init` avec `use_azuread_auth = true`
+- Scope volontairement limité au storage account (pas au resource group) pour respecter le principe de moindre privilège
+
+---
+
 ## Mise en place initiale
 
 Réalisée avant l'ouverture du premier PR.
@@ -435,3 +458,431 @@ Fermée sans merge. Réouverte en PR #12 avec un périmètre élargi (#4 à #11)
 
 **Décisions techniques :**
 - Le journal doit être mis à jour dans le même commit que les changements de code, avant toute ouverture de PR — règle désormais appliquée systématiquement
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🏷️   RELEASE v0.1.0 — job-finder                                          ║
+║   Date : 2026-05-05                                                          ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Infrastructure déployée                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Key Vault          SKU configurable, RBAC, purge protection,             ║
+║                        soft delete, Key Vault Secrets Officer assigné        ║
+║   • PostgreSQL         PostgreSQL 16, pgvector, VNet injection,              ║
+║                        DNS privée, connection string dans Key Vault          ║
+║   • Policy Azure       Restriction francecentral / northeurope / global      ║
+║                        assignée au scope subscription depuis les LZ          ║
+║                                                                              ║
+║   CI/CD                                                                      ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Ordering enforced  apply-lz-dev → apply-dev                              ║
+║                        apply-lz-prod → apply-prod (via needs:)               ║
+║   • Reviewer agent     Diff 40k chars, logs 10k/env, git ls-files injecté    ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • 13 ADRs couvrant l'ensemble des décisions d'architecture                 ║
+║   • docs/ROADMAP.md, docs/JOURNAL.md, docs/MANUAL_OPERATIONS.md              ║
+║                                                                              ║
+║   Correctifs                                                                 ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • ignore_changes = [zone] sur PostgreSQL (drift availability zone)         ║
+║   • public_network_access_enabled = true sur Key Vault (runners GitHub)      ║
+║   • Suppression des doublons de policy dans dev/ et prod/                    ║
+║   • data "azurerm_client_config" centralisé dans les main.tf root            ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### Changement de process — Mirror prod différé
+
+**Date :** 2026-05-05
+
+Décision : pendant le Milestone 1, les changements sont implémentés uniquement dans `envs/dev/`. Le mirror vers `envs/prod/` est différé à la fin du M1, lors du passage en v1.0.0.
+
+**Raison :** déployer prod en parallèle de dev n'apporte aucune valeur tant qu'il n'y a pas d'application fonctionnelle et testable. Cela ajoute de la complexité à chaque PR et multiplie les erreurs de bootstrap. Un seul apply prod massif sera effectué quand dev sera stable, avec les ajustements prod appropriés (SKUs, rétention, geo-redundancy).
+
+---
+
+### PR #13 — feat: add vnet and subnet modules with prevent_destroy and migrate existing resources
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/vnet/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_virtual_network` avec `prevent_destroy = true` et variables `name`, `location`, `resource_group_name`, `address_space`, `environment`, `project`, `owner`
+- Ajout du module Terraform réutilisable `modules/subnet/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_subnet` avec `prevent_destroy = true`, bloc `dynamic "delegation"` conditionnel (`delegation_name != null`), validation empêchant `delegation_name` sans `delegation_service` ; variables `environment`/`project`/`owner` absentes (`azurerm_subnet` ne supporte pas les tags)
+- Migration de `lz_dev/network.tf` et `lz_prod/network.tf` : remplacement des ressources inline `azurerm_virtual_network` et `azurerm_subnet` par des appels aux modules `vnet` et `subnet`
+- Création de `lz_dev/keyvault.tf` et `lz_prod/keyvault.tf` : appels au module `keyvault` avec les valeurs appropriées (`soft_delete_retention_days = 90` en lz_prod) ; suppression des ressources `azurerm_key_vault` inline des `main.tf`
+- Migration de `dev/network.tf` et `prod/network.tf` : remplacement du `azurerm_subnet.postgresql` inline par un appel au module `subnet` avec délégation PostgreSQL
+- Mise à jour des `outputs.tf` de `lz_dev` et `lz_prod` pour référencer les outputs des modules
+- Mise à jour de `dev/postgresql.tf` et `prod/postgresql.tf` : `azurerm_subnet.postgresql.id` → `module.subnet_postgresql.id`
+- Ajout de `moved {}` blocks dans `lz_dev/moved.tf`, `lz_prod/moved.tf`, `dev/moved.tf` et `prod/moved.tf` (exception M1) pour migrer les adresses de state sans destroy
+
+**Décisions techniques :**
+- Les modules `vnet` et `subnet` sont séparés (un module = une ressource) pour permettre de les composer librement — une VNet peut avoir N subnets sans que le module vnet ait à les connaître
+- Le bloc `dynamic "delegation"` est conditionnel sur `var.delegation_name != null` : les subnets sans délégation n'ont pas à passer ces variables ; une validation Terraform bloque le cas `delegation_name` fourni sans `delegation_service`
+- `prevent_destroy = true` dans les modules garantit qu'aucun destroy accidentel ne peut supprimer VNets, subnets ou Key Vaults — même si l'appelant oublie de le mettre
+- `moved {}` blocks : migration sans destroy des ressources inline existantes vers les nouveaux chemins de module — ces blocs peuvent être supprimés après le premier apply réussi (voir BACKLOG.md)
+- `prod/moved.tf` ajouté exceptionnellement pour éviter un destroy au plan malgré la règle M1 de ne pas toucher prod — le fichier sera supprimé lors du mirror prod en fin de M1
+- `soft_delete_retention_days = 90` en lz_prod (vs 7 par défaut en lz_dev) : rétention maximale sur l'environnement de production
+
+---
+
+### PR #14 — feat: add vnet and subnet modules with prevent_destroy and migrate existing resources
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/vnet/` : `azurerm_virtual_network` avec `prevent_destroy = true`
+- Ajout du module Terraform réutilisable `modules/subnet/` : `azurerm_subnet` avec `prevent_destroy = true`, bloc `dynamic "delegation"` conditionnel (`delegation_name != null`)
+- Migration de `lz_dev/network.tf` et `lz_prod/network.tf` : ressources inline remplacées par des appels aux modules `vnet` et `subnet`
+- Déplacement des Key Vault inline de `lz_dev/main.tf` et `lz_prod/main.tf` vers des fichiers `keyvault.tf` dédiés appelant `modules/keyvault/` (`soft_delete_retention_days = 90` en lz_prod)
+- Migration de `dev/network.tf` : subnet postgresql migré vers `module.subnet_postgresql` avec inputs de délégation
+- Ajout de `moved {}` blocks dans `lz_dev/moved.tf`, `lz_prod/moved.tf`, `dev/moved.tf` pour migrer les adresses de state sans destroy
+- Mise à jour des `outputs.tf` de `lz_dev` et `lz_prod` pour référencer les outputs des modules
+- Changements `prod/` différés à la fin du M1
+
+**Décisions techniques :**
+- Un module par ressource (`vnet` et `subnet` séparés) — permet de composer N subnets par VNet sans couplage
+- `prevent_destroy = true` dans le module (pas chez l'appelant) — les ressources critiques sont protégées quelle que soit la façon d'appeler le module
+- `dynamic "delegation"` avec `for_each = var.delegation_name != null ? [1] : []` — garde le module propre pour les subnets sans délégation
+- `moved {}` blocks : mécanisme Terraform correct pour refactorer des ressources inline en modules sans destroy/recreate ; supprimables après le premier apply réussi
+- Les Key Vaults de `lz_dev` et `lz_prod` n'existaient pas encore dans Azure — aucun import requis, la CI/CD les crée à l'apply
+- `soft_delete_retention_days = 90` en lz_prod (vs défaut 7 en lz_dev) : rétention maximale sur la landing zone de production
+
+---
+
+### PR #15 — feat: add blob storage module with private endpoint
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/private_endpoint/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_private_endpoint` générique avec variables `name`, `location`, `resource_group_name`, `subnet_id`, `private_connection_resource_id`, `subresource_name`, `private_dns_zone_ids` (list(string)) ; outputs `id` et `private_ip_address`
+- Ajout du module Terraform réutilisable `modules/storage/` (`main.tf`, `variables.tf`, `outputs.tf`) : `azurerm_storage_account` uniquement — Standard_LRS, TLS 1.2, accès public désactivé, nested public items interdits, `prevent_destroy = true`, soft delete blob et container à 7 jours ; outputs `id`, `name`, `primary_blob_endpoint`
+- Refactoring de `dev/network.tf` : fichier réduit aux data sources VNet/subnet app et au `module.subnet_postgresql` ; les DNS zones déplacées dans les fichiers service
+- Déplacement de `azurerm_private_dns_zone.postgresql` et son VNet link vers `dev/postgresql.tf` (co-localisation avec le module postgresql)
+- Création de `envs/dev/storage.tf` : DNS zone `privatelink.blob.core.windows.net` + VNet link dans `rg_core`, appel `module.storage` (storage account dans `rg_data`), `azurerm_storage_container` x2 (`cvs`, `offers`), `azurerm_management_lock` CanNotDelete, appel `module.private_endpoint_blob` — containers, lock et private endpoint sont définis à l'env level, pas dans le module
+
+**Décisions techniques :**
+- `modules/private_endpoint/` est générique et réutilisable pour tout service exposé via private endpoint — `subresource_name` et `private_dns_zone_ids` (list) permettent de l'appeler pour blob, file, table, etc.
+- `modules/storage/` ne gère que le storage account : containers, private endpoint et management lock sont des décisions de l'appelant — un module = une ressource
+- `azurerm_management_lock` au niveau env (pas dans le module) : le lock est une décision opérationnelle spécifique à l'environnement ; le module ne doit pas imposer une politique de lock à l'appelant
+- DNS zone et VNet link dans le fichier service (`storage.tf` pour blob, `postgresql.tf` pour PostgreSQL) : pattern "un fichier par service", plus lisible qu'un `network.tf` fourre-tout
+- Storage account dans `rg_data` (ressource stateful), DNS zone et VNet link dans `rg_core` (infrastructure partagée)
+- `public_network_access_enabled = false` : le storage est exclusivement accessible via le private endpoint
+- Soft delete (7 jours blob + container) : protection contre les suppressions accidentelles de données, récupérable depuis le portail Azure
+- Nommage storage account : `st${project}dev${location_short}` = `stjfdevfrc` (pas de tirets, max 24 chars)
+
+---
+
+### PR #16 — feat: separate IAM into a dedicated Terraform project
+**Date :** 2026-05-05
+
+**Réalisé :**
+- Scaffold de `JobFinder/Terraform/iam/dev/` et `iam/prod/` : deux projets Terraform indépendants dédiés à la gestion des role assignments, chacun avec son propre state (`iam-dev.tfstate`, `iam-prod.tfstate`)
+- `iam/dev/main.tf` : data source sur `kv-jf-dev-frc`, `azurerm_role_assignment` "Key Vault Secrets Officer" pour le service principal
+- `iam/prod/main.tf` : idem pour `kv-jf-prod-frc` (déployé lors du mirror prod)
+- Suppression du `azurerm_role_assignment` de `envs/dev/keyvault.tf` — la responsabilité RBAC quitte la couche applicative
+- Documentation ajoutée dans `docs/MANUAL_OPERATIONS.md` : procédure d'apply IAM manuel et révocation du rôle temporaire `User Access Administrator`
+
+**Décisions techniques :**
+- Les role assignments sont appliqués manuellement avec le compte utilisateur (pas via `sp-jf-github`) : le service principal ne peut pas s'auto-assigner des droits sans `User Access Administrator`, et ce rôle temporaire sera révoqué après l'apply IAM
+- `iam/` est un projet Terraform racine distinct (pas un module, pas sous `envs/`) : le périmètre IAM est orthogonal aux environnements applicatifs et mérite son propre cycle de vie et son propre state
+
+---
+
+### PR #17 — fix: remove shared_access_key_enabled=false — blocked by azurerm 3.x provider limitation
+**Date :** 2026-05-06
+
+**Réalisé :**
+- Suppression de `shared_access_key_enabled = false` dans `modules/storage/main.tf`
+- Ajout d'une entrée BACKLOG pour réactiver ce paramètre lors de la migration vers azurerm ~> 4.0
+
+**Décisions techniques :**
+- Le provider azurerm 3.x utilise les access keys en interne lors de la création du storage account — positionner `shared_access_key_enabled = false` provoque une erreur à l'apply
+- Le paramètre est fonctionnellement souhaitable (désactiver les clés partagées renforce la sécurité) mais nécessite azurerm ~> 4.0 qui a revu cette dépendance interne
+- Tracé en BACKLOG pour ne pas perdre l'intention sécurité ; à traiter en même temps que la migration provider
+
+---
+
+### PR #18 — feat: auto-lock policy on protect=true resources and storage RBAC
+**Date :** 2026-05-06
+
+**Réalisé :**
+- Ajout de `azurerm_role_assignment` "Storage Blob Data Contributor" dans `iam/dev/main.tf` scopé sur `rg-jf-dev-frc-data` — le service principal `sp-jf-github` peut lire et écrire les blobs
+- Suppression de l'`azurerm_management_lock` manuel dans `envs/dev/storage.tf` — remplacé par la policy auto-lock
+- Création de `envs/lz_dev/lock-policy.tf` :
+  - `azurerm_policy_definition` : effect `deployIfNotExists`, cible toute ressource taguée `protect=true`, déploie un lock `CanNotDelete` via un ARM template inline si aucun lock n'existe déjà
+  - `azurerm_subscription_policy_assignment` : identity `SystemAssigned` — Azure attribue automatiquement le rôle `Owner` à cette identité managée pour pouvoir déployer le lock
+  - `prevent_destroy = true` sur les deux ressources
+- Ajout du tag `protect = "true"` dans les modules `storage`, `postgresql` et `keyvault` — toutes les ressources critiques déclenchent automatiquement la policy
+
+**Décisions techniques :**
+- `azurerm_management_lock` en Terraform nécessite que le service principal dispose du rôle `User Access Administrator` pour être posé — contrainte difficile à justifier durablement. La policy `deployIfNotExists` avec Managed Identity délègue ce droit uniquement à l'identité de la policy, pas au SP Terraform
+- L'approche policy est plus robuste qu'un lock Terraform : elle s'applique à toute ressource taguée `protect=true`, même créée hors Terraform ou manuellement
+- Le tag `protect=true` est posé dans les modules (pas chez l'appelant) : toute instance de ces modules critiques bénéficie automatiquement du lock sans que l'appelant ait à s'en souvenir
+- `roleDefinitionId` `8e3af657-a8ff-443c-a75c-2fe8c4bcb635` = Owner built-in role — requis pour que la Managed Identity de la policy puisse poser un lock au niveau ressource
+
+---
+
+### Décision technique — Owner temporaire sur sp-jf-github pour Milestone 1
+
+**Date :** 2026-05-06
+
+**Contexte :**
+Le développement du M1 a mis en évidence une limite structurelle : `sp-jf-github` est le SP unique qui gère à la fois les landing zones et les couches applicatives. En entreprise suivant Azure CAF, ces responsabilités sont portées par deux SPs distincts — un SP platform avec des droits élevés pour la gouvernance (lz), un SP applicatif limité pour les ressources métier (dev/prod). Faute de cette séparation, chaque opération de gouvernance (policy assignment, management lock, role assignment) échoue avec une 403.
+
+**Décision :**
+Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit temporairement le rôle **Owner** au niveau subscription. Cette décision est délibérée, documentée, et bornée dans le temps.
+
+**Justification :**
+- La valeur de M1 est dans les modules applicatifs (Service Bus, Azure OpenAI, Container Apps), pas dans la résolution de la dette IAM
+- Le workaround `iam/` (apply manuel avec compte Owner) crée plus de friction que le rôle Owner temporaire sur le SP
+- La migration vers un SP platform dédié est planifiée et documentée en BACKLOG
+
+**Ce qui sera fait à la transition M1→M2 :**
+- Création de `sp-jf-platform` avec Owner, OIDC configuré pour GitHub Actions
+- Migration des jobs lz_dev/lz_prod vers `sp-jf-platform` dans les workflows CI/CD
+- Déplacement des policy assignments et role assignments de `iam/` vers `lz_dev/` (géré par `sp-jf-platform`)
+- Révocation du rôle Owner sur `sp-jf-github` — retour au Contributor + rôles data-plane
+
+**Voir BACKLOG.md** — section "Architecture IAM / Gouvernance" pour le processus détaillé.
+
+---
+
+### Opération — Migration IAM vers lz_dev
+**Date :** 2026-05-06
+
+- sp-jf-github reçoit les rôles Contributor + User Access Administrator +
+  Storage Blob Data Contributor au niveau subscription
+- Rôle Owner révoqué sur sp-jf-github
+- Contenu de `iam/dev/` migré dans `lz_dev/` :
+  - `lz_dev/rbac.tf` : role assignments Key Vault Secrets Officer (x2) et
+    Storage Blob Data Contributor gérés directement par CI/CD
+  - `lz_dev/lock-policy.tf` : policy assignment déplacé depuis iam/dev/
+- `iam/dev/` supprimé — le projet iam/ est désormais réservé au bootstrap
+  one-shot de sp-jf-platform lors de la transition M1→M2
+- Décision : User Access Administrator permet à sp-jf-github de gérer les
+  role assignments sans Owner ; la permission `elevateAccess` (auto-élévation
+  Owner) n't est plus présente
+
+---
+
+### PR #19 — fix: enable public network access on storage account for CI/CD runners
+**Date :** 2026-05-07
+
+**Réalisé :**
+- `public_network_access_enabled` passé de `false` à `true` dans `modules/storage/main.tf`
+- Commentaire explicatif ajouté dans le code
+
+**Décisions techniques :**
+- Les runners GitHub-hosted ont besoin d'accéder au data plane blob du storage account pour créer les containers (`azurerm_storage_container` appelle l'API blob, pas l'API ARM management) — sans accès public, l'apply échoue avec une 403 sur l'endpoint blob
+- Même pattern que le Key Vault : RBAC (`Storage Blob Data Contributor`) est le contrôle d'accès primaire, l'accès réseau public est une concession opérationnelle temporaire
+- Tracé en BACKLOG pour désactivation quand un runner self-hosted dans le VNet sera disponible
+
+---
+
+### PR #20 — feat: add Service Bus module with 3 queues for agent pipeline
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/servicebus/` : `azurerm_servicebus_namespace` (SKU Standard, `prevent_destroy = true`, tag `protect=true`) + `azurerm_servicebus_queue` en `for_each` (TTL 7j, dead-letter après 10 tentatives)
+- Appel du module depuis `envs/dev/servicebus.tf` avec 3 queues pour le pipeline d'agents : `offer-ready`, `cv-ready`, `match-ready`
+- Connection string stockée dans le Key Vault (`servicebus-connection-string`) via `azurerm_key_vault_secret`
+- Règle ajoutée dans `CLAUDE.md` : toujours référencer les ressources via les outputs de module
+
+**Décisions techniques :**
+- SKU Standard : le Basic ne supporte pas les topics ; Standard suffit pour le volume M1
+- `for_each = toset(var.queues)` : ajout/suppression de queues sans recréer le namespace
+- `default_message_ttl = "P7D"` + `enable_dead_lettering_on_message_expiration = true` : les messages non consommés ne sont pas silencieusement perdus — ils partent en dead-letter queue pour investigation
+- Agent 4 (daily cleanup) est timer-triggered et ne passe pas par une queue
+
+---
+
+### PR #21 — refactor: introduce var.env and replace hardcoded environment strings
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout de `variable "env"` dans les `variables.tf` des 4 environnements, avec une valeur par défaut correspondant à l'environnement (`"dev"`, `"lz-dev"`, `"lz-prod"`, `"prod"`)
+- Remplacement de tous les strings d'environnement hardcodés (`environment = "dev"`, etc.) par `var.env` dans tous les fichiers `.tf` des 4 environnements :
+  - `envs/dev/` : `keyvault.tf`, `postgresql.tf`, `resourcegroups.tf`, `storage.tf`
+  - `envs/lz_dev/` : `main.tf`, `keyvault.tf`, `network.tf`, `policies.tf`
+  - `envs/lz_prod/` : `main.tf`, `keyvault.tf`, `network.tf`, `policies.tf`
+  - `envs/prod/` : `keyvault.tf`, `network.tf`, `postgresql.tf`, `resourcegroups.tf`
+
+**Décisions techniques :**
+- Le `default` de `var.env` est codé en dur dans chaque `variables.tf` (ex. `default = "dev"`), ce qui évite d'injecter une variable supplémentaire via CI/CD — les `terraform.tfvars` sont gitignorés et non committés
+- Le tag `environment` reflètera maintenant toujours la valeur réelle de l'environnement, sans risque de dérive si une ressource est copiée d'un env à l'autre
+
+---
+
+### PR #22 — refactor: enforce module consistency for resource groups and KV secrets
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module `modules/keyvault_secret/` : wrapper réutilisable autour de `azurerm_key_vault_secret` avec tags standardisés
+- Remplacement de la ressource `azurerm_key_vault_secret` inline dans `envs/dev/servicebus.tf` par un appel au module (`module "secret_servicebus"`)
+- Extension du module `modules/resource_group/` : ajout des variables `environment`, `project`, `owner` (tags) et output `location`
+- Remplacement des 3 ressources `azurerm_resource_group` inline dans `envs/dev/` par des appels au module (`rg_core`, `rg_app`, `rg_data`)
+- Remplacement de la ressource `azurerm_resource_group` inline dans `envs/lz_dev/` par un appel au module (`rg`)
+- Mise à jour de toutes les références dans `envs/dev/` et `envs/lz_dev/` (`keyvault.tf`, `network.tf`, `outputs.tf`, `postgresql.tf`, `servicebus.tf`, `storage.tf`)
+- Blocs `moved {}` ajoutés dans `envs/dev/moved.tf` (3 blocs) et `envs/lz_dev/moved.tf` (1 bloc) pour la migration d'état sans destroy
+
+**Décisions techniques :**
+- `prod` et `lz_prod` laissés intentionnellement intacts — la migration prod se fera en bloc à la fin de M1
+- Le bloc `moved {}` est la seule façon de renommer une adresse d'état sans détruire la ressource Azure sous-jacente
+- `modules/resource_group/` étendu plutôt que de créer un nouveau module — backward-compatible car les nouvelles variables n'ont pas de `default` mais les seuls appelants sont mis à jour dans ce même PR
+
+---
+
+### PR #23 — feat: add Azure OpenAI module and deploy gpt-4o-mini + text-embedding-3-small
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/openai/` : `azurerm_cognitive_account` (kind OpenAI, `prevent_destroy = true`, tag `protect=true`) + `azurerm_cognitive_deployment` en `for_each` sur une map d'objets
+- Déploiement depuis `envs/dev/openai.tf` avec 2 modèles : `gpt-4o-mini` (Agent 3 — matching) et `text-embedding-3-small` (Agent 2 — embeddings), 10K TPM chacun
+- Clé API et endpoint stockés dans le Key Vault via `modules/keyvault_secret/` (`openai-api-key`, `openai-endpoint`)
+
+**Décisions techniques :**
+- `public_network_access_enabled = true` : les agents tournent hors VNet en M1 ; commentaire de rappel pour restriction via private endpoint dès que les runners self-hosted seront disponibles
+- Région `francecentral` : conformité GDPR — les données CV/utilisateur restent en EU (ADR-006)
+- `capacity_tpm = 10` (10K TPM) : suffisant pour le volume dev ; à ajuster selon la charge réelle
+- `for_each` sur une map d'objets : ajout/suppression de déploiements sans recréer le compte OpenAI
+
+**Correctif post-merge (2026-05-07) :**
+- L'apply a échoué avec une 400 — SKU `Standard` non disponible pour gpt-4o-mini et text-embedding-3-small en `francecentral` ; seul `GlobalStandard` est supporté
+- `scale_type` extrait en variable dans le module (`modules/openai/`) et passé à `"GlobalStandard"` dans `envs/dev/openai.tf`
+- Note ajoutée dans ADR-006 (résidence des données : le compute peut transiter hors francecentral mais la facturation et les données restent en EU)
+
+---
+
+### PR #24 — feat: add Container Registry module and deploy ACR in dev
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/container_registry/` : `azurerm_container_registry` (admin désactivé, `prevent_destroy = true`, tag `protect=true`)
+- Déploiement depuis `envs/dev/container_registry.tf` : ACR Basic pour stocker les images des 4 agents (`agent-offer-fetching`, `agent-embedding`, `agent-matching`, `agent-cleanup`)
+- Login server stocké dans le Key Vault via `modules/keyvault_secret/` (`acr-login-server`)
+
+**Décisions techniques :**
+- `admin_enabled = false` : les agents s'authentifient via Managed Identity avec le rôle AcrPull (M2) — pas de credentials statiques
+- SKU Basic : suffisant pour le volume dev ; Standard/Premium pour prod (geo-replication, Private Link)
+- Login server en KV : les Container Apps récupèrent l'URL du registry sans hardcoder de valeur
+
+---
+
+### PR #25 — feat: add Application Insights and Log Analytics module for agent telemetry
+**Date :** 2026-05-07
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/application_insights/` : `azurerm_log_analytics_workspace` (SKU PerGB2018, rétention configurable, quota journalier 1 GB) + `azurerm_application_insights` (type `other`, `prevent_destroy = true`) liés par `workspace_id`
+- Déploiement depuis `envs/dev/monitoring.tf` : une seule instance partagée par les 4 agents, rétention 30 jours
+- Connection string stockée dans le Key Vault via `modules/keyvault_secret/` (`appinsights-connection-string`)
+
+**Décisions techniques :**
+- Une seule ressource Application Insights pour tous les agents : chaque agent se différencie via `cloud_role_name` dans son code — évite la multiplication de ressources et centralise les dashboards
+- `application_type = "other"` : les agents sont des workers Python, pas des apps web
+- Log Analytics Workspace en mode PerGB2018 : facturation à la donnée ingérée, pas de commitment tier nécessaire en dev
+- `daily_quota_gb = 1` : plafond d'ingestion pour éviter les coûts incontrôlés en cas de boucle d'agent
+
+---
+
+### PR #26 — feat: add Container App Jobs module and deploy 5 agent jobs
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Ajout du module Terraform réutilisable `modules/container_app_job/` : `azurerm_container_app_job` avec support des triggers `timer` (cron) et `queue` (Service Bus via KEDA) via blocs `dynamic`
+- Ajout de l'output `workspace_id` sur `modules/application_insights/`
+- Déploiement dans `envs/dev/container_apps.tf` :
+  - `azurerm_container_app_environment` partagé par tous les agents, lié au Log Analytics Workspace
+  - 5 Container App Jobs avec images placeholder (`containerapps-helloworld`) — images réelles construites et poussées en M2 :
+    - `job-offer-fetching` — timer, 06:00 et 18:00 UTC (écrit dans `offer-ready`)
+    - `job-embedding-offer` — queue `offer-ready`
+    - `job-embedding-cv` — queue `cv-ready`
+    - `job-matching` — queue `match-ready`
+    - `job-cleanup` — timer, 02:00 UTC
+- Bloc `validation` ajouté sur `trigger_type` dans le module : valeurs acceptées `"timer"` et `"queue"` uniquement
+- Variable `env_vars` étendue pour supporter les deux types : `value` (plain-text) et `secret_name` (secret-backed) en `optional(string)`
+- Secret Service Bus câblé dans les 4 jobs qui interagissent avec les queues :
+  - `job-embedding-offer`, `job-embedding-cv`, `job-matching` : secret injecté via le bloc KEDA `authentication`
+  - `job-offer-fetching` : secret injecté comme variable d'environnement `AZURE_SERVICEBUS_CONNECTION_STRING` (le job écrit dans la queue, pas de bloc KEDA)
+- `local.servicebus_connection_string` utilise `module.servicebus.primary_connection_string` directement — la syntaxe `@Microsoft.KeyVault(SecretUri=...)` est propre à App Service, non supportée par Container Apps en M1
+
+**Décisions techniques :**
+- Un job par agent : scaling, trigger et lifecycle indépendants dans le même environment
+- Trigger queue via KEDA (`azure-servicebus`) : scale-to-zero natif, pas de polling permanent
+- Images placeholder en M1 : l'infrastructure est provisionnée et validée avant que les images agents n'existent — découplage infrastructure / code applicatif
+- `job-offer-fetching` reçoit le secret via `env_vars` (pas via KEDA) : il n'a pas de bloc `authentication` car il n'est pas déclenché par une queue, il l'alimente
+- M2 : basculer `local.servicebus_connection_string` sur `key_vault_secret_id` avec Managed Identity dès que les identités managées des agents seront configurées
+
+---
+
+### PR #27 — chore: post-M1 cleanup — remove prod envs, moved.tf blocks, update CI/CD matrix
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Correction du `resource_group_name` du backend state : `rg-tfstate` → `rg-jf-tfstate-frc` dans les 4 `backend.tf` (dev, lz_dev, lz_prod, prod)
+- Suppression de `envs/lz_prod/` et `envs/prod/` : environnements nettoyés dans Azure, recréés from scratch à la release/1.0.0
+- Suppression de `envs/iam/dev/` et `envs/iam/prod/` : projet IAM devenu obsolète après la migration des role assignments vers `lz_dev/rbac.tf`
+- Retrait de `lz_prod` et `prod` de la matrice `terraformPlan.yml` : seuls `lz_dev` et `dev` actifs jusqu'à la release
+- Suppression des jobs `apply-lz-prod` et `apply-prod` de `terraformApply.yml` et retrait de `main` du trigger — le workflow ne se déclenche plus que sur `dev`
+- Suppression de `envs/lz_dev/moved.tf` et `envs/dev/moved.tf` : blocs `moved {}` temporaires devenus inutiles après apply réussi
+- Mise à jour de `CLAUDE.md` (ajout de la règle `validation` sur les variables de module) et `docs/BACKLOG.md`
+
+**Décisions techniques :**
+- Les environnements prod sont supprimés du dépôt plutôt que maintenus vides : évite les faux positifs dans les plans CI et clarifie le périmètre actif du projet
+- Un seul apply prod massif sera effectué à la release/1.0.0 avec les ajustements prod appropriés (SKUs, rétention, geo-redundancy)
+
+---
+
+### PR #28 — chore: upgrade azurerm provider to ~> 4.0
+**Date :** 2026-05-08
+
+**Réalisé :**
+- Bump du provider azurerm `~> 3.0` → `~> 4.0` dans `envs/dev/main.tf` et `envs/lz_dev/main.tf`
+- Suppression du bloc `required_providers` dans `modules/postgresql/main.tf` — les versions de providers se déclarent uniquement au root module
+- Mise à jour des `.terraform.lock.hcl` de `dev` et `lz_dev` : azurerm v4.72.0
+- Breaking changes azurerm 4.0 corrigés :
+  - `modules/openai/` : bloc `scale {}` renommé en `sku {}`, attribut `type` renommé en `name` ; variable `scale_type` renommée en `sku_name` dans le module et son appelant (`envs/dev/openai.tf`)
+  - `envs/dev/storage.tf` : `storage_account_name` remplacé par `storage_account_id` sur les deux `azurerm_storage_container`
+  - `modules/keyvault/` : `enable_rbac_authorization` renommé en `rbac_authorization_enabled` (déprécié en 4.x, supprimé en 5.0)
+- `terraform validate` passe sur `lz_dev` et `dev` — aucune erreur bloquante
+
+**Décisions techniques :**
+- Migration ciblée 3.x → 4.x uniquement : les breaking changes 4.x sont limités et tous corrigés dans cette PR
+- `required_providers` dans les modules child est une mauvaise pratique en Terraform : le root module est le seul responsable de la sélection des versions — supprimé de `modules/postgresql/` qui était le dernier module à en avoir un
+
+---
+
+### PR #29 — feat: introduce sp-jf-platform for landing zone governance
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Introduction de `sp-jf-platform` comme SP dédié à la CI/CD des landing zones (lz_dev, lz_prod), séparé de `sp-jf-github` qui reste limité à la couche app
+- `terraformPlan.yml` remplacé par deux workflows scopés avec path filters : `terraformPlan-platform.yml` (lz_dev, lz_prod, modules) et `terraformPlan-app.yml` (dev, prod)
+- `terraformApply.yml` : job `apply-lz-dev` migré vers `AZURE_PLATFORM_CLIENT_ID`
+- `envs/lz_dev/backend.tf` : container migré vers `lz-tfstates` (dédié à sp-jf-platform) + `use_azuread_auth = true`
+- `envs/lz_dev/rbac.tf` : ajout de `Contributor` subscription et `Storage Blob Data Contributor` sur `app-tfstates` pour sp-jf-github — géré ici par sp-jf-platform (RBAC Administrator conditionné)
+- `powershell/setup-sp-jf-platform.ps1` : script de bootstrap idempotent pour créer sp-jf-platform (App Registration, SP, federated credentials OIDC, role assignments)
+- `CLAUDE.md` : règle "un PR ne mélange jamais platform et app" formalisée dans les branch rules
+- `docs/MANUAL_OPERATIONS.md` : documentation de la création manuelle de sp-jf-platform
+
+**Décisions techniques :**
+- Deux SPs distincts pour le principe de moindre privilège : sp-jf-platform a `RBAC Administrator` (conditionné aux rôles non-privilégiés) + `Resource Policy Contributor` ; sp-jf-github a `Contributor` + `Storage Blob Data Contributor` sur son container
+- La séparation des workflows par path filter élimine la dépendance circulaire : un PR app ne déclenche plus le plan lz_dev, et inversement
+- `use_azuread_auth = true` requis car sp-jf-platform n'a que `Storage Blob Data Contributor` sur `lz-tfstates` — `listKeys` nécessiterait `Storage Account Contributor` ou `Owner`
+- Les role assignments de sp-jf-github sont gérés depuis lz_dev/rbac.tf (et non depuis iam/) car sp-jf-platform a RBAC Administrator, ce qui rend la CI/CD autonome sans intervention manuelle
+### PR #30 — feat: configure sp-jf-github backend and OIDC setup
+**Date :** 2026-05-09
+
+**Réalisé :**
+- `envs/dev/backend.tf` : container migré vers `app-tfstates` (dédié à sp-jf-github) + `use_azuread_auth = true` — authentification via OIDC/AAD directement sur le blob, sans passer par `listKeys`
+- `powershell/setup-sp-jf-github.ps1` : script de bootstrap rendu idempotent (vérification existence avant création) ; la section role assignments est retirée — les rôles de sp-jf-github sont désormais gérés par sp-jf-platform via `lz_dev/rbac.tf`
+
+**Décisions techniques :**
+- `use_azuread_auth = true` est requis car sp-jf-github n'a que `Storage Blob Data Contributor` sur son container — `listKeys` nécessite `Storage Account Contributor` ou `Owner`, ce qui violerait le principe de moindre privilège
+- La délégation des role assignments à `lz_dev/rbac.tf` élimine le couplage entre le script de bootstrap et les permissions réelles : sp-jf-platform est la seule identité autorisée à assigner des rôles

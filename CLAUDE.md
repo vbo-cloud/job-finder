@@ -21,6 +21,7 @@ Az-104 certification obtained.
 - dev/      → Application infrastructure dev
 - lz-prod/  → (coming soon)
 - prod/     → (coming soon)
+- iam/dev/, iam/prod/ → RBAC management, applied manually by the user (not via CI/CD, not via sp-jf-github). The identity running `terraform apply` is the current session user (`data.azurerm_client_config.current`). Never add iam/ to the Plan/Apply workflows.
 
 ## Terraform Conventions
 - Modules: compute / network / data / resource-group
@@ -44,8 +45,18 @@ Az-104 certification obtained.
 - Always write reusable modules
 - Comment non-obvious architecture decisions
 - Every resource must have tags: environment, project, owner
+- Every `variable` and `output` block in a module must have a `description`. No exceptions.
+- Add `validation` blocks to module variables that have obvious constraints (accepted values, value ranges, expected formats). Do not validate unconstrained fields like `name` or `location` — those are validated by Azure at apply time.
+- Always reference other resources through their module outputs, never directly.
+  For example: `module.keyvault.id` not `azurerm_key_vault.this.id`,
+  `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
+  Before writing any reference to another resource, check whether a module
+  already manages it and use its output.
+- Every provider used in an environment — directly or via a module — must be declared explicitly in the `required_providers` block of the root environment (`envs/*/main.tf`). Modules must not be the sole place where a provider is declared. This ensures all provider dependencies are visible at the environment level and versions are controlled centrally.
 - Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
+- `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
+- During Milestone 1, only implement changes in `envs/dev/`. Do not mirror to `envs/prod/` until dev is stable and testable (end of M1). A single prod mirror + apply will be done at v1.0.0, with prod-specific adjustments (SKUs, retention, geo-redundancy).
 
 ## Project Overview
 
@@ -81,6 +92,8 @@ Reusable modules live in `JobFinder/Terraform/modules/`:
 - `compute/` — Compute resources (partially implemented)
 - `data/` — Data resources (partially implemented)
 
+**Module design rule:** one primary resource per module, plus resources intrinsically linked that have no meaning without it. If a secondary resource cannot exist independently of the primary, it goes in the module. If it can exist alone or be shared between multiple resources, it stays outside the module.
+
 ### State Backend
 
 Remote state in Azure Storage (`stjftfstatefrc` storage account, `tfstate` container). Each environment has its own state file: `dev.tfstate`, `lz-dev.tfstate`, `lz-prod.tfstate`, `prod.tfstate`.
@@ -112,6 +125,9 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub secrets:
 - `feature/*` → PR to `dev`
 - `hotfix/*` → PR to `main`, then sync to `dev`
 - `dev` → PR to `main` only when stable (triggers a version tag)
+- A PR never mixes platform (`envs/lz_*`) and app (`envs/dev/`, `envs/prod/`) changes.
+  If a feature touches both layers, use two separate PRs — platform first, app second.
+  Module changes (`modules/`) that accompany an app feature go in a dedicated PR first.
 
 ### Versioning (Semantic Versioning)
 - `v1.0.0` → MAJOR.MINOR.PATCH

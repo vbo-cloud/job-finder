@@ -5,7 +5,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 4.0"
     }
   }
 }
@@ -24,32 +24,12 @@ data "azurerm_client_config" "current" {}
 # Resource Group
 # ==============================================================================
 
-resource "azurerm_resource_group" "rg" {
-  name     = "rg-${var.project}-lz-dev-${var.location_short}"
-  location = var.location
-
-  tags = {
-    environment = "lz-dev"
-    project     = var.project
-    owner       = var.owner
-  }
+module "rg" {
+  source      = "../../modules/resource_group"
+  name        = "rg-${var.project}-lz-dev-${var.location_short}"
+  location    = var.location
+  environment = var.env
+  project     = var.project
+  owner       = var.owner
 }
 
-# ==============================================================================
-# Key Vault
-# ==============================================================================
-
-# Standard SKU is sufficient for dev; Premium (HSM-backed) is reserved for prod secrets.
-resource "azurerm_key_vault" "kv" {
-  name                = "kv-${var.project}-lz-dev-${var.location_short}"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  tenant_id           = data.azurerm_client_config.current.tenant_id
-  sku_name            = "standard"
-
-  tags = {
-    environment = "lz-dev"
-    project     = var.project
-    owner       = var.owner
-  }
-}
