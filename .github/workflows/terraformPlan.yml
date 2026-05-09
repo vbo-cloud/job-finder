@@ -61,11 +61,6 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
-    # environment: dev provides the OIDC subject repo:…:environment:dev that
-    # matches the federated credential configured on sp-jf-platform.
-    environment: dev
-    # pull-requests: write overrides the global block — required to post the
-    # plan output as a PR comment. id-token and contents must be re-declared.
     permissions:
       id-token: write
       contents: read
@@ -111,7 +106,6 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.app == 'true'
     runs-on: ubuntu-latest
-    environment: dev
     permissions:
       id-token: write
       contents: read
