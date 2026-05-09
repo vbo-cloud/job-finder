@@ -4,7 +4,7 @@
 # app-specific concerns. This split is intentional.
 resource "azurerm_private_dns_zone" "postgresql" {
   name                = "privatelink.postgres.database.azure.com"
-  resource_group_name = module.rg_core.name
+  resource_group_name = data.azurerm_resource_group.rg_core.name
 
   tags = {
     environment = var.env
@@ -15,7 +15,7 @@ resource "azurerm_private_dns_zone" "postgresql" {
 
 resource "azurerm_private_dns_zone_virtual_network_link" "postgresql" {
   name                  = "pdns-link-${var.project}-lz-dev-${var.location_short}-postgresql"
-  resource_group_name   = module.rg_core.name
+  resource_group_name   = data.azurerm_resource_group.rg_core.name
   private_dns_zone_name = azurerm_private_dns_zone.postgresql.name
   virtual_network_id    = data.azurerm_virtual_network.lz_vnet.id
 
@@ -30,7 +30,7 @@ module "postgresql" {
   source              = "../../modules/postgresql"
   name                = "psql-${var.project}-dev-${var.location_short}"
   location            = var.location
-  resource_group_name = module.rg_data.name
+  resource_group_name = data.azurerm_resource_group.rg_data.name
   environment         = var.env
   project             = var.project
   owner               = var.owner
