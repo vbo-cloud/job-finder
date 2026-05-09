@@ -5,6 +5,17 @@ Le contenu historique (template phase, PRs #1–18) est conservé en anglais. Le
 
 ---
 
+### PR #33 — fix(lz_dev): grant Reader on lz_dev resource group to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `lz_rg_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le resource group principal de lz_dev (`module.rg.id`) pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` sur le RG de lz_dev permet à sp-jf-github de résoudre les data sources qui lisent des ressources de la landing zone (Key Vault, storage account) via l'API ARM sans avoir de droits de modification sur ce RG
+
+---
+
 ### PR #32 — feat(lz_dev): grant Reader on tfstate storage account to sp-jf-github
 **Date :** 2026-05-09
 

@@ -49,6 +49,10 @@ locals {
       scope                = data.azurerm_storage_account.tfstate.id
       role_definition_name = "Reader"
     }
+    lz_rg_reader = {
+      scope                = module.rg.id
+      role_definition_name = "Reader"
+    }
     # Contributor scoped to each app resource group — replaces the former
     # subscription-level Contributor now that lz_dev pre-provisions these RGs.
     rg_core_contributor = {
