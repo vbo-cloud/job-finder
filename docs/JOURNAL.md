@@ -832,3 +832,24 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 **Décisions techniques :**
 - Migration ciblée 3.x → 4.x uniquement : les breaking changes 4.x sont limités et tous corrigés dans cette PR
 - `required_providers` dans les modules child est une mauvaise pratique en Terraform : le root module est le seul responsable de la sélection des versions — supprimé de `modules/postgresql/` qui était le dernier module à en avoir un
+
+---
+
+### PR #29 — feat: introduce sp-jf-platform for landing zone governance
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Introduction de `sp-jf-platform` comme SP dédié à la CI/CD des landing zones (lz_dev, lz_prod), séparé de `sp-jf-github` qui reste limité à la couche app
+- `terraformPlan.yml` remplacé par deux workflows scopés avec path filters : `terraformPlan-platform.yml` (lz_dev, lz_prod, modules) et `terraformPlan-app.yml` (dev, prod)
+- `terraformApply.yml` : job `apply-lz-dev` migré vers `AZURE_PLATFORM_CLIENT_ID`
+- `envs/lz_dev/backend.tf` : container migré vers `lz-tfstates` (dédié à sp-jf-platform) + `use_azuread_auth = true`
+- `envs/lz_dev/rbac.tf` : ajout de `Contributor` subscription et `Storage Blob Data Contributor` sur `app-tfstates` pour sp-jf-github — géré ici par sp-jf-platform (RBAC Administrator conditionné)
+- `powershell/setup-sp-jf-platform.ps1` : script de bootstrap idempotent pour créer sp-jf-platform (App Registration, SP, federated credentials OIDC, role assignments)
+- `CLAUDE.md` : règle "un PR ne mélange jamais platform et app" formalisée dans les branch rules
+- `docs/MANUAL_OPERATIONS.md` : documentation de la création manuelle de sp-jf-platform
+
+**Décisions techniques :**
+- Deux SPs distincts pour le principe de moindre privilège : sp-jf-platform a `RBAC Administrator` (conditionné aux rôles non-privilégiés) + `Resource Policy Contributor` ; sp-jf-github a `Contributor` + `Storage Blob Data Contributor` sur son container
+- La séparation des workflows par path filter élimine la dépendance circulaire : un PR app ne déclenche plus le plan lz_dev, et inversement
+- `use_azuread_auth = true` requis car sp-jf-platform n'a que `Storage Blob Data Contributor` sur `lz-tfstates` — `listKeys` nécessiterait `Storage Account Contributor` ou `Owner`
+- Les role assignments de sp-jf-github sont gérés depuis lz_dev/rbac.tf (et non depuis iam/) car sp-jf-platform a RBAC Administrator, ce qui rend la CI/CD autonome sans intervention manuelle

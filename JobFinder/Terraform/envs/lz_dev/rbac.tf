@@ -1,25 +1,31 @@
 # ==============================================================================
 # RBAC — Role assignments for sp-jf-github
 # ==============================================================================
-# Managed here (lz_dev) rather than in iam/ because sp-jf-github now has
-# User Access Administrator, allowing the CI/CD pipeline to manage role
-# assignments directly without manual intervention.
+# Managed here (lz_dev) rather than in iam/ because sp-jf-platform has
+# RBAC Administrator, allowing the CI/CD pipeline to manage role assignments
+# without manual intervention.
 
 data "azurerm_key_vault" "app_dev" {
-  name                = "kv-jf-dev-frc"
-  resource_group_name = "rg-jf-dev-frc-core"
+  name                = "kv-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_core.name
 }
 
 data "azurerm_key_vault" "lz_dev" {
-  name                = "kv-jf-lz-dev-frc"
-  resource_group_name = "rg-jf-lz-dev-frc"
+  name                = "kv-${var.project}-lz-dev-${var.location_short}"
+  resource_group_name = module.rg.name
 }
 
-data "azurerm_resource_group" "dev_data" {
-  name = "rg-jf-dev-frc-data"
+data "azurerm_storage_account" "tfstate" {
+  name                = "stjftfstatefrc"
+  resource_group_name = "rg-jf-tfstate-frc"
 }
 
 locals {
+  # azurerm_storage_container data source uses the Blob data-plane API and
+  # requires listKeys, which sp-jf-platform does not have. Build the ARM
+  # resource ID directly from the storage account ID instead.
+  app_tfstates_container_id = "${data.azurerm_storage_account.tfstate.id}/blobServices/default/containers/app-tfstates"
+
   sp_role_assignments = {
     kv_app_secrets_officer = {
       scope                = data.azurerm_key_vault.app_dev.id
@@ -29,9 +35,29 @@ locals {
       scope                = data.azurerm_key_vault.lz_dev.id
       role_definition_name = "Key Vault Secrets Officer"
     }
+    # Storage Blob Data Contributor on rg_data: data-plane access to blobs
+    # (Contributor below covers control plane but not blob read/write).
     storage_blob_contributor = {
-      scope                = data.azurerm_resource_group.dev_data.id
+      scope                = module.rg_data.id
       role_definition_name = "Storage Blob Data Contributor"
+    }
+    tfstate_blob_contributor = {
+      scope                = local.app_tfstates_container_id
+      role_definition_name = "Storage Blob Data Contributor"
+    }
+    # Contributor scoped to each app resource group — replaces the former
+    # subscription-level Contributor now that lz_dev pre-provisions these RGs.
+    rg_core_contributor = {
+      scope                = module.rg_core.id
+      role_definition_name = "Contributor"
+    }
+    rg_app_contributor = {
+      scope                = module.rg_app.id
+      role_definition_name = "Contributor"
+    }
+    rg_data_contributor = {
+      scope                = module.rg_data.id
+      role_definition_name = "Contributor"
     }
   }
 }
