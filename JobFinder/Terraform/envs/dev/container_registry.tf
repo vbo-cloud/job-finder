@@ -13,7 +13,7 @@ module "container_registry" {
 
   name                = "cr${var.project}${var.env}${var.location_short}"
   location            = var.location
-  resource_group_name = module.rg_app.name
+  resource_group_name = data.azurerm_resource_group.rg_app.name
   sku                 = "Basic"
   environment         = var.env
   project             = var.project

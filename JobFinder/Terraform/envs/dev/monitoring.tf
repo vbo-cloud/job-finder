@@ -14,7 +14,7 @@ module "application_insights" {
   name                = "appi-${var.project}-${var.env}-${var.location_short}"
   workspace_name      = "log-${var.project}-${var.env}-${var.location_short}"
   location            = var.location
-  resource_group_name = module.rg_core.name
+  resource_group_name = data.azurerm_resource_group.rg_core.name
   retention_in_days   = 30
   environment         = var.env
   project             = var.project

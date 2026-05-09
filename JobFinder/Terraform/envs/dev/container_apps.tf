@@ -10,7 +10,7 @@
 resource "azurerm_container_app_environment" "this" {
   name                       = "cae-${var.project}-${var.env}-${var.location_short}"
   location                   = var.location
-  resource_group_name        = module.rg_app.name
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
   log_analytics_workspace_id = module.application_insights.workspace_id
 
   tags = {
@@ -39,7 +39,7 @@ module "job_offer_fetching" {
 
   name                = "job-jf-dev-frc-offer-fetching"
   location            = var.location
-  resource_group_name = module.rg_app.name
+  resource_group_name = data.azurerm_resource_group.rg_app.name
   environment_id      = azurerm_container_app_environment.this.id
   trigger_type        = "timer"
   cron_expression     = "0 6,18 * * *"
@@ -67,7 +67,7 @@ module "job_embedding_offer" {
 
   name                 = "job-jf-dev-frc-embedding-offer"
   location             = var.location
-  resource_group_name  = module.rg_app.name
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = azurerm_container_app_environment.this.id
   trigger_type         = "queue"
   queue_name           = "offer-ready"
@@ -96,7 +96,7 @@ module "job_embedding_cv" {
 
   name                 = "job-jf-dev-frc-embedding-cv"
   location             = var.location
-  resource_group_name  = module.rg_app.name
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = azurerm_container_app_environment.this.id
   trigger_type         = "queue"
   queue_name           = "cv-ready"
@@ -125,7 +125,7 @@ module "job_matching" {
 
   name                 = "job-jf-dev-frc-matching"
   location             = var.location
-  resource_group_name  = module.rg_app.name
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = azurerm_container_app_environment.this.id
   trigger_type         = "queue"
   queue_name           = "match-ready"
@@ -156,7 +156,7 @@ module "job_cleanup" {
 
   name                = "job-jf-dev-frc-cleanup"
   location            = var.location
-  resource_group_name = module.rg_app.name
+  resource_group_name = data.azurerm_resource_group.rg_app.name
   environment_id      = azurerm_container_app_environment.this.id
   trigger_type        = "timer"
   cron_expression     = "0 2 * * *"

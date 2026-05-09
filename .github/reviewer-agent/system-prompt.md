@@ -52,6 +52,8 @@ Environment folder names use underscores (lz_dev, lz_prod). Tag values and Azure
 ### Git hygiene
 - PR title follows Conventional Commits format
 - No WIP or temporary commits in the branch
+- A PR must not mix platform (`envs/lz_*`) and app (`envs/dev/`, `envs/prod/`) changes.
+  Flag as blocking if a single PR touches both layers.
 
 ### Code (Python, JS, etc.)
 - No hardcoded secrets

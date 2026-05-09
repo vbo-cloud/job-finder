@@ -876,3 +876,13 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - La séparation des workflows par path filter élimine la dépendance circulaire : un PR app ne déclenche plus le plan lz_dev, et inversement
 - `use_azuread_auth = true` requis car sp-jf-platform n'a que `Storage Blob Data Contributor` sur `lz-tfstates` — `listKeys` nécessiterait `Storage Account Contributor` ou `Owner`
 - Les role assignments de sp-jf-github sont gérés depuis lz_dev/rbac.tf (et non depuis iam/) car sp-jf-platform a RBAC Administrator, ce qui rend la CI/CD autonome sans intervention manuelle
+### PR #30 — feat: configure sp-jf-github backend and OIDC setup
+**Date :** 2026-05-09
+
+**Réalisé :**
+- `envs/dev/backend.tf` : container migré vers `app-tfstates` (dédié à sp-jf-github) + `use_azuread_auth = true` — authentification via OIDC/AAD directement sur le blob, sans passer par `listKeys`
+- `powershell/setup-sp-jf-github.ps1` : script de bootstrap rendu idempotent (vérification existence avant création) ; la section role assignments est retirée — les rôles de sp-jf-github sont désormais gérés par sp-jf-platform via `lz_dev/rbac.tf`
+
+**Décisions techniques :**
+- `use_azuread_auth = true` est requis car sp-jf-github n'a que `Storage Blob Data Contributor` sur son container — `listKeys` nécessite `Storage Account Contributor` ou `Owner`, ce qui violerait le principe de moindre privilège
+- La délégation des role assignments à `lz_dev/rbac.tf` élimine le couplage entre le script de bootstrap et les permissions réelles : sp-jf-platform est la seule identité autorisée à assigner des rôles
