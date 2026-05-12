@@ -217,7 +217,7 @@ All of the following resource types must include `prevent_destroy = true` **and*
 - `azurerm_kubernetes_cluster`
 - `azurerm_virtual_network`
 - `azurerm_subnet`
-- `azurerm_resource_group`
+- `azurerm_resource_group` — `prevent_destroy = true` uniquement (pas de tag `protect` — voir note ci-dessous)
 - `azurerm_postgresql_flexible_server`
 - `azurerm_servicebus_namespace`
 - `azurerm_cognitive_account` (Azure OpenAI)
@@ -229,11 +229,14 @@ All of the following resource types must include `prevent_destroy = true` **and*
 
 Note: `azurerm_subnet` does not support tags in the azurerm provider — protection is enforced via `prevent_destroy = true` only.
 
+Note: `azurerm_resource_group` ne porte pas le tag `protect = "true"` — la policy auto-lock CanNotDelete appliquée sur un RG bloquerait les opérations Terraform sur ses ressources enfants. La protection est assurée par `prevent_destroy = true` seul.
+
 The `protect = "true"` tag triggers the auto-lock policy (deployIfNotExists) defined in `lz_dev/policies.tf`, which automatically applies a `CanNotDelete` management lock on the resource.
 
 ### Blocking criteria
 A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Unexpected destroy or replacement of a critical resource (Key Vault, AKS, VNet, Subnet, Resource Group, PostgreSQL, Service Bus, Azure OpenAI, ACR, Container App Environment, Application Insights, Log Analytics Workspace)
+- Tag `protect = "true"` absent sur une ressource critique — exception intentionnelle : les Resource Groups ne portent pas ce tag (voir note dans "Lifecycle rules")
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
