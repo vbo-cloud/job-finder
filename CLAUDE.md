@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Job-Finder Infrastructure Project
 
-## Workflow collaboratif
+## Collaborative workflow
 
-Ce projet est géré par deux instances de Claude aux rôles distincts :
+This project is managed by two Claude instances with distinct roles:
 
-**Claude Cowork** — rôle pédagogique et de conception. Il répond aux questions, explique les concepts, et produit des prompts détaillés découpés en tâches à transmettre à Claude Code. Il peut modifier les fichiers de documentation (`docs/`, `memory/`, `CLAUDE.md`). Il accède aux autres fichiers du projet en lecture seule et ne touche jamais au code Terraform, Python ou PowerShell.
+**Claude Cowork** — pedagogical and design role. Answers questions, explains concepts, and produces detailed prompts broken into tasks for Claude Code. May modify documentation files (`docs/`, `memory/`, `CLAUDE.md`). Has read-only access to all other project files and never touches Terraform, Python, or PowerShell code.
 
-**Claude Code** — rôle d'exécution. Il applique les décisions prises avec Claude Cowork. Il gère l'intégralité du cycle de vie d'une feature : création de branche, implémentation, ouverture de PR. Il est exclusif sur le code Terraform, Python et PowerShell.
+**Claude Code** — execution role. Applies decisions made with Claude Cowork. Owns the full feature lifecycle: branch creation, implementation, PR opening. Has exclusive ownership of Terraform, Python, and PowerShell code.
 
 ## Context
 Portfolio project for a Cloud/AI career transition.
@@ -217,7 +217,7 @@ All of the following resource types must include `prevent_destroy = true` **and*
 - `azurerm_kubernetes_cluster`
 - `azurerm_virtual_network`
 - `azurerm_subnet`
-- `azurerm_resource_group`
+- `azurerm_resource_group` — `prevent_destroy = true` only (no `protect` tag — see note below)
 - `azurerm_postgresql_flexible_server`
 - `azurerm_servicebus_namespace`
 - `azurerm_cognitive_account` (Azure OpenAI)
@@ -229,11 +229,14 @@ All of the following resource types must include `prevent_destroy = true` **and*
 
 Note: `azurerm_subnet` does not support tags in the azurerm provider — protection is enforced via `prevent_destroy = true` only.
 
+Note: `azurerm_resource_group` does not carry the `protect = "true"` tag — a CanNotDelete auto-lock applied to a Resource Group would block Terraform operations on its child resources. Protection is enforced by `prevent_destroy = true` alone.
+
 The `protect = "true"` tag triggers the auto-lock policy (deployIfNotExists) defined in `lz_dev/policies.tf`, which automatically applies a `CanNotDelete` management lock on the resource.
 
 ### Blocking criteria
 A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Unexpected destroy or replacement of a critical resource (Key Vault, AKS, VNet, Subnet, Resource Group, PostgreSQL, Service Bus, Azure OpenAI, ACR, Container App Environment, Application Insights, Log Analytics Workspace)
+- Missing `protect = "true"` tag on a critical resource — intentional exception: Resource Groups do not carry this tag (see note in "Lifecycle rules")
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present

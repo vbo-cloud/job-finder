@@ -25,6 +25,7 @@ You review Pull Requests containing Terraform code and application code.
 - No hardcoded secrets or credentials
 - Modules used instead of inline resources where possible
 - lifecycle rules on critical resources (Key Vault, AKS, VNet, Subnet, Resource Group, PostgreSQL, Service Bus, OpenAI, Container Registry, Container App Environment, Application Insights)
+  - Exception: `azurerm_resource_group` uses `prevent_destroy = true` only — the `protect = "true"` tag is intentionally absent (auto-lock on a RG would block Terraform operations on its children)
 - Variables have description and type defined
 - No unexpected destroys or resource replacements
 
