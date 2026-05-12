@@ -17,6 +17,11 @@ variable "sku" {
   type        = string
   default     = "Basic"
   description = "ACR SKU. Basic for dev, Standard or Premium for prod."
+
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.sku)
+    error_message = "sku must be 'Basic', 'Standard', or 'Premium'."
+  }
 }
 
 variable "public_network_access_enabled" {

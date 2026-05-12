@@ -17,6 +17,11 @@ variable "sku_name" {
   type        = string
   default     = "S0"
   description = "SKU of the cognitive account. S0 is the only option for Azure OpenAI."
+
+  validation {
+    condition     = var.sku_name == "S0"
+    error_message = "sku_name must be 'S0' — the only supported SKU for Azure OpenAI."
+  }
 }
 
 variable "environment" {
@@ -42,4 +47,14 @@ variable "deployments" {
     capacity_tpm  = number # Tokens per minute in thousands (e.g. 10 = 10K TPM)
     sku_name      = string # Deployment SKU: "Standard" or "GlobalStandard"
   }))
+
+  validation {
+    condition     = alltrue([for d in var.deployments : d.capacity_tpm > 0])
+    error_message = "All deployment capacity_tpm values must be greater than 0."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.deployments : contains(["Standard", "GlobalStandard"], d.sku_name)])
+    error_message = "All deployment sku_name values must be 'Standard' or 'GlobalStandard'."
+  }
 }

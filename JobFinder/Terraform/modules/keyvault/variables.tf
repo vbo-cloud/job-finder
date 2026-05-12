@@ -37,10 +37,20 @@ variable "sku_name" {
   type        = string
   description = "Key Vault SKU: standard or premium"
   default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "premium"], var.sku_name)
+    error_message = "sku_name must be 'standard' or 'premium'."
+  }
 }
 
 variable "soft_delete_retention_days" {
   type        = number
   description = "Soft delete retention in days (7-90)"
   default     = 7
+
+  validation {
+    condition     = var.soft_delete_retention_days >= 7 && var.soft_delete_retention_days <= 90
+    error_message = "soft_delete_retention_days must be between 7 and 90."
+  }
 }
