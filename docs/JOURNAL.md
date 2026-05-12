@@ -993,8 +993,10 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 - `modules/resource_group/main.tf` : suppression du tag `protect = "true"` — `prevent_destroy = true` est conservé dans le bloc `lifecycle`
 - `CLAUDE.md` : entrée `azurerm_resource_group` dans "Lifecycle rules" précisée — `prevent_destroy = true` uniquement, avec note explicative ; "Blocking criteria" mis à jour pour documenter l'exception intentionnelle
 - `.github/reviewer-agent/system-prompt.md` : exception ajoutée pour `azurerm_resource_group` dans la checklist lifecycle
+- `.github/workflows/terraformPlan.yml` : condition `app=true` étendue aux changements dans `modules/` — un changement de module impacte les deux layers (`lz_dev` et `dev`), les deux plans sont désormais déclenchés en parallèle
 
 **Décisions techniques :**
 - Le tag `protect = "true"` déclenche la policy `deployIfNotExists` qui applique un lock `CanNotDelete` sur la ressource. Appliqué sur un Resource Group, ce lock bloque les opérations Terraform sur ses ressources enfants (création, modification, suppression)
 - Accorder à `sp-jf-github` les droits nécessaires pour contourner ce lock (`Microsoft.Authorization/locks/delete`) imposerait un scope subscription trop large — en contradiction avec le principe de moindre privilège
 - La protection est assurée par `prevent_destroy = true` seul, ce qui est suffisant pour prévenir les destructions accidentelles via Terraform
+- `modules/` est partagé entre `lz_dev` et `dev` — ne déclencher que `plan-platform` sur un changement de module laissait `plan-app` aveugle à l'impact réel
