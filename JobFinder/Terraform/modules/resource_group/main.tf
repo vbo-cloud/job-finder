@@ -11,6 +11,7 @@ resource "azurerm_resource_group" "rg" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {

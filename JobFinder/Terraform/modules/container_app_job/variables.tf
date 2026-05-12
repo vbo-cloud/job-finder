@@ -55,36 +55,66 @@ variable "cpu" {
   type        = number
   default     = 0.25
   description = "CPU allocation for the container in cores."
+
+  validation {
+    condition     = var.cpu > 0 && var.cpu <= 4
+    error_message = "cpu must be greater than 0 and at most 4 cores (Container Apps limit)."
+  }
 }
 
 variable "memory" {
   type        = string
   default     = "0.5Gi"
   description = "Memory allocation for the container (e.g. 0.5Gi)."
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?Gi$", var.memory)) && tonumber(replace(var.memory, "Gi", "")) > 0
+    error_message = "memory must be in the format '<number>Gi' (e.g. 0.5Gi, 1Gi, 2Gi) and must be greater than 0."
+  }
 }
 
 variable "replica_timeout_in_seconds" {
   type        = number
   default     = 300
   description = "Maximum duration in seconds before a replica is terminated."
+
+  validation {
+    condition     = var.replica_timeout_in_seconds >= 1 && var.replica_timeout_in_seconds <= 86400
+    error_message = "replica_timeout_in_seconds must be between 1 and 86400 (24 hours)."
+  }
 }
 
 variable "replica_retry_limit" {
   type        = number
   default     = 3
   description = "Number of times a failed replica is retried before the job fails."
+
+  validation {
+    condition     = var.replica_retry_limit >= 0
+    error_message = "replica_retry_limit must be 0 or greater."
+  }
 }
 
 variable "max_executions" {
   type        = number
   default     = 1
   description = "Maximum number of job replicas running in parallel for queue triggers. Increase for prod under load."
+
+  validation {
+    condition     = var.max_executions >= 1
+    error_message = "max_executions must be at least 1."
+  }
 }
 
 variable "polling_interval_in_seconds" {
   type        = number
   default     = 30
   description = "Interval in seconds at which KEDA polls the queue for new messages."
+
+  validation {
+    condition     = var.polling_interval_in_seconds >= 1
+    error_message = "polling_interval_in_seconds must be at least 1."
+  }
 }
 
 variable "env_vars" {

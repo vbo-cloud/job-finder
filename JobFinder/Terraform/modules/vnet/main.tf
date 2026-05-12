@@ -8,6 +8,7 @@ resource "azurerm_virtual_network" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {
