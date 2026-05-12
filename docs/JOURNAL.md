@@ -970,3 +970,16 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 - Le tag `protect=true` est la condition déclenchant la policy `deployIfNotExists` pour le lock automatique — un `prevent_destroy` sans ce tag ne couvre pas la policy auto-lock
 - `validation` blocks uniquement sur les contraintes bien définies : enums, plages numériques, format regex — pas sur les champs libres validés par Azure à l'apply
 - `fmt -check` + `validate` dans Apply : garde-fou minimal indépendant du workflow Plan
+
+---
+
+### PR #35 — refactor(dev): migrate container_app_environment inline resource to module
+**Date :** 2026-05-12
+
+**Réalisé :**
+- `envs/dev/container_apps.tf` : la ressource inline `azurerm_container_app_environment` est remplacée par un appel à `module.container_app_environment` — le module apporte le tag `protect=true` et `prevent_destroy = true` que la ressource inline n'avait pas
+- Bloc `moved {}` ajouté pour migrer l'adresse de state sans destroy
+
+**Décisions techniques :**
+- La ressource inline était protégée par `prevent_destroy = true` mais sans le tag `protect=true` — la policy auto-lock ne déclenchait pas de lock CanNotDelete dessus
+- Le bloc `moved {}` est supprimable après le premier apply réussi confirmant la migration de state
