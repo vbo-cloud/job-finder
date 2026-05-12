@@ -7,21 +7,21 @@
 # Naming: job names use {type}-{project}-{env}-{region}-{suffix} pattern.
 # Container App Job names are capped at 32 characters — the suffix is kept short accordingly.
 
-resource "azurerm_container_app_environment" "this" {
+module "container_app_environment" {
+  source = "../../modules/container_app_environment"
+
   name                       = "cae-${var.project}-${var.env}-${var.location_short}"
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   log_analytics_workspace_id = module.application_insights.workspace_id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+}
 
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
+moved {
+  from = azurerm_container_app_environment.this
+  to   = module.container_app_environment.azurerm_container_app_environment.this
 }
 
 # ==============================================================================
@@ -40,7 +40,7 @@ module "job_offer_fetching" {
   name                = "job-jf-dev-frc-offer-fetching"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.rg_app.name
-  environment_id      = azurerm_container_app_environment.this.id
+  environment_id      = module.container_app_environment.id
   trigger_type        = "timer"
   cron_expression     = "0 6,18 * * *"
   image               = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
@@ -68,7 +68,7 @@ module "job_embedding_offer" {
   name                 = "job-jf-dev-frc-embedding-offer"
   location             = var.location
   resource_group_name  = data.azurerm_resource_group.rg_app.name
-  environment_id       = azurerm_container_app_environment.this.id
+  environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
   queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
@@ -97,7 +97,7 @@ module "job_embedding_cv" {
   name                 = "job-jf-dev-frc-embedding-cv"
   location             = var.location
   resource_group_name  = data.azurerm_resource_group.rg_app.name
-  environment_id       = azurerm_container_app_environment.this.id
+  environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
   queue_name           = "cv-ready"
   servicebus_namespace = module.servicebus.name
@@ -126,7 +126,7 @@ module "job_matching" {
   name                 = "job-jf-dev-frc-matching"
   location             = var.location
   resource_group_name  = data.azurerm_resource_group.rg_app.name
-  environment_id       = azurerm_container_app_environment.this.id
+  environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
   queue_name           = "match-ready"
   servicebus_namespace = module.servicebus.name
@@ -157,7 +157,7 @@ module "job_cleanup" {
   name                = "job-jf-dev-frc-cleanup"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.rg_app.name
-  environment_id      = azurerm_container_app_environment.this.id
+  environment_id      = module.container_app_environment.id
   trigger_type        = "timer"
   cron_expression     = "0 2 * * *"
   image               = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
