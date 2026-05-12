@@ -2,13 +2,16 @@
 # without duplicating the name string, which avoids drift if the name changes.
 
 output "name" {
-  value = azurerm_resource_group.rg.name
+  description = "The name of the resource group"
+  value       = azurerm_resource_group.rg.name
 }
 
 output "id" {
-  value = azurerm_resource_group.rg.id
+  description = "The resource ID of the resource group"
+  value       = azurerm_resource_group.rg.id
 }
 
 output "location" {
-  value = azurerm_resource_group.rg.location
+  description = "The Azure region of the resource group"
+  value       = azurerm_resource_group.rg.location
 }
