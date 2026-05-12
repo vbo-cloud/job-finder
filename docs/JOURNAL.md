@@ -1000,3 +1000,18 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 - Accorder à `sp-jf-github` les droits nécessaires pour contourner ce lock (`Microsoft.Authorization/locks/delete`) imposerait un scope subscription trop large — en contradiction avec le principe de moindre privilège
 - La protection est assurée par `prevent_destroy = true` seul, ce qui est suffisant pour prévenir les destructions accidentelles via Terraform
 - `modules/` est partagé entre `lz_dev` et `dev` — ne déclencher que `plan-platform` sur un changement de module laissait `plan-app` aveugle à l'impact réel
+
+---
+
+### PR #37 — fix: add Contributor role to sp-jf-platform for lz_dev resource management
+**Date :** 2026-05-12
+
+**Réalisé :**
+- `JobFinder/powershell/setup-sp-jf-platform.ps1` : ajout d'un role assignment `Contributor` au scope subscription, section 3. Role Assignments, après `Resource Policy Contributor` ; commentaire d'en-tête mis à jour
+- `docs/MANUAL_OPERATIONS.md` : `Contributor` ajouté à la liste des rôles de sp-jf-platform
+- Script exécuté manuellement pour appliquer le role assignment sur le SP existant
+
+**Décisions techniques :**
+- sp-jf-platform applique `lz_dev` via la CI/CD — sans `Contributor`, il ne peut ni créer ni modifier les ressources Azure de la landing zone (VNet, subnets, Key Vault, policies)
+- `RBAC Administrator` (conditionné) couvre uniquement les opérations IAM ; `Resource Policy Contributor` couvre uniquement les policies — aucun des deux ne suffit pour provisionner des ressources
+- Scope subscription nécessaire : lz_dev déploie dans son propre resource group (`rg-jf-lz-dev-frc`), qui n'existe pas au moment du premier apply — un scope RG serait donc circulaire

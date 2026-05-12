@@ -31,6 +31,7 @@ Créé via le script PowerShell idempotent `JobFinder/powershell/setup-sp-jf-pla
 **Rôles assignés :**
 - `RBAC Administrator` au niveau subscription (conditionné — exclut Owner, User Access Administrator, RBAC Administrator lui-même)
 - `Resource Policy Contributor` au niveau subscription
+- `Contributor` au niveau subscription — création et modification des ressources lz_dev
 - `Storage Blob Data Contributor` sur le container `lz-tfstates` uniquement
 
 **Federated credentials OIDC :**

@@ -2,7 +2,8 @@
 # Setup — sp-jf-platform
 # Service principal dédié à la gouvernance des landing zones.
 # Droits : RBAC Administrator (conditionné aux rôles non-privilégiés) +
-#          Resource Policy Contributor + Blob Data Contributor sur lz-tfstates.
+#          Resource Policy Contributor + Contributor (subscription) +
+#          Blob Data Contributor sur lz-tfstates.
 #
 # Idempotent — peut être relancé sans risque si une étape a échoué.
 # ==============================================================================
@@ -122,6 +123,12 @@ Remove-Item $tmpFile
 az role assignment create `
     --assignee $spObjId `
     --role     "Resource Policy Contributor" `
+    --scope    "/subscriptions/$subscriptionId"
+
+# Contributor (subscription) — création et modification des ressources lz_dev
+az role assignment create `
+    --assignee $spObjId `
+    --role     "Contributor" `
     --scope    "/subscriptions/$subscriptionId"
 
 # ==============================================================================
