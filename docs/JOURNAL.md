@@ -1015,3 +1015,42 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 - sp-jf-platform applique `lz_dev` via la CI/CD — sans `Contributor`, il ne peut ni créer ni modifier les ressources Azure de la landing zone (VNet, subnets, Key Vault, policies)
 - `RBAC Administrator` (conditionné) couvre uniquement les opérations IAM ; `Resource Policy Contributor` couvre uniquement les policies — aucun des deux ne suffit pour provisionner des ressources
 - Scope subscription nécessaire : lz_dev déploie dans son propre resource group (`rg-jf-lz-dev-frc`), qui n'existe pas au moment du premier apply — un scope RG serait donc circulaire
+
+---
+
+### PR #38 — docs: journal v0.2.0 merge entry + backlog hardening sp-jf-platform
+**Date :** 2026-05-18
+
+**Réalisé :**
+- Ajout d'un item BACKLOG (section Sécurité) pour réduire le scope `Contributor` de `sp-jf-platform` de la subscription vers `rg-jf-lz-dev-frc` une fois la landing zone stable
+
+---
+
+### PR #39
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-18                                         ║
+║   Full dev infrastructure cleaned  (PRs #34 à #38)                         ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Audit & conventions                                                        ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #34  Descriptions outputs, tag protect, validations modules,         ║
+║             review agent ~> 4.0, fmt/validate dans Apply                    ║
+║   • PR #35  Migration azurerm_container_app_environment → module            ║
+║             (protect tag + moved block)                                     ║
+║                                                                              ║
+║   Corrections gouvernance                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #36  Retrait tag protect des Resource Groups (auto-lock conflit),    ║
+║             plan CI étendu aux modules/, CLAUDE.md traduit en anglais       ║
+║   • PR #37  Rôle Contributor ajouté à sp-jf-platform (scope subscription)  ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #38  Entrée journal + item backlog hardening sp-jf-platform scope    ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
