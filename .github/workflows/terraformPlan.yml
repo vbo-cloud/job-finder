@@ -41,12 +41,14 @@ jobs:
           app=false
 
           while IFS= read -r file; do
-            # platform: lz_dev + modules only — lz_prod deferred to v1.0.0 (see CLAUDE.md)
+            # platform: lz_dev + modules — lz_prod deferred to v1.0.0 (see CLAUDE.md)
             if [[ "$file" == JobFinder/Terraform/envs/lz_dev/* || \
                   "$file" == JobFinder/Terraform/modules/* ]]; then
               platform=true
             fi
-            if [[ "$file" == JobFinder/Terraform/envs/dev/* ]]; then
+            # app: dev + modules — modules are shared; a module change impacts both layers
+            if [[ "$file" == JobFinder/Terraform/envs/dev/* || \
+                  "$file" == JobFinder/Terraform/modules/* ]]; then
               app=true
             fi
           done <<< "$CHANGED"

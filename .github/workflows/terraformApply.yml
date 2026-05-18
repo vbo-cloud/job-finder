@@ -40,6 +40,8 @@ jobs:
         uses: hashicorp/setup-terraform@v4
 
       - run: terraform init
+      - run: terraform fmt -check
+      - run: terraform validate
       - run: terraform apply -auto-approve -input=false
 
 
@@ -65,5 +67,7 @@ jobs:
         uses: hashicorp/setup-terraform@v4
 
       - run: terraform init
+      - run: terraform fmt -check
+      - run: terraform validate
       - run: terraform apply -auto-approve -input=false
 

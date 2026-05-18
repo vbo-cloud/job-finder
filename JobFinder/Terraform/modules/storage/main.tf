@@ -32,5 +32,3 @@ resource "azurerm_storage_account" "this" {
     prevent_destroy = true
   }
 }
-
-

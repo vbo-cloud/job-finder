@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Job-Finder Infrastructure Project
 
+## Collaborative workflow
+
+This project is managed by two Claude instances with distinct roles:
+
+**Claude Cowork** — pedagogical and design role. Answers questions, explains concepts, and produces detailed prompts broken into tasks for Claude Code. May modify documentation files (`docs/`, `memory/`, `CLAUDE.md`). Has read-only access to all other project files and never touches Terraform, Python, or PowerShell code.
+
+**Claude Code** — execution role. Applies decisions made with Claude Cowork. Owns the full feature lifecycle: branch creation, implementation, PR opening. Has exclusive ownership of Terraform, Python, and PowerShell code.
+
 ## Context
 Portfolio project for a Cloud/AI career transition.
 Unity developer transitioning to Azure + AI.
@@ -14,7 +22,7 @@ Az-104 certification obtained.
 - IaC: Terraform
 - CI/CD: GitHub Actions with OIDC
 - Target: AKS (Kubernetes)
-- AI: Claude API agents (coming soon)
+- AI: Azure OpenAI (GPT-4o-mini + text-embedding-3-small, francecentral) — agents via Container App Jobs + Service Bus
 
 ## Repo Structure
 - lz-dev/   → Landing Zone dev (network core, RBAC, policies)
@@ -87,10 +95,23 @@ Two-layer pattern per environment:
 ### Modules
 
 Reusable modules live in `JobFinder/Terraform/modules/`:
-- `resource_group/` — Azure resource groups (inputs: `name`, `location`)
-- `network/` — VNets and subnets
-- `compute/` — Compute resources (partially implemented)
-- `data/` — Data resources (partially implemented)
+- `resource_group/` — Azure resource groups
+- `vnet/` — Virtual networks
+- `subnet/` — Subnets (with optional delegation)
+- `keyvault/` — Key Vault (RBAC, purge protection)
+- `keyvault_secret/` — Key Vault secrets
+- `private_endpoint/` — Generic private endpoint + DNS zone group
+- `storage/` — Storage accounts
+- `postgresql/` — PostgreSQL Flexible Server (pgvector, VNet injection, KV secret)
+- `servicebus/` — Service Bus namespace + queues
+- `openai/` — Azure OpenAI account + model deployments
+- `container_registry/` — Azure Container Registry
+- `application_insights/` — Application Insights + Log Analytics Workspace
+- `container_app_environment/` — Container Apps Environment (shared)
+- `container_app_job/` — Container App Job (timer or queue trigger)
+- `policy/allowed_locations/` — Azure Policy: restrict deployments to allowed regions
+- `policy/auto_lock/` — Azure Policy: CanNotDelete lock on `protect=true` resources
+- `compute/`, `network/`, `data/` — Placeholders (not yet implemented)
 
 **Module design rule:** one primary resource per module, plus resources intrinsically linked that have no meaning without it. If a secondary resource cannot exist independently of the primary, it goes in the module. If it can exist alone or be shared between multiple resources, it stays outside the module.
 
@@ -100,17 +121,17 @@ Remote state in Azure Storage (`stjftfstatefrc` storage account, `tfstate` conta
 
 ## CI/CD
 
-- **PRs** → `.github/workflows/terraformPlan.yml`: runs `fmt -check`, `validate`, and `plan` across all 4 environments.
-- **Push to main** → `.github/workflows/terraformApply.yml`: applies dev immediately; prod requires environment approval.
+- **PRs** → `.github/workflows/terraformPlan.yml`: runs `fmt -check`, `validate`, and `plan` on `lz_dev` and `dev` (change-detection via git diff).
+- **Push to dev** → `.github/workflows/terraformApply.yml`: applies `lz_dev` then `dev` sequentially (landing zone first).
 
-Authentication uses Azure OIDC (no stored credentials). Required GitHub secrets: `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`.
+Authentication uses Azure OIDC (no stored credentials). Required GitHub variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLATFORM_CLIENT_ID`, `SP_GITHUB_OBJECT_ID`. GitHub secrets (sensitive): `CLAUDE_API_KEY`, `REVIEWER_GITHUB_TOKEN`.
 
 ## Key Details
 
-- Azure provider pinned to `~> 3.0` (azurerm)
+- Azure provider pinned to `~> 4.0` (azurerm)
 - Region: `francecentral`
-- `lz_prod/` and `prod/` directories are partially empty — production infrastructure is not yet fully defined
-- The `compute` module contains a reference to `t2.micro` (AWS naming) — this is a copy-paste artifact and should be updated for Azure
+- `lz_prod/` and `prod/` directories removed until release v1.0.0 — production infrastructure will be provisioned from scratch at that point
+- The `compute`, `data`, and `network` modules are placeholders — not yet implemented
 
 ## Git Flow
 
@@ -188,21 +209,34 @@ Enforced automatically by the Claude reviewer agent (`.github/reviewer-agent/sys
 - Suggest cheaper alternatives when relevant
 
 ### Environment consistency
-- Changes in `dev` should be mirrored in `prod` when relevant
-- `lz_dev` and `lz_prod` must stay structurally consistent
+- Prod mirror is deferred to v1.0.0 — do not mirror dev changes to prod until then.
 
 ### Lifecycle rules on critical resources
-All of the following resource types must include `prevent_destroy = true`:
+All of the following resource types must include `prevent_destroy = true` **and** the tag `protect = "true"`:
 - `azurerm_key_vault`
 - `azurerm_kubernetes_cluster`
 - `azurerm_virtual_network`
 - `azurerm_subnet`
-- `azurerm_resource_group`
+- `azurerm_resource_group` — `prevent_destroy = true` only (no `protect` tag — see note below)
+- `azurerm_postgresql_flexible_server`
+- `azurerm_servicebus_namespace`
+- `azurerm_cognitive_account` (Azure OpenAI)
+- `azurerm_container_registry`
+- `azurerm_container_app_environment`
+- `azurerm_application_insights`
+- `azurerm_log_analytics_workspace`
 - `azurerm_policy_definition` / `azurerm_subscription_policy_assignment`
+
+Note: `azurerm_subnet` does not support tags in the azurerm provider — protection is enforced via `prevent_destroy = true` only.
+
+Note: `azurerm_resource_group` does not carry the `protect = "true"` tag — a CanNotDelete auto-lock applied to a Resource Group would block Terraform operations on its child resources. Protection is enforced by `prevent_destroy = true` alone.
+
+The `protect = "true"` tag triggers the auto-lock policy (deployIfNotExists) defined in `lz_dev/policies.tf`, which automatically applies a `CanNotDelete` management lock on the resource.
 
 ### Blocking criteria
 A PR is blocked (REQUEST_CHANGES) if any of the following apply:
-- Unexpected destroy or replacement of a critical resource (Key Vault, AKS, VNet, Subnet, Resource Group)
+- Unexpected destroy or replacement of a critical resource (Key Vault, AKS, VNet, Subnet, Resource Group, PostgreSQL, Service Bus, Azure OpenAI, ACR, Container App Environment, Application Insights, Log Analytics Workspace)
+- Missing `protect = "true"` tag on a critical resource — intentional exception: Resource Groups do not carry this tag (see note in "Lifecycle rules")
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present

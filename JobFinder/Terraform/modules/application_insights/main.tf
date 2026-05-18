@@ -14,6 +14,7 @@ resource "azurerm_log_analytics_workspace" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {
@@ -38,6 +39,7 @@ resource "azurerm_application_insights" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
   }
 
   lifecycle {

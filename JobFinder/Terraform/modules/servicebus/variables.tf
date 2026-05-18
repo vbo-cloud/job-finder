@@ -17,6 +17,11 @@ variable "sku" {
   type        = string
   default     = "Standard"
   description = "SKU of the Service Bus namespace. Basic does not support topics; use Standard or Premium."
+
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.sku)
+    error_message = "sku must be 'Basic', 'Standard', or 'Premium'."
+  }
 }
 
 variable "queues" {

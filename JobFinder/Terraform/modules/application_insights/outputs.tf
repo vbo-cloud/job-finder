@@ -1,3 +1,13 @@
+output "id" {
+  description = "Resource ID of the Application Insights resource."
+  value       = azurerm_application_insights.this.id
+}
+
+output "name" {
+  description = "Name of the Application Insights resource."
+  value       = azurerm_application_insights.this.name
+}
+
 output "instrumentation_key" {
   description = "Instrumentation key of the Application Insights resource."
   value       = azurerm_application_insights.this.instrumentation_key

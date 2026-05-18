@@ -5,29 +5,6 @@ Le contenu historique (template phase, PRs #1–18) est conservé en anglais. Le
 
 ---
 
-### PR #33 — fix(lz_dev): grant Reader on lz_dev resource group to sp-jf-github
-**Date :** 2026-05-09
-
-**Réalisé :**
-- Ajout d'une entrée `lz_rg_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le resource group principal de lz_dev (`module.rg.id`) pour `sp-jf-github`
-
-**Décisions techniques :**
-- `Reader` sur le RG de lz_dev permet à sp-jf-github de résoudre les data sources qui lisent des ressources de la landing zone (Key Vault, storage account) via l'API ARM sans avoir de droits de modification sur ce RG
-
----
-
-### PR #32 — feat(lz_dev): grant Reader on tfstate storage account to sp-jf-github
-**Date :** 2026-05-09
-
-**Réalisé :**
-- Ajout d'une entrée `tfstate_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le storage account `stjftfstatefrc` pour `sp-jf-github`
-
-**Décisions techniques :**
-- `Reader` au scope du storage account permet à sp-jf-github d'énumérer le compte via l'API ARM sans `listKeys` — nécessaire pour `terraform init` avec `use_azuread_auth = true`
-- Scope volontairement limité au storage account (pas au resource group) pour respecter le principe de moindre privilège
-
----
-
 ## Mise en place initiale
 
 Réalisée avant l'ouverture du premier PR.
@@ -886,3 +863,194 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 **Décisions techniques :**
 - `use_azuread_auth = true` est requis car sp-jf-github n'a que `Storage Blob Data Contributor` sur son container — `listKeys` nécessite `Storage Account Contributor` ou `Owner`, ce qui violerait le principe de moindre privilège
 - La délégation des role assignments à `lz_dev/rbac.tf` élimine le couplage entre le script de bootstrap et les permissions réelles : sp-jf-platform est la seule identité autorisée à assigner des rôles
+
+---
+
+### PR #31
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-09                                         ║
+║   Full dev infrastructure + two-SP CI/CD governance  (PRs #14 à #30)       ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Infrastructure déployée                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Service Bus        Namespace Standard, 3 queues agents (offer /         ║
+║                        cv / match), dead-letter, TTL 7j                     ║
+║   • Azure OpenAI       GPT-4o-mini + text-embedding-3-small,                ║
+║                        GlobalStandard, francecentral                        ║
+║   • Container Registry ACR Basic, admin désactivé                           ║
+║   • App Insights       Log Analytics Workspace + Application Insights,      ║
+║                        quota 1 Go/jour, rétention 30j                       ║
+║   • Container App Jobs 5 agents (offer-fetching, embedding x2,             ║
+║                        matching, cleanup) — images placeholder M1           ║
+║                                                                              ║
+║   Réseau & stockage                                                          ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Storage account    Blob private endpoint, containers cvs / offers,      ║
+║                        soft delete 7j, accès public runners CI/CD           ║
+║   • Modules vnet/subnet  prevent_destroy, delegation PostgreSQL             ║
+║                                                                              ║
+║   CI/CD & gouvernance                                                        ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • Dual SP            sp-jf-platform (lz) / sp-jf-github (app),           ║
+║                        OIDC, moindre privilège                              ║
+║   • Apply trigger      push vers dev → apply lz_dev + dev                  ║
+║   • Provider           azurerm ~> 4.0, breaking changes corrigés           ║
+║   • Auto-lock policy   deployIfNotExists sur protect=true → lock            ║
+║                        CanNotDelete via Managed Identity                    ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### PR #32 — fix(lz_dev): grant Reader on tfstate storage account to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `tfstate_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le storage account `stjftfstatefrc` pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` au scope du storage account permet à sp-jf-github d'énumérer le compte via l'API ARM sans `listKeys` — nécessaire pour `terraform init` avec `use_azuread_auth = true`
+- Scope volontairement limité au storage account (pas au resource group) pour respecter le principe de moindre privilège
+
+---
+
+### PR #33 — fix(lz_dev): grant Reader on lz_dev resource group to sp-jf-github
+**Date :** 2026-05-09
+
+**Réalisé :**
+- Ajout d'une entrée `lz_rg_reader` dans `sp_role_assignments` de `lz_dev/rbac.tf` : rôle `Reader` sur le resource group principal de lz_dev (`module.rg.id`) pour `sp-jf-github`
+
+**Décisions techniques :**
+- `Reader` sur le RG de lz_dev permet à sp-jf-github de résoudre les data sources qui lisent des ressources de la landing zone via l'API ARM sans avoir de droits de modification sur ce RG
+
+---
+
+### Sync dev → main (2026-05-10)
+
+Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_dev + dev en CI.
+
+---
+
+### chore: update docs and memory post-M1
+**Date :** 2026-05-10 — commits directs sur `dev` (pas de GitHub PR)
+
+**Réalisé :**
+- `docs/MANUAL_OPERATIONS.md` : refonte complète — procédures manuelles remplacées par les scripts PowerShell, documentation des deux SPs, ajout checklist reconstruction prod
+- `memory/project-job-finder.md` : mise à jour complète — stack, infrastructure déployée, statut M1 terminé / M2 en cours
+- `memory/next-steps.md` : réécriture pour M2 — plan agents Python, ordre des tâches, décisions techniques à prendre
+- `CLAUDE.md` : correction "Claude API agents" → "Azure OpenAI agents via Container App Jobs + Service Bus"
+
+**Décisions techniques :**
+- ADR-013 (refacto Terraform par composant) délibérément mis de côté — valeur portfolio insuffisante au regard de la complexité ; à réévaluer après M2
+
+---
+
+### PR #34 — chore: audit conventions — modules, CI/CD, doc
+**Date :** 2026-05-12
+
+**Réalisé :**
+- **C-01** : `description` ajoutée sur tous les outputs sans description dans `modules/resource_group/`, `modules/servicebus/`, `modules/keyvault_secret/` — règle "No exceptions" du CLAUDE.md
+- **C-02/C-03** : tag `protect=true` ajouté dans `modules/vnet/` et `modules/resource_group/` — sans ce tag, la policy auto-lock ne déclenchait pas le lock CanNotDelete sur ces ressources
+- **M-02** : blocs `validation` ajoutés sur les variables à contraintes évidentes dans `modules/keyvault/`, `modules/postgresql/`, `modules/servicebus/`, `modules/container_registry/`, `modules/openai/`, `modules/application_insights/`, `modules/container_app_job/`
+- **M-03/M-04** : tag `protect=true` ajouté dans `modules/container_app_environment/` et `modules/application_insights/` (les deux ressources avaient `prevent_destroy = true` mais pas le tag)
+- **M-01** : artefacts AWS (`instance_type`/`t2.micro`) retirés des placeholders `modules/data/variables.tf` et `modules/network/variables.tf`
+- **A-04** : `prevent_destroy = true` sur `azurerm_servicebus_queue` — déjà présent sur `dev`, aucun changement appliqué dans cette PR
+- **A-03** : outputs `id`/`name` manquants ajoutés sur `modules/application_insights/` et `modules/keyvault/`
+- **CI-01/02/03** : system prompt du reviewer agent mis à jour — provider `~> 4.0`, lz_prod retiré des envs actifs, lifecycle rules étendues, section env consistency corrigée
+- **CI-04** : `fmt -check` et `validate` ajoutés dans les jobs `apply-lz-dev` et `apply-dev` — protection minimale pour les hotfixes qui passeraient hors workflow Plan
+- **D-01 à D-06** : `CLAUDE.md` mis à jour — version provider, trigger CI/CD, credentials GitHub, liste des modules (16 entrées), note t2.micro supprimée, lifecycle rules étendues, section env consistency corrigée
+- `docs/MANUAL_OPERATIONS.md` : refonte pour refléter l'architecture dual-SP actuelle
+
+**Décisions techniques :**
+- Le tag `protect=true` est la condition déclenchant la policy `deployIfNotExists` pour le lock automatique — un `prevent_destroy` sans ce tag ne couvre pas la policy auto-lock
+- `validation` blocks uniquement sur les contraintes bien définies : enums, plages numériques, format regex — pas sur les champs libres validés par Azure à l'apply
+- `fmt -check` + `validate` dans Apply : garde-fou minimal indépendant du workflow Plan
+
+---
+
+### PR #35 — refactor(dev): migrate container_app_environment inline resource to module
+**Date :** 2026-05-12
+
+**Réalisé :**
+- `envs/dev/container_apps.tf` : la ressource inline `azurerm_container_app_environment` est remplacée par un appel à `module.container_app_environment` — le module apporte le tag `protect=true` et `prevent_destroy = true` que la ressource inline n'avait pas
+- Bloc `moved {}` ajouté pour migrer l'adresse de state sans destroy
+
+**Décisions techniques :**
+- La ressource inline était protégée par `prevent_destroy = true` mais sans le tag `protect=true` — la policy auto-lock ne déclenchait pas de lock CanNotDelete dessus
+- Le bloc `moved {}` est supprimable après le premier apply réussi confirmant la migration de state
+
+---
+
+### PR #36 — fix: remove protect tag from resource groups to avoid auto-lock conflict
+**Date :** 2026-05-12
+
+**Réalisé :**
+- `modules/resource_group/main.tf` : suppression du tag `protect = "true"` — `prevent_destroy = true` est conservé dans le bloc `lifecycle`
+- `CLAUDE.md` : entrée `azurerm_resource_group` dans "Lifecycle rules" précisée — `prevent_destroy = true` uniquement, avec note explicative ; "Blocking criteria" mis à jour pour documenter l'exception intentionnelle
+- `.github/reviewer-agent/system-prompt.md` : exception ajoutée pour `azurerm_resource_group` dans la checklist lifecycle
+- `.github/workflows/terraformPlan.yml` : condition `app=true` étendue aux changements dans `modules/` — un changement de module impacte les deux layers (`lz_dev` et `dev`), les deux plans sont désormais déclenchés en parallèle
+
+**Décisions techniques :**
+- Le tag `protect = "true"` déclenche la policy `deployIfNotExists` qui applique un lock `CanNotDelete` sur la ressource. Appliqué sur un Resource Group, ce lock bloque les opérations Terraform sur ses ressources enfants (création, modification, suppression)
+- Accorder à `sp-jf-github` les droits nécessaires pour contourner ce lock (`Microsoft.Authorization/locks/delete`) imposerait un scope subscription trop large — en contradiction avec le principe de moindre privilège
+- La protection est assurée par `prevent_destroy = true` seul, ce qui est suffisant pour prévenir les destructions accidentelles via Terraform
+- `modules/` est partagé entre `lz_dev` et `dev` — ne déclencher que `plan-platform` sur un changement de module laissait `plan-app` aveugle à l'impact réel
+
+---
+
+### PR #37 — fix: add Contributor role to sp-jf-platform for lz_dev resource management
+**Date :** 2026-05-12
+
+**Réalisé :**
+- `JobFinder/powershell/setup-sp-jf-platform.ps1` : ajout d'un role assignment `Contributor` au scope subscription, section 3. Role Assignments, après `Resource Policy Contributor` ; commentaire d'en-tête mis à jour
+- `docs/MANUAL_OPERATIONS.md` : `Contributor` ajouté à la liste des rôles de sp-jf-platform
+- Script exécuté manuellement pour appliquer le role assignment sur le SP existant
+
+**Décisions techniques :**
+- sp-jf-platform applique `lz_dev` via la CI/CD — sans `Contributor`, il ne peut ni créer ni modifier les ressources Azure de la landing zone (VNet, subnets, Key Vault, policies)
+- `RBAC Administrator` (conditionné) couvre uniquement les opérations IAM ; `Resource Policy Contributor` couvre uniquement les policies — aucun des deux ne suffit pour provisionner des ressources
+- Scope subscription nécessaire : lz_dev déploie dans son propre resource group (`rg-jf-lz-dev-frc`), qui n'existe pas au moment du premier apply — un scope RG serait donc circulaire
+
+---
+
+### PR #38 — docs: journal v0.2.0 merge entry + backlog hardening sp-jf-platform
+**Date :** 2026-05-18
+
+**Réalisé :**
+- Ajout d'un item BACKLOG (section Sécurité) pour réduire le scope `Contributor` de `sp-jf-platform` de la subscription vers `rg-jf-lz-dev-frc` une fois la landing zone stable
+
+---
+
+### PR #39
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-18                                         ║
+║   Full dev infrastructure cleaned  (PRs #34 à #38)                         ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Audit & conventions                                                        ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #34  Descriptions outputs, tag protect, validations modules,         ║
+║             review agent ~> 4.0, fmt/validate dans Apply                    ║
+║   • PR #35  Migration azurerm_container_app_environment → module            ║
+║             (protect tag + moved block)                                     ║
+║                                                                              ║
+║   Corrections gouvernance                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #36  Retrait tag protect des Resource Groups (auto-lock conflit),    ║
+║             plan CI étendu aux modules/, CLAUDE.md traduit en anglais       ║
+║   • PR #37  Rôle Contributor ajouté à sp-jf-platform (scope subscription)  ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #38  Entrée journal + item backlog hardening sp-jf-platform scope    ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
