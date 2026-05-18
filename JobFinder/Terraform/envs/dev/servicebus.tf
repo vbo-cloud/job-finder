@@ -2,10 +2,10 @@
 # Service Bus
 # ==============================================================================
 # Queues:
-#   offer-ready  — Agent 1 (offer fetching) → Agent 2 (embedding)
-#   cv-ready     — user CV upload           → Agent 2 (embedding)
+#   offer-ready  — Agent 1 (offer fetching) → Agent 2 (embedding offer)
 #   match-ready  — Agent 2 (embedding)      → Agent 3 (matching + email)
 # Agent 4 (daily cleanup) is timer-triggered and does not use queues.
+# CV embedding is handled synchronously in the web app (M3) via shared/embedder.py.
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -20,7 +20,6 @@ module "servicebus" {
 
   queues = [
     "offer-ready",
-    "cv-ready",
     "match-ready",
   ]
 }
