@@ -84,6 +84,26 @@ Une fois un runner VNet en place : passer `public_network_access_enabled = false
 
 ## Sécurité
 
+### [hardening] Réduire le scope Contributor de sp-jf-platform à rg-jf-lz-dev-frc
+
+**Contexte**
+
+`sp-jf-platform` dispose actuellement de `Contributor` au scope subscription pour pouvoir créer et modifier les ressources de `lz_dev`. Ce scope large est nécessaire au bootstrap (création du RG `rg-jf-lz-dev-frc` lui-même), mais devient inutilement large une fois le RG stable.
+
+**Solution cible**
+
+Une fois `lz_dev` appliqué avec succès et `rg-jf-lz-dev-frc` stable :
+1. Réduire le scope de `Contributor` à `rg-jf-lz-dev-frc` uniquement
+2. Implémenter un mécanisme de bootstrap one-shot (job GitHub dédié ou script manuel) pour recréer le RG en cas de reconstruction depuis zéro — ce job utiliserait un accès temporaire élevé, révoqué après exécution
+
+`RBAC Administrator` et `Resource Policy Contributor` restent au scope subscription — ils en ont besoin pour les policies et role assignments globaux.
+
+**Bénéfice** : réduit le blast radius si les credentials de `sp-jf-platform` sont compromis.
+
+**Fichier :** `JobFinder/powershell/setup-sp-jf-platform.ps1`
+
+---
+
 ### [optional] Renommer l'App Registration Azure → `sp-jf-github`
 Purement cosmétique. `az ad app update --id <app-id> --display-name sp-jf-github`
 
