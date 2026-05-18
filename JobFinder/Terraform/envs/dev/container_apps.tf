@@ -90,35 +90,6 @@ module "job_embedding_offer" {
   ]
 }
 
-# Agent 2b — Embedding CV (queue: cv-ready, triggered by backend on user action)
-module "job_embedding_cv" {
-  source = "../../modules/container_app_job"
-
-  name                 = "job-jf-dev-frc-embedding-cv"
-  location             = var.location
-  resource_group_name  = data.azurerm_resource_group.rg_app.name
-  environment_id       = module.container_app_environment.id
-  trigger_type         = "queue"
-  queue_name           = "cv-ready"
-  servicebus_namespace = module.servicebus.name
-  image                = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
-  environment          = var.env
-  project              = var.project
-  owner                = var.owner
-  secrets = [
-    {
-      name  = "servicebus-connection-string"
-      value = local.servicebus_connection_string
-    },
-  ]
-  env_vars = [
-    {
-      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
-      secret_name = "servicebus-connection-string"
-    },
-  ]
-}
-
 # Agent 3 — Matching (queue: match-ready)
 module "job_matching" {
   source = "../../modules/container_app_job"
