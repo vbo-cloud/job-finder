@@ -127,6 +127,9 @@ jobs:
               with open(".github/reviewer-agent/system-prompt.md") as f:
                   system_prompt = f.read()
 
+              with open("CLAUDE.md") as f:
+                  claude_md = f.read()
+
               with open("/tmp/pr_meta.json") as f:
                   pr_meta = json.load(f)
 
@@ -153,6 +156,7 @@ jobs:
               user_message = (
                   f"## PR #{pr_number}: {pr_meta['title']}\n\n"
                   f"### Description\n{pr_meta['body'] or '_No description provided._'}\n\n"
+                  f"### Project conventions (CLAUDE.md)\n{claude_md}\n\n"
                   f"### Repository structure (git ls-files)\n{file_list}\n\n"
                   f"### Diff\n```diff\n{diff}\n```\n\n"
                   + logs_section
