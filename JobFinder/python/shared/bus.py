@@ -39,7 +39,7 @@ def send_message(queue_name: str, body: dict) -> None:
 
 
 @contextmanager
-def receive_messages(queue_name: str) -> Generator[dict, None, None]:
+def receive_message(queue_name: str) -> Generator[dict, None, None]:
     """Receive exactly one message from the specified queue.
 
     Yields the decoded message body as a dict.

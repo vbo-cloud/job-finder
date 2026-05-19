@@ -35,6 +35,8 @@ def get_session() -> Generator[Session, None, None]:
         try:
             yield session
         except Exception:  # re-raise intentional — context manager pattern
+            # Session.close() is called automatically by the `with` block above,
+            # but SQLAlchemy 2.0 does NOT auto-rollback on exit — explicit rollback is required.
             session.rollback()
             raise
 
@@ -45,7 +47,7 @@ def run_migrations() -> None:
     cfg = Config("alembic.ini")
     try:
         command.upgrade(cfg, "head")
-    except Exception as e:
+    except Exception:  # alembic raises generic Exception on migration failure — no narrower type available
         logger.error("alembic_migrations_failed", exc_info=True)
         raise
     logger.info("alembic_migrations_applied")

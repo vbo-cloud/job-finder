@@ -7,6 +7,7 @@ import structlog
 from openai import AzureOpenAI
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
+_API_VERSION = "2024-02-01"
 
 logger = structlog.get_logger()
 
@@ -21,7 +22,7 @@ if not _api_key:
 _client = AzureOpenAI(
     azure_endpoint=_endpoint,
     api_key=_api_key,
-    api_version="2024-02-01",
+    api_version=_API_VERSION,
 )
 
 
