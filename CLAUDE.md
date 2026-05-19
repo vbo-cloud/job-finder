@@ -235,6 +235,7 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub variable
 - Toutes les tables ont `created_at` (DateTime, default `utcnow`, `nullable=False`)
 - Nommage des tables : snake_case pluriel (`offers`, `cvs`, `matches`)
 - `nullable=True` et `nullable=False` toujours explicites — jamais implicites
+- Toutes les colonnes DateTime utilisent `DateTime(timezone=True)` (mappe vers TIMESTAMPTZ en PostgreSQL) — jamais `DateTime` seul. Compatible avec `datetime.now(timezone.utc)`.
 
 ### Nommage des contraintes
 - Index : `ix_{table}_{colonne}` (ex: `ix_offers_ft_id`)

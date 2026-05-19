@@ -29,9 +29,9 @@ class Offer(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     matches: Mapped[list["Match"]] = relationship("Match", back_populates="offer")
 
@@ -45,8 +45,8 @@ class CV(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     matches: Mapped[list["Match"]] = relationship("Match", back_populates="cv")
 
@@ -55,6 +55,9 @@ class Match(Base):
     """Similarity score between a CV and a job offer."""
 
     __tablename__ = "matches"
+    __table_args__ = (
+        UniqueConstraint("cv_id", "offer_id", name="uq_matches_cv_offer"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cv_id: Mapped[uuid.UUID] = mapped_column(
@@ -68,7 +71,7 @@ class Match(Base):
         nullable=False,
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     cv: Mapped["CV"] = relationship("CV", back_populates="matches")
     offer: Mapped["Offer"] = relationship("Offer", back_populates="matches")
