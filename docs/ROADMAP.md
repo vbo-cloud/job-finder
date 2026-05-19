@@ -1,15 +1,15 @@
 # Roadmap — job-finder
 
-_Mis à jour : 2026-05-03_
+_Mis à jour : 2026-05-18_
 
 ---
 
 ## Vue d'ensemble
 
 ```
-M0 ✅ → M1 🎯 → Refacto 🔧 → M2 🔮 → M3 🔮 → M4 🔮 → M5 🔮
-Infra    Data    Git+Terraform   Agents   API      Frontend  Optim
-Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
+M0 ✅ → M1 ✅ → M2 🎯 → M3 🔮 → Refacto 🔧 → M4 🔮 → M5 🔮 → M6 🔮
+Infra    Data    Agents   API     Git+Terraform  AKS    Frontend  Optim
+Done    Done    En cours ~5 j     Avant prod     ~5 j    ~5 j    ongoing
 ```
 
 **Rythme :** 10h/jour
@@ -32,7 +32,7 @@ Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
 
 ---
 
-## Milestone 1 — Data Layer + Services IA 🎯 EN COURS
+## Milestone 1 — Data Layer + Services IA ✅ TERMINÉ
 
 > _Stack données et IA provisionnée sur Azure. Structure Terraform actuelle conservée (lz-dev, dev, lz-prod, prod) — le refactoring viendra après._
 > **Durée estimée : 3 à 5 jours**
@@ -77,9 +77,9 @@ Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
 
 ---
 
-## Transition M1 → M2 — Refactoring Git + Terraform 🔧
+## Transition M3 → prod — Refactoring Git + Terraform 🔧
 
-> _Restructuration complète avant d'ajouter la couche applicative. Moment idéal : modules M1 déployés et validés, aucun composant applicatif existant encore → migration minimale._
+> _Restructuration Terraform par composant et mise en place du staging éphémère, avant la mise en production réelle. Délibérément décalé après M3 : le refacto a plus de valeur une fois que l'application est fonctionnelle et que les dépendances inter-composants sont connues._
 > **Durée estimée : 1 à 2 jours**
 > **Voir ADR-013 pour le détail complet**
 
@@ -128,7 +128,7 @@ feature/* → dev → release/vX.X.X → [staging éphémère] → main (tag vX.
 
 ---
 
-## Milestone 2 — Agents Python 🔮
+## Milestone 2 — Agents Python 🎯 EN COURS
 
 > _Cœur métier : collecte, analyse LLM, matching vectoriel, recommandations_
 > **Durée estimée : 7 à 10 jours**
