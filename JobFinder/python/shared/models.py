@@ -55,6 +55,9 @@ class Match(Base):
     """Similarity score between a CV and a job offer."""
 
     __tablename__ = "matches"
+    __table_args__ = (
+        UniqueConstraint("cv_id", "offer_id", name="uq_matches_cv_offer"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cv_id: Mapped[uuid.UUID] = mapped_column(

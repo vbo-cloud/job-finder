@@ -14,6 +14,19 @@ from shared.models import Base
 target_metadata = Base.metadata
 
 
+def run_migrations_offline() -> None:
+    """Offline mode is intentionally not implemented.
+
+    This project always migrates against a live database (online mode).
+    Offline mode — which generates SQL scripts without a DB connection — is
+    not used and is explicitly disabled to avoid silent misconfiguration.
+    """
+    raise NotImplementedError(
+        "Offline migrations are not supported in this project. "
+        "Ensure POSTGRESQL_CONNECTION_STRING is set and run in online mode."
+    )
+
+
 def run_migrations_online() -> None:
     """Run migrations against the live database using the shared engine."""
     connectable = get_engine()
@@ -23,4 +36,7 @@ def run_migrations_online() -> None:
             context.run_migrations()
 
 
-run_migrations_online()
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

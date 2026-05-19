@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.Column("embedding", Vector(1536), nullable=True),
         sa.Column("collected_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.UniqueConstraint("ft_id", name="uq_offers_ft_id"),
     )
 
@@ -44,7 +49,12 @@ def upgrade() -> None:
         sa.Column("raw_text", sa.Text(), nullable=False),
         sa.Column("embedding", Vector(1536), nullable=True),
         sa.Column("uploaded_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
     )
 
     op.create_table(
@@ -53,15 +63,25 @@ def upgrade() -> None:
         sa.Column("cv_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("offer_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("score", sa.Float(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["cv_id"], ["cvs.id"], name="fk_matches_cv_id_ref_cvs"),
         sa.ForeignKeyConstraint(
             ["offer_id"], ["offers.id"], name="fk_matches_offer_id_ref_offers"
         ),
+        sa.UniqueConstraint("cv_id", "offer_id", name="uq_matches_cv_offer"),
     )
+    op.create_index("ix_matches_cv_id", "matches", ["cv_id"])
+    op.create_index("ix_matches_offer_id", "matches", ["offer_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_matches_offer_id", table_name="matches")
+    op.drop_index("ix_matches_cv_id", table_name="matches")
     op.drop_table("matches")
     op.drop_table("cvs")
     op.drop_table("offers")
