@@ -777,7 +777,7 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Déploiement dans `envs/dev/container_apps.tf` :
   - `azurerm_container_app_environment` partagé par tous les agents, lié au Log Analytics Workspace
   - 5 Container App Jobs avec images placeholder (`containerapps-helloworld`) — images réelles construites et poussées en M2 :
-    - `job-offer-fetching` — timer, 06:00 et 18:00 UTC (écrit dans `offer-ready`)
+    - `job-offer-fetching` — timer, 12:00 et 20:00 UTC (écrit dans `offer-ready`)
     - `job-embedding-offer` — queue `offer-ready`
     - `job-embedding-cv` — queue `cv-ready`
     - `job-matching` — queue `match-ready`
@@ -1110,3 +1110,115 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 - `server_default=sa.text("now()")` ajouté sur les trois colonnes `created_at` — garantit la valeur même lors d'un INSERT sans ORM (ex : scripts de migration de données)
 - Index ajoutés sur les FK de `matches` (`ix_matches_cv_id`, `ix_matches_offer_id`) — les FK sans index entraînent des full scans lors des JOINs
 - Contrainte d'unicité composite `uq_matches_cv_offer` (`cv_id`, `offer_id`) ajoutée dans la migration et dans `Match.__table_args__` — empêche un double matching du même couple CV/offre
+
+---
+
+### Décisions architecturales M2 — 2026-05-20
+
+Session de design ayant conduit à une refonte complète de l'architecture M2.
+Ces décisions sont reflétées dans `docs/ROADMAP.md` (section M2 réécrite).
+
+**Pivot fetch des offres**
+Le Container App Job `job-offer-fetching` (timer) est remplacé par un GitHub Actions
+cron. L'embedding des offres se fait inline dans le script de fetch — pas d'agent
+séparé. Raison : un Container App Job timer pour appeler une API externe est du
+sur-engineering. GitHub Actions est plus simple, sans coût infra, et démontre les
+mêmes compétences (OAuth2, pagination, gestion d'erreurs).
+
+**Pipeline multi-agent stabilisé**
+
+```
+GitHub Actions cron (2x/jour)
+  → fetch France Travail (OAuth2, pagination, par codes ROME)
+  → embedding batch inline
+  → stockage offers table + rome_code
+  → post offer-ready
+
+job-matching (queue: offer-ready)         ← Agent LLM 1
+  → filtre par rome_codes du profil utilisateur
+  → vector search pgvector
+  → GPT-4o-mini : score + explication
+  → post match-ready
+
+job-cv-review (queue: match-ready)        ← Agent LLM 2 (dernière feature)
+  → analyse CV vs top-3 offres
+  → GPT-4o-mini : gaps + suggestions personnalisées
+  → notification utilisateur
+```
+
+**Domaines de fetch — design intent-first**
+- Le fetch n'est pas total (tous les domaines IT) mais ciblé par codes ROME.
+- Les codes ROME viennent des profils utilisateurs, pas d'une config statique.
+- Onboarding : l'utilisateur sélectionne des **catégories lisibles** (Développement,
+  Data, DevOps…) — le mapping vers les codes ROME est fait en interne. Aucun code
+  ROME n'est exposé dans l'UI.
+- Upload CV : un agent CV-analysis (GPT-4o-mini) extrait et affine les codes ROME
+  depuis le texte du CV — le profil devient plus précis automatiquement.
+- Bootstrap (DB vide) : liste de secours prédéfinie (M1805, M1802, M1806…).
+- Le cron GitHub Actions lit l'union des `rome_codes` depuis `user_profiles` en DB.
+
+**Fetch et upload CV — déclenchement**
+- Le cron tourne 2x/jour indépendamment des uploads.
+- À l'upload d'un CV : matching immédiat contre les offres existantes en base
+  (max 12h de retard). L'utilisateur voit des résultats sans attendre le prochain cron.
+- Pas de fetch déclenché par l'upload — évite la dépendance à l'API GitHub depuis
+  la web app.
+
+**Nettoyage des codes ROME orphelins**
+- Le `job-cleanup` supprime les offres pour des codes ROME n'ayant plus aucun
+  utilisateur actif, avec une grace period de 7 jours.
+- La DB reste propre sans mécanisme dédié.
+
+**Schéma DB — ajouts M2**
+- Table `user_profiles` : `rome_codes TEXT[]`, `job_categories TEXT[]`,
+  `location TEXT`, `contract_types TEXT[]`
+- Table `offers` : colonne `rome_code TEXT` ajoutée (filtrage au matching)
+
+**Azure AI Search — note**
+pgvector reste le choix correct pour ce volume (<50K offres en dev). Azure AI Search
+(hybrid search BM25 + vectoriel + semantic reranker) devient pertinent au-delà de
+200-500K vecteurs ou si la recherche devient un goulot d'étranglement sur PostgreSQL.
+Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
+
+---
+
+### PR #43 — feat(m2): GitHub Actions offer-fetch cron, user_profiles schema, Terraform M2 pivot
+**Date :** 2026-05-20
+
+**Réalisé :**
+
+*Terraform*
+- `envs/dev/container_apps.tf` : suppression des blocs `module "job_offer_fetching"` (timer) et `module "job_embedding_offer"` (queue offer-ready) — remplacés par le cron GitHub Actions
+- `envs/dev/container_apps.tf` : `module "job_matching"` rebranchée sur la queue `offer-ready` (anciennement `match-ready`) — le matching est déclenché dès qu'une nouvelle offre est disponible en base
+- `envs/dev/container_apps.tf` : suppression du bloc `moved {}` hérité de PR #35 — apply de migration de state confirmé lors du merge dev→main du 2026-05-18
+- `envs/dev/servicebus.tf` : commentaire d'en-tête mis à jour ; les deux queues `offer-ready` et `match-ready` sont conservées
+
+*Schéma DB*
+- `shared/models.py` : modèle `UserProfile` ajouté (`rome_codes`, `job_categories`, `location`, `contract_types`) ; colonnes `rome_code` et `ft_updated_at` ajoutées sur `Offer`
+- `migrations/versions/002_add_user_profiles_and_rome_code.py` : migration Alembic — table `user_profiles`, colonnes `offers.rome_code` (index `ix_offers_rome_code`) et `offers.ft_updated_at`
+
+*Python / scripts*
+- `agents/offer_fetching/` et `agents/embedding_offer/` supprimés
+- `scripts/ft_client.py` : client France Travail — `get_access_token()` OAuth2, `fetch_offers(token, rome_code)` avec pagination curseur par tranches de 50 ; `requests.Session` réutilisé entre les pages ; arrêt sur `Content-Range` total en plus de `len(page) < PAGE_SIZE`
+- `scripts/fetch_offers.py` : script cron complet — codes ROME depuis `user_profiles` (fallback liste IT prédéfinie), fetch par code ROME, upsert batch unique par code ROME avec `RETURNING xmax` pour comptage atomique des inserts, embedding réinitialisé conditionnellement via `case()` si `ft_updated_at` est plus récent ; session SELECT et session UPDATE séparées autour de l'appel OpenAI dans `_embed_pending_offers` ; mutation ORM + `add_all` pour batcher les UPDATEs en un seul flush ; `send_message(offer-ready)` conditionnel (`total_new > 0`)
+- `shared/db.py` : `POSTGRESQL_CONNECTION_STRING` → `DATABASE_URL`
+- `requirements.txt` : `requests` ajouté
+
+*Workflow & infra*
+- `.github/workflows/offerFetch.yml` : cron 12:00/20:00 UTC + `workflow_dispatch` ; secrets récupérés depuis Key Vault via `${{ vars.AZURE_KEYVAULT_NAME }}` (variable GitHub) via OIDC — aucun GitHub Secret applicatif ; `pip install --no-cache-dir` pour reproductibilité CI
+- `envs/dev/container_apps.tf` : note ajoutée en tête de section Agent Jobs indiquant que le fetch est désormais géré par GitHub Actions
+- `.gitignore` : patterns Python ajoutés (`__pycache__/`, `*.pyc`, `*.pyo`)
+- `docs/MANUAL_OPERATIONS.md` : section "France Travail API — Credentials" — procédure d'inscription et stockage des secrets dans le Key Vault
+- `docs/ROADMAP.md` : architecture M2 réécrite
+
+**Décisions techniques :**
+- Container App Jobs `job-offer-fetching` et `job-embedding-offer` supprimés : GitHub Actions cron élimine deux ressources Azure et leur coût de provisionnement ; embedding inline dans le script coélimine un aller-retour Service Bus
+- `job_matching` sur `offer-ready` (pas `match-ready`) : le matching est déclenché par l'arrivée de nouvelles offres — `match-ready` reste le signal de fin de matching pour la notification utilisateur (M3) et le futur agent cv-review
+- Pagination curseur (`range: 0-49, 50-99...`) : format imposé par l'API France Travail via le header `range` ; la boucle s'arrête dès qu'une page est incomplète
+- Upsert `ON CONFLICT (ft_id) DO UPDATE` avec réinitialisation conditionnelle de `embedding` : l'embedding est remis à `NULL` uniquement si `ft_updated_at` entrant est plus récent que la valeur stockée (ou si la valeur stockée est `NULL`) — les offres non modifiées conservent leur vecteur, économie de tokens OpenAI
+- Embedding batch après tous les upserts : un seul appel API pour toutes les nouvelles offres, quel que soit le nombre de codes ROME traités dans le run
+- Session DB fermée avant l'appel OpenAI dans `_embed_pending_offers` : un appel externe lent ou défaillant ne maintient pas de connexion ouverte inutilement
+- `RETURNING xmax` pour compter les vrais inserts dans `_upsert_offers` : atomique dans la même transaction, sans race condition possible avec un pre-fetch `SELECT`
+- Message `offer-ready` conditionnel (`total_new > 0`) : évite de déclencher `job-matching` inutilement si aucune nouvelle offre n'a été insérée
+- Secrets depuis Key Vault via OIDC : les secrets applicatifs vivent en un seul endroit ; pas de synchronisation manuelle ni de rotation en double entre KV et GitHub Secrets
+- `add-mask` avant injection dans `$GITHUB_ENV` : masquage dans les logs de l'étape courante, pas seulement des suivantes

@@ -71,6 +71,25 @@ La policy `allowed-locations` de `lz_prod` ne contenait pas `"global"` au moment
 
 ---
 
+## France Travail API — Credentials
+
+Les secrets `ft-client-id` et `ft-client-secret` ne sont pas provisionnés par Terraform.
+Ils doivent être créés manuellement après inscription à l'API.
+
+1. S'inscrire sur https://francetravail.io/data/api/offres-emploi et créer une application
+   pour obtenir un `client_id` et un `client_secret`
+2. Stocker les deux valeurs dans le Key Vault dev :
+   ```bash
+   az keyvault secret set --vault-name kv-jf-dev-frc \
+     --name ft-client-id --value "<valeur>"
+   az keyvault secret set --vault-name kv-jf-dev-frc \
+     --name ft-client-secret --value "<valeur>"
+   ```
+
+Ces secrets sont lus par le workflow `offerFetch.yml` via OIDC au moment de chaque run.
+
+---
+
 ## À faire lors de la reconstruction prod (v1.0.0)
 
 1. Relancer `setup-sp-jf-platform.ps1` et `setup-sp-jf-github.ps1` si les SPs sont absents
