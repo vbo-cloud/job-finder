@@ -19,78 +19,19 @@ module "container_app_environment" {
   owner                      = var.owner
 }
 
-moved {
-  from = azurerm_container_app_environment.this
-  to   = module.container_app_environment.azurerm_container_app_environment.this
-}
-
 # ==============================================================================
 # Agent Jobs
 # ==============================================================================
+# Offer fetch and embedding are handled by GitHub Actions (offerFetch.yml) — not a CAJ.
+# Agent 1 — Matching (queue: offer-ready)
+# Agent 2 — Cleanup (timer: 02:00 UTC)
 
 locals {
-  # M1: valeur directe. M2: basculer sur key_vault_secret_id avec Managed Identity.
+  # M2: basculer sur key_vault_secret_id avec Managed Identity.
   servicebus_connection_string = module.servicebus.primary_connection_string
 }
 
-# Agent 1 — Offer Fetching (timer: twice daily at 06:00 and 18:00 UTC)
-module "job_offer_fetching" {
-  source = "../../modules/container_app_job"
-
-  name                = "job-jf-dev-frc-offer-fetching"
-  location            = var.location
-  resource_group_name = data.azurerm_resource_group.rg_app.name
-  environment_id      = module.container_app_environment.id
-  trigger_type        = "timer"
-  cron_expression     = "0 6,18 * * *"
-  image               = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
-  environment         = var.env
-  project             = var.project
-  owner               = var.owner
-  secrets = [
-    {
-      name  = "servicebus-connection-string"
-      value = local.servicebus_connection_string
-    },
-  ]
-  env_vars = [
-    {
-      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
-      secret_name = "servicebus-connection-string"
-    },
-  ]
-}
-
-# Agent 2a — Embedding Offer (queue: offer-ready)
-module "job_embedding_offer" {
-  source = "../../modules/container_app_job"
-
-  name                 = "job-jf-dev-frc-embedding-offer"
-  location             = var.location
-  resource_group_name  = data.azurerm_resource_group.rg_app.name
-  environment_id       = module.container_app_environment.id
-  trigger_type         = "queue"
-  queue_name           = "offer-ready"
-  servicebus_namespace = module.servicebus.name
-  image                = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
-  environment          = var.env
-  project              = var.project
-  owner                = var.owner
-  secrets = [
-    {
-      name  = "servicebus-connection-string"
-      value = local.servicebus_connection_string
-    },
-  ]
-  env_vars = [
-    {
-      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
-      secret_name = "servicebus-connection-string"
-    },
-  ]
-}
-
-# Agent 3 — Matching (queue: match-ready)
+# Agent 1 — Matching (queue: offer-ready)
 module "job_matching" {
   source = "../../modules/container_app_job"
 
@@ -99,7 +40,7 @@ module "job_matching" {
   resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
-  queue_name           = "match-ready"
+  queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
   image                = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
   environment          = var.env
