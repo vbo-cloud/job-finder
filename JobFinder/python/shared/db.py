@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 logger = structlog.get_logger()
 
-_connection_string = os.environ.get("POSTGRESQL_CONNECTION_STRING")
+_connection_string = os.environ.get("DATABASE_URL")
 if not _connection_string:
-    raise ValueError("POSTGRESQL_CONNECTION_STRING environment variable is not set")
+    raise ValueError("DATABASE_URL environment variable is not set")
 
 
 @lru_cache(maxsize=1)
