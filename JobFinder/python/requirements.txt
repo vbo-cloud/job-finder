@@ -7,4 +7,5 @@ azure-storage-blob
 openai
 alembic
 python-dotenv
+requests
 structlog
