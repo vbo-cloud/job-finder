@@ -162,11 +162,9 @@ def _embed_pending_offers() -> int:
     """
     try:
         with get_session() as session:
-            pending = (
-                session.execute(select(Offer).where(Offer.embedding.is_(None)))
-                .scalars()
-                .all()
-            )
+            pending = session.execute(
+                select(Offer.id, Offer.description).where(Offer.embedding.is_(None))
+            ).all()
     except SQLAlchemyError:
         logger.error("embed_fetch_pending_failed", exc_info=True)
         raise
@@ -176,12 +174,12 @@ def _embed_pending_offers() -> int:
         return 0
 
     logger.info("embedding_pending_offers", count=len(pending))
-    descriptions = [o.description for o in pending]
+    descriptions = [row.description for row in pending]
     vectors = embed(descriptions)
 
     update_mappings = [
-        {"_id": offer.id, "_embedding": vector}
-        for offer, vector in zip(pending, vectors)
+        {"_id": row.id, "_embedding": vector}
+        for row, vector in zip(pending, vectors)
     ]
     try:
         with get_session() as session:
