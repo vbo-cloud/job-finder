@@ -1279,3 +1279,18 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 - Tags `:latest` + `:<sha>` : `:latest` pour le déploiement Terraform, `:<sha>` pour la traçabilité et le rollback
 - Build context `JobFinder/python/` : couvre `shared/` requis par les deux agents
 - Path filter `JobFinder/python/**` : le workflow ne se déclenche que si du code Python change, pas sur des commits Terraform ou docs
+
+---
+
+### PR #47 — feat(lz): grant conditioned RBAC Administrator to sp-jf-github on dev resource groups
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / lz_dev*
+- `lz_dev/rbac.tf` : `azurerm_role_assignment.sp_github_rbac_admin` ajouté — RBAC Administrator conditionné scopé aux trois resource groups dev (`rg_core`, `rg_app`, `rg_data`), via `for_each` sur `local.sp_github_rbac_admin_scopes`
+
+**Décisions techniques :**
+- Même condition anti-escalade que `sp-jf-platform` : interdit d'assigner Owner, User Access Administrator, ou Role Based Access Control Administrator — sp-jf-github ne peut pas s'auto-élever
+- Scopé aux RGs dev uniquement (pas à la subscription) : surface d'exposition minimale
+- Géré dans `lz_dev/` plutôt que `iam/` : `sp-jf-platform` (qui possède RBAC Administrator) peut appliquer via CI/CD, sans intervention manuelle
