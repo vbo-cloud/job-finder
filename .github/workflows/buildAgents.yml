@@ -36,11 +36,13 @@ jobs:
           ACR_LOGIN_SERVER=$(az keyvault secret show \
             --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} \
             --name "acr-login-server" --query value -o tsv)
+          ACR_NAME=$(echo "$ACR_LOGIN_SERVER" | cut -d'.' -f1)
           echo "::add-mask::$ACR_LOGIN_SERVER"
           echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> $GITHUB_ENV
+          echo "ACR_NAME=$ACR_NAME"               >> $GITHUB_ENV
 
       - name: Docker login to ACR
-        run: az acr login --name $(echo $ACR_LOGIN_SERVER | cut -d'.' -f1)
+        run: az acr login --name ${{ env.ACR_NAME }}
 
       - uses: docker/setup-buildx-action@v3
 
