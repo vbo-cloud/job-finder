@@ -1294,3 +1294,19 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 - Même condition anti-escalade que `sp-jf-platform` : interdit d'assigner Owner, User Access Administrator, ou Role Based Access Control Administrator — sp-jf-github ne peut pas s'auto-élever
 - Scopé aux RGs dev uniquement (pas à la subscription) : surface d'exposition minimale
 - Géré dans `lz_dev/` plutôt que `iam/` : `sp-jf-platform` (qui possède RBAC Administrator) peut appliquer via CI/CD, sans intervention manuelle
+
+---
+
+### PR #48 — feat(module): add identity and registry support to container_app_job module
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / modules*
+- `modules/container_app_job/variables.tf` : trois variables ajoutées — `identity_ids` (list, défaut `[]`), `registry_server` (string nullable), `registry_identity` (string nullable)
+- `modules/container_app_job/main.tf` : deux blocs `dynamic` ajoutés après `secret` — `identity` (UserAssigned, conditionné sur `length(identity_ids) > 0`) et `registry` (conditionné sur `registry_server != null`)
+
+**Décisions techniques :**
+- Blocs `dynamic` conditionnels : si aucune identité ou registry n'est passé, les blocs sont absents du plan — rétrocompatibilité totale avec les callers existants sans modification
+- `identity_ids` en `list(string)` : l'azurerm provider attend une liste même pour une seule identité
+- `registry_identity` accepte `null` par défaut : permet d'utiliser `registry_server` avec une auth par token si besoin, sans forcer une UAMI
