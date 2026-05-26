@@ -10,11 +10,6 @@ data "azurerm_key_vault" "app_dev" {
   resource_group_name = module.rg_core.name
 }
 
-data "azurerm_key_vault" "lz_dev" {
-  name                = "kv-${var.project}-lz-dev-${var.location_short}"
-  resource_group_name = module.rg.name
-}
-
 data "azurerm_storage_account" "tfstate" {
   name                = "stjftfstatefrc"
   resource_group_name = "rg-jf-tfstate-frc"
@@ -29,10 +24,6 @@ locals {
   sp_role_assignments = {
     kv_app_secrets_officer = {
       scope                = data.azurerm_key_vault.app_dev.id
-      role_definition_name = "Key Vault Secrets Officer"
-    }
-    kv_lz_secrets_officer = {
-      scope                = data.azurerm_key_vault.lz_dev.id
       role_definition_name = "Key Vault Secrets Officer"
     }
     # Storage Blob Data Contributor on rg_data: data-plane access to blobs
