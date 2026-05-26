@@ -1263,7 +1263,7 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 
 ---
 
-### PR #47 — feat: CI/CD build and push Docker images to ACR
+### PR #46 — feat: CI/CD build and push Docker images to ACR
 **Date :** 2026-05-26
 
 **Réalisé :**
