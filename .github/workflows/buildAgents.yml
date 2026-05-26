@@ -75,3 +75,14 @@ jobs:
           echo "### Images pushed" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/matching:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/cleanup:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Update Container App Job images
+        run: |
+          az containerapp job update \
+            --name job-jf-dev-frc-matching \
+            --resource-group rg-jf-dev-frc-app \
+            --image $ACR_LOGIN_SERVER/agents/matching:${{ github.sha }}
+          az containerapp job update \
+            --name job-jf-dev-frc-cleanup \
+            --resource-group rg-jf-dev-frc-app \
+            --image $ACR_LOGIN_SERVER/agents/cleanup:${{ github.sha }}
