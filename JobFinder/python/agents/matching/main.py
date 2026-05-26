@@ -110,33 +110,33 @@ def main() -> None:
         logger.info("matching_run_started", run_date=run_date)
 
         all_matches: list[dict] = []
-        total_matches = 0
-        try:
-            with get_session() as session:
-                all_matches = _get_all_matches(session)
-                if all_matches:
-                    total_matches = _upsert_matches(all_matches, session)
-        except SQLAlchemyError:
-            logger.error("matching_failed", exc_info=True)
-            raise
-
-        cvs_processed = len({m["cv_id"] for m in all_matches})
-
+        new_matches = 0
+        offers_available: int = 0
         try:
             with get_session() as session:
                 offers_available = session.execute(
                     select(func.count()).select_from(Offer).where(Offer.embedding.isnot(None))
                 ).scalar()
+                all_matches = _get_all_matches(session)
+                if all_matches:
+                    new_matches = _upsert_matches(all_matches, session)
+                session.commit()
         except SQLAlchemyError:
-            logger.error("matching_offers_count_failed", exc_info=True)
+            logger.error("matching_failed", exc_info=True)
             raise
+
+        if not all_matches:
+            logger.info("matching_no_cvs_found")
+            return
+
+        cvs_processed = len({m["cv_id"] for m in all_matches})
 
         send_message(
             MATCH_READY_QUEUE,
             {
                 "run_date": run_date,
                 "cvs_processed": cvs_processed,
-                "total_matches": total_matches,
+                "new_matches": new_matches,
                 "offers_available": offers_available,
             },
         )
@@ -145,7 +145,7 @@ def main() -> None:
             "matching_run_completed",
             run_date=run_date,
             cvs_processed=cvs_processed,
-            total_matches=total_matches,
+            new_matches=new_matches,
             offers_available=offers_available,
         )
 
