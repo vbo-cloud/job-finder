@@ -32,6 +32,9 @@ def _get_all_matches(session: Session) -> list[dict]:
     Returns:
         List of dicts with cv_id, offer_id, score.
 
+    Note: scores are computed as (1 - cosine_distance). OpenAI text-embedding-3-small
+    produces normalized vectors, so scores are bounded in [0, 1] in practice.
+
     Raises:
         SQLAlchemyError: If the database query fails.
     """
