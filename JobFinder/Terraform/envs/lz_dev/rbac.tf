@@ -71,9 +71,15 @@ resource "azurerm_role_assignment" "sp_github" {
 # ==============================================================================
 # Managed Identity — Container App Jobs
 # ==============================================================================
-# Created here (lz_dev) so sp-jf-platform can assign AcrPull directly.
-# sp-jf-github (Contributor only) cannot create role assignments.
-# Referenced from dev/ via data source on azurerm_user_assigned_identity.
+# Ideally, the UAMI would be created in dev/ (application resource) and
+# sp-jf-platform would reference its principal_id by value (hardcoded GUID)
+# in this file — no data source, no cross-state coupling.
+# This is the enterprise pattern: the app team communicates the GUID to the
+# platform team, who adds it here in a single line.
+#
+# For this solo project, the UAMI is created here directly to avoid manual
+# coordination. lz_dev remains the single place managing application RBAC,
+# consistent with its governance role.
 
 resource "azurerm_user_assigned_identity" "caj" {
   name                = "id-${var.project}-dev-${var.location_short}-caj"
