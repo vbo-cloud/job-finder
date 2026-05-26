@@ -1356,3 +1356,4 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - UAMI déplacée dans `rg_core` (et non `rg_app`) : la Managed Identity est une ressource d'infrastructure partagée, pas une ressource applicative
 - `az containerapp job update --image` : force le job à utiliser l'image SHA précis du commit — évite les dérives de `:latest` entre deux builds
 - Séquencement d'apply : lz_dev doit être appliqué avant dev (la data source échoue si la UAMI n'existe pas)
+- Bootstrap sequencing : le data source et les trois paramètres UAMI sur chaque job sont commentés dans `dev/container_apps.tf` — les décommenter manuellement après le premier apply lz_dev qui crée `id-jf-dev-frc-caj` dans `rg-jf-dev-frc-core`

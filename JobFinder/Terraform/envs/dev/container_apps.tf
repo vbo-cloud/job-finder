@@ -37,10 +37,12 @@ locals {
 # UAMI and AcrPull role assignment are managed by lz_dev (sp-jf-platform).
 # sp-jf-github (Contributor only) cannot create role assignments.
 
-data "azurerm_user_assigned_identity" "caj" {
-  name                = "id-${var.project}-${var.env}-${var.location_short}-caj"
-  resource_group_name = data.azurerm_resource_group.rg_core.name
-}
+# Bootstrap: UAMI is created by lz_dev on first apply. Uncomment once lz_dev
+# has been applied and id-jf-dev-frc-caj exists in rg-jf-dev-frc-core.
+# data "azurerm_user_assigned_identity" "caj" {
+#   name                = "id-${var.project}-${var.env}-${var.location_short}-caj"
+#   resource_group_name = data.azurerm_resource_group.rg_core.name
+# }
 
 # Agent 1 — Matching (queue: offer-ready)
 module "job_matching" {
@@ -57,9 +59,10 @@ module "job_matching" {
   environment          = var.env
   project              = var.project
   owner                = var.owner
-  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server      = module.container_registry.login_server
-  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  # Uncomment after lz_dev apply creates the UAMI (id-jf-dev-frc-caj).
+  # identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  # registry_server   = module.container_registry.login_server
+  # registry_identity = data.azurerm_user_assigned_identity.caj.id
   secrets = [
     {
       name  = "servicebus-connection-string"
@@ -88,7 +91,8 @@ module "job_cleanup" {
   environment         = var.env
   project             = var.project
   owner               = var.owner
-  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server     = module.container_registry.login_server
-  registry_identity   = data.azurerm_user_assigned_identity.caj.id
+  # Uncomment after lz_dev apply creates the UAMI (id-jf-dev-frc-caj).
+  # identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  # registry_server   = module.container_registry.login_server
+  # registry_identity = data.azurerm_user_assigned_identity.caj.id
 }
