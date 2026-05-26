@@ -82,6 +82,22 @@ resource "azurerm_container_app_job" "this" {
     }
   }
 
+  dynamic "identity" {
+    for_each = length(var.identity_ids) > 0 ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = var.identity_ids
+    }
+  }
+
+  dynamic "registry" {
+    for_each = var.registry_server != null ? [1] : []
+    content {
+      server   = var.registry_server
+      identity = var.registry_identity
+    }
+  }
+
   tags = {
     environment = var.environment
     project     = var.project
