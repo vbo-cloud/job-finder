@@ -81,8 +81,10 @@ jobs:
           az containerapp job update \
             --name job-jf-dev-frc-matching \
             --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/matching:${{ github.sha }}
           az containerapp job update \
             --name job-jf-dev-frc-cleanup \
             --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/cleanup:${{ github.sha }}

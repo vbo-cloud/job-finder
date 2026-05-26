@@ -87,7 +87,7 @@ resource "azurerm_user_assigned_identity" "caj" {
   resource_group_name = module.rg_core.name
 
   tags = {
-    environment = var.env
+    environment = "dev"
     project     = var.project
     owner       = var.owner
   }
