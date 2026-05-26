@@ -55,7 +55,7 @@ module "job_matching" {
   trigger_type         = "queue"
   queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
-  image                = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
+  image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
   project              = var.project
   owner                = var.owner
@@ -68,11 +68,39 @@ module "job_matching" {
       name  = "servicebus-connection-string"
       value = local.servicebus_connection_string
     },
+    {
+      name  = "postgresql-connection-string"
+      value = module.postgresql.connection_string_secret_id
+    },
+    {
+      name  = "openai-api-key"
+      value = module.openai.primary_key
+    },
+    {
+      name  = "openai-endpoint"
+      value = module.openai.endpoint
+    },
   ]
   env_vars = [
     {
       name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
       secret_name = "servicebus-connection-string"
+    },
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name        = "AZURE_OPENAI_ENDPOINT"
+      secret_name = "openai-endpoint"
+    },
+    {
+      name  = "MATCHING_TOP_K"
+      value = "20"
     },
   ]
 }
