@@ -27,7 +27,6 @@ module "container_app_environment" {
 # Agent 2 — Cleanup (timer: 02:00 UTC)
 
 locals {
-  # M2: basculer sur key_vault_secret_id avec Managed Identity.
   servicebus_connection_string = module.servicebus.primary_connection_string
 }
 
@@ -37,12 +36,10 @@ locals {
 # UAMI and AcrPull role assignment are managed by lz_dev (sp-jf-platform).
 # sp-jf-github (Contributor only) cannot create role assignments.
 
-# Bootstrap: UAMI is created by lz_dev on first apply. Uncomment once lz_dev
-# has been applied and id-jf-dev-frc-caj exists in rg-jf-dev-frc-core.
-# data "azurerm_user_assigned_identity" "caj" {
-#   name                = "id-${var.project}-${var.env}-${var.location_short}-caj"
-#   resource_group_name = data.azurerm_resource_group.rg_core.name
-# }
+data "azurerm_user_assigned_identity" "caj" {
+  name                = "id-${var.project}-${var.env}-${var.location_short}-caj"
+  resource_group_name = data.azurerm_resource_group.rg_core.name
+}
 
 # Agent 1 — Matching (queue: offer-ready)
 module "job_matching" {
@@ -59,10 +56,9 @@ module "job_matching" {
   environment          = var.env
   project              = var.project
   owner                = var.owner
-  # Uncomment after lz_dev apply creates the UAMI (id-jf-dev-frc-caj).
-  # identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
-  # registry_server   = module.container_registry.login_server
-  # registry_identity = data.azurerm_user_assigned_identity.caj.id
+  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server   = module.container_registry.login_server
+  registry_identity = data.azurerm_user_assigned_identity.caj.id
   secrets = [
     {
       name  = "servicebus-connection-string"
@@ -115,12 +111,27 @@ module "job_cleanup" {
   environment_id      = module.container_app_environment.id
   trigger_type        = "timer"
   cron_expression     = "0 2 * * *"
-  image               = "mcr.microsoft.com/azuredocs/containerapps-helloworld"
+  image               = "${module.container_registry.login_server}/agents/cleanup:latest"
   environment         = var.env
   project             = var.project
   owner               = var.owner
-  # Uncomment after lz_dev apply creates the UAMI (id-jf-dev-frc-caj).
-  # identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
-  # registry_server   = module.container_registry.login_server
-  # registry_identity = data.azurerm_user_assigned_identity.caj.id
+  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server   = module.container_registry.login_server
+  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = module.postgresql.connection_string_secret_id
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name  = "CLEANUP_OFFER_MAX_AGE_DAYS"
+      value = "60"
+    },
+  ]
 }
