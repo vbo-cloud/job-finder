@@ -1,0 +1,57 @@
+name: Build Agent Images
+
+# Builds and pushes Docker images for matching and cleanup agents to ACR.
+# Triggered on changes to JobFinder/python/ to keep images in sync with code.
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'JobFinder/python/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write  # Required for OIDC authentication with Azure
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch ACR login server from Key Vault
+        run: |
+          ACR_LOGIN_SERVER=$(az keyvault secret show \
+            --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} \
+            --name "acr-login-server" --query value -o tsv)
+          echo "::add-mask::$ACR_LOGIN_SERVER"
+          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> $GITHUB_ENV
+
+      - name: Docker login to ACR
+        run: |
+          az acr login --name $(echo $ACR_LOGIN_SERVER | cut -d'.' -f1)
+
+      - name: Build and push matching image
+        working-directory: JobFinder/python
+        run: |
+          docker build -f agents/matching/Dockerfile -t $ACR_LOGIN_SERVER/agents/matching:latest .
+          docker push $ACR_LOGIN_SERVER/agents/matching:latest
+
+      - name: Build and push cleanup image
+        working-directory: JobFinder/python
+        run: |
+          docker build -f agents/cleanup/Dockerfile -t $ACR_LOGIN_SERVER/agents/cleanup:latest .
+          docker push $ACR_LOGIN_SERVER/agents/cleanup:latest
