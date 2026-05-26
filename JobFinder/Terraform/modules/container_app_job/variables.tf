@@ -153,6 +153,11 @@ variable "registry_identity" {
   type        = string
   default     = null
   description = "Resource ID of the User Assigned Managed Identity used to authenticate to the registry. Required when registry_server is set."
+
+  validation {
+    condition     = var.registry_server == null || var.registry_identity != null
+    error_message = "registry_identity must be set when registry_server is provided."
+  }
 }
 
 variable "environment" {
