@@ -1330,6 +1330,26 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 
 ---
 
+### PR #50 — feat(terraform): wire secrets and ACR images for matching and cleanup jobs
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / envs/dev*
+- `container_apps.tf` — `job_matching` : image basculée sur ACR, 4 secrets ajoutés (servicebus, postgresql, openai-api-key, openai-endpoint), 5 env vars câblées dont `MATCHING_TOP_K`
+- `container_apps.tf` — `job_cleanup` : image basculée sur ACR, secret postgresql ajouté, 2 env vars câblées dont `CLEANUP_OFFER_MAX_AGE_DAYS`
+- Commentaire TODO `M2: basculer sur key_vault_secret_id` supprimé du bloc `locals`
+
+*Terraform / modules*
+- `modules/postgresql/outputs.tf` : output `connection_string` ajouté — expose la valeur de la connection string (sensitive) plutôt que le resource ID du KV secret
+
+**Décisions techniques :**
+- `module.postgresql.connection_string` (valeur en clair, sensitive) plutôt que `connection_string_secret_id` (resource ID) : les Container App Jobs consomment la chaîne de connexion directement dans le bloc `secret`
+- `MATCHING_TOP_K` et `CLEANUP_OFFER_MAX_AGE_DAYS` passés en valeur directe (`value = "20"` / `"60"`) : paramètres de tuning non sensibles, pas des secrets
+- La connection string Service Bus reste en `local.servicebus_connection_string` (plain string) — migration vers KV reference avec Managed Identity prévue en M3
+
+---
+
 ### PR #51 — refactor(lz): move UAMI and AcrPull to lz_dev, update CAJ image on push
 **Date :** 2026-05-26
 
@@ -1356,4 +1376,3 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - UAMI déplacée dans `rg_core` (et non `rg_app`) : la Managed Identity est une ressource d'infrastructure partagée, pas une ressource applicative
 - `az containerapp job update --image` : force le job à utiliser l'image SHA précis du commit — évite les dérives de `:latest` entre deux builds
 - Séquencement d'apply : lz_dev doit être appliqué avant dev (la data source échoue si la UAMI n'existe pas)
-- Bootstrap sequencing : le data source et les trois paramètres UAMI sur chaque job sont commentés dans `dev/container_apps.tf` — les décommenter manuellement après le premier apply lz_dev qui crée `id-jf-dev-frc-caj` dans `rg-jf-dev-frc-core`

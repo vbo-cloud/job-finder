@@ -17,3 +17,9 @@ output "connection_string_secret_id" {
   description = "Resource ID of the Key Vault secret storing the connection string"
   value       = azurerm_key_vault_secret.connection_string.id
 }
+
+output "connection_string" {
+  description = "PostgreSQL connection string (postgresql://user:pass@host/db?sslmode=require)."
+  value       = azurerm_key_vault_secret.connection_string.value
+  sensitive   = true
+}
