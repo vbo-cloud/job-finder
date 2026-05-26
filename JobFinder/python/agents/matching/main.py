@@ -2,7 +2,6 @@
 
 """
 
-import os
 import uuid
 from datetime import datetime, timezone
 
@@ -13,12 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import receive_message, send_message
+from shared.config import MATCHING_TOP_K
 from shared.db import get_session, run_migrations
 from shared.models import Match, Offer
 
 OFFER_READY_QUEUE = "offer-ready"
 MATCH_READY_QUEUE = "match-ready"
-TOP_K = int(os.getenv("MATCHING_TOP_K", "20"))
 
 logger = structlog.get_logger()
 
@@ -57,7 +56,7 @@ def _get_all_matches(session: Session) -> list[dict]:
             ) ranked
             WHERE rn <= :top_k
         """),
-        {"top_k": TOP_K},
+        {"top_k": MATCHING_TOP_K},
     )
 
     return [
