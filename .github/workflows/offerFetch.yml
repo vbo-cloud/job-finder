@@ -70,4 +70,6 @@ jobs:
 
       - name: Run offer fetch script
         working-directory: JobFinder/python
+        env:
+          PYTHONPATH: ${{ github.workspace }}/JobFinder/python
         run: python scripts/fetch_offers.py
