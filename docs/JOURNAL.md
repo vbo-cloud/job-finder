@@ -1327,3 +1327,32 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 - UAMI partagée entre les deux jobs : un seul objet à gérer, une seule assignation AcrPull — les jobs n'ont pas de secrets distincts liés à l'identité
 - `AcrPull` scopé à l'ACR (pas au RG) : surface minimale, le job peut seulement puller des images, pas pousser ni gérer le registry
 - Les images restent en placeholder (`mcr.microsoft.com/azuredocs/containerapps-helloworld`) sur cette branche — le câblage ACR est prêt, les images réelles seront poussées par `buildAgents.yml` et référencées dans une PR distincte
+
+---
+
+### PR #51 — refactor(lz): move UAMI and AcrPull to lz_dev, update CAJ image on push
+**Date :** 2026-05-26
+
+**Contexte :**
+L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossible : la condition ABAC sur sp-jf-platform interdit à ce dernier d'assigner le rôle `Role Based Access Control Administrator`, même conditionné. La UAMI et le rôle AcrPull doivent donc être gérés directement par sp-jf-platform depuis lz_dev.
+
+**Réalisé :**
+
+*Terraform / lz_dev*
+- `lz_dev/rbac.tf` : suppression de `azurerm_role_assignment.sp_github_rbac_admin` et des locals associés (`sp_github_rbac_admin_scopes`, `rbac_admin_condition`) — approche impossible
+- `lz_dev/rbac.tf` : ajout de `azurerm_user_assigned_identity.caj` (`id-jf-dev-frc-caj`, dans `rg_core`) — géré par sp-jf-platform
+- `lz_dev/rbac.tf` : ajout de `data "azurerm_container_registry" "acr"` et `azurerm_role_assignment.caj_acr_pull` — rôle `AcrPull` assigné directement par sp-jf-platform
+- `lz_dev/outputs.tf` : outputs `caj_identity_id` et `caj_identity_principal_id` exposés pour référencement depuis dev/
+
+*Terraform / envs/dev*
+- `container_apps.tf` : `resource "azurerm_user_assigned_identity" "caj"` remplacé par `data "azurerm_user_assigned_identity" "caj"` — lit la UAMI créée par lz_dev
+- `container_apps.tf` : `resource "azurerm_role_assignment" "caj_acr_pull"` supprimé — désormais géré dans lz_dev
+
+*GitHub Actions*
+- `buildAgents.yml` : step `Update Container App Job images` ajouté après le push — met à jour les Container App Jobs avec le SHA précis via `az containerapp job update`
+
+**Décisions techniques :**
+- La condition ABAC de sp-jf-platform (`ForAnyOfAllValues:GuidNotEquals`) bloque l'assignation de `Role Based Access Control Administrator` — rôle exclus par la condition elle-même. L'approche RBAC Admin délégué est donc structurellement inapplicable.
+- UAMI déplacée dans `rg_core` (et non `rg_app`) : la Managed Identity est une ressource d'infrastructure partagée, pas une ressource applicative
+- `az containerapp job update --image` : force le job à utiliser l'image SHA précis du commit — évite les dérives de `:latest` entre deux builds
+- Séquencement d'apply : lz_dev doit être appliqué avant dev (la data source échoue si la UAMI n'existe pas)
