@@ -9,14 +9,8 @@ Expected environment variables:
     FT_CLIENT_SECRET: France Travail OAuth2 client secret.
 """
 
-import os
-import sys
 import uuid
 from datetime import datetime, timezone
-
-# JobFinder/python/ must be in sys.path so shared modules are importable
-# when this script is run directly as `python scripts/fetch_offers.py`.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import structlog
 from sqlalchemy import bindparam, case, func, literal_column, select, update
