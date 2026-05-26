@@ -24,9 +24,8 @@ def _cleanup(session: Session) -> tuple[int, int]:
     """Delete stale offers and their associated matches atomically.
 
     Steps:
-        1. Identify stale offer IDs.
-        2. Delete matches referencing those offers.
-        3. Delete the stale offers.
+        1. Delete matches whose offer_id is in the stale subquery.
+        2. Delete the stale offers.
 
     Args:
         session: Active SQLAlchemy session.
@@ -39,34 +38,26 @@ def _cleanup(session: Session) -> tuple[int, int]:
     Raises:
         SQLAlchemyError: If any database operation fails.
     """
-    logger.info("cleanup_started", max_age_days=OFFER_MAX_AGE_DAYS)
-
     cutoff = datetime.now(timezone.utc) - timedelta(days=OFFER_MAX_AGE_DAYS)
 
-    stale_offer_ids = session.scalars(
-        select(Offer.id).where(
-            or_(
-                Offer.ft_updated_at < cutoff,
-                and_(
-                    Offer.ft_updated_at.is_(None),
-                    Offer.collected_at < cutoff,
-                ),
-            )
+    logger.info("cleanup_started", cutoff=cutoff.isoformat())
+
+    stale_subquery = select(Offer.id).where(
+        or_(
+            Offer.ft_updated_at < cutoff,
+            and_(
+                Offer.ft_updated_at.is_(None),
+                Offer.collected_at < cutoff,
+            ),
         )
-    ).all()
-
-    logger.info("cleanup_stale_offers_found", count=len(stale_offer_ids))
-
-    if not stale_offer_ids:
-        logger.info("cleanup_no_stale_offers")
-        return 0, 0
+    )
 
     match_result = session.execute(
-        delete(Match).where(Match.offer_id.in_(stale_offer_ids))
+        delete(Match).where(Match.offer_id.in_(stale_subquery))
     )
 
     offer_result = session.execute(
-        delete(Offer).where(Offer.id.in_(stale_offer_ids))
+        delete(Offer).where(Offer.id.in_(stale_subquery))
     )
 
     return offer_result.rowcount, match_result.rowcount
