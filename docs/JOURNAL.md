@@ -1310,3 +1310,20 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 - Blocs `dynamic` conditionnels : si aucune identité ou registry n'est passé, les blocs sont absents du plan — rétrocompatibilité totale avec les callers existants sans modification
 - `identity_ids` en `list(string)` : l'azurerm provider attend une liste même pour une seule identité
 - `registry_identity` accepte `null` par défaut : permet d'utiliser `registry_server` avec une auth par token si besoin, sans forcer une UAMI
+
+---
+
+### PR #49 — feat: create UAMI and AcrPull role assignment for Container App Jobs
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / envs/dev*
+- `container_apps.tf` : `azurerm_user_assigned_identity.caj` créée (`id-jf-dev-frc-caj`) — identité partagée pour tous les agent jobs
+- `container_apps.tf` : `azurerm_role_assignment.caj_acr_pull` — rôle `AcrPull` assigné sur l'ACR, scopé à `module.container_registry.id`
+- `job_matching` et `job_cleanup` : `identity_ids`, `registry_server`, `registry_identity` câblés sur la UAMI
+
+**Décisions techniques :**
+- UAMI partagée entre les deux jobs : un seul objet à gérer, une seule assignation AcrPull — les jobs n'ont pas de secrets distincts liés à l'identité
+- `AcrPull` scopé à l'ACR (pas au RG) : surface minimale, le job peut seulement puller des images, pas pousser ni gérer le registry
+- Les images restent en placeholder (`mcr.microsoft.com/azuredocs/containerapps-helloworld`) sur cette branche — le câblage ACR est prêt, les images réelles seront poussées par `buildAgents.yml` et référencées dans une PR distincte
