@@ -56,9 +56,9 @@ module "job_matching" {
   environment          = var.env
   project              = var.project
   owner                = var.owner
-  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server   = module.container_registry.login_server
-  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
   secrets = [
     {
       name  = "servicebus-connection-string"
@@ -66,7 +66,7 @@ module "job_matching" {
     },
     {
       name  = "postgresql-connection-string"
-      value = module.postgresql.connection_string_secret_id
+      value = module.postgresql.connection_string
     },
     {
       name  = "openai-api-key"
@@ -115,13 +115,13 @@ module "job_cleanup" {
   environment         = var.env
   project             = var.project
   owner               = var.owner
-  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server   = module.container_registry.login_server
-  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server     = module.container_registry.login_server
+  registry_identity   = data.azurerm_user_assigned_identity.caj.id
   secrets = [
     {
       name  = "postgresql-connection-string"
-      value = module.postgresql.connection_string_secret_id
+      value = module.postgresql.connection_string
     },
   ]
   env_vars = [
