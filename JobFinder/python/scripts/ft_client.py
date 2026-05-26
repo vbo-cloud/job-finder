@@ -51,7 +51,7 @@ def get_access_token() -> str:
     return token
 
 
-def fetch_offers(token: str, rome_code: str) -> list[dict]:
+def fetch_offers(token: str, rome_code: str, min_date: str | None = None) -> list[dict]:
     """Fetch all job offers for a given ROME code using cursor-based pagination.
 
     Paginates through results in batches of PAGE_SIZE until the response returns
@@ -60,6 +60,12 @@ def fetch_offers(token: str, rome_code: str) -> list[dict]:
     Args:
         token: A valid OAuth2 access token.
         rome_code: ROME occupation code to filter offers (e.g. "M1805").
+        min_date: Optional ISO date string (YYYY-MM-DD). When provided, only offers
+            updated on or after this date are returned (minDateActualisation filter).
+
+    Note: min_date is formatted as YYYY-MM-DD (date only). The France Travail API
+    interprets this as the start of the day in its local timezone — offers updated
+    earlier on the cutoff day may be included.
 
     Returns:
         A list of raw offer dicts as returned by the API.
@@ -67,7 +73,7 @@ def fetch_offers(token: str, rome_code: str) -> list[dict]:
     Raises:
         requests.RequestException: If any page request fails.
     """
-    logger.info("ft_fetch_offers_started", rome_code=rome_code)
+    logger.info("ft_fetch_offers_started", rome_code=rome_code, min_date=min_date)
     offers: list[dict] = []
     start = 0
 
@@ -76,10 +82,13 @@ def fetch_offers(token: str, rome_code: str) -> list[dict]:
         while True:
             end = start + PAGE_SIZE - 1
             logger.info("ft_fetch_offers_page", rome_code=rome_code, range=f"{start}-{end}")
+            params: dict[str, str] = {"range": f"{start}-{end}", "codeROME": rome_code}
+            if min_date:
+                params["minDateActualisation"] = min_date
             try:
                 response = http.get(
                     FT_OFFERS_URL,
-                    params={"range": f"{start}-{end}", "codeROME": rome_code},
+                    params=params,
                 )
                 response.raise_for_status()
             except requests.RequestException:

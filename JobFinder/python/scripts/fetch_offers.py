@@ -10,7 +10,7 @@ Expected environment variables:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from sqlalchemy import bindparam, case, func, literal_column, select, update
@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from scripts.ft_client import fetch_offers, get_access_token
 from shared.bus import send_message
+from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.embedder import embed
 from shared.models import Offer, UserProfile
@@ -199,9 +200,12 @@ def main() -> None:
     rome_codes = _get_active_rome_codes()
     token = get_access_token()
 
+    cutoff = datetime.now(timezone.utc) - timedelta(days=OFFER_MAX_AGE_DAYS)
+    min_date = cutoff.strftime("%Y-%m-%d")
+
     total_new = 0
     for rome_code in rome_codes:
-        raw_offers = fetch_offers(token, rome_code)
+        raw_offers = fetch_offers(token, rome_code, min_date=min_date)
         total_new += _upsert_offers(raw_offers, rome_code)
 
     embedded_count = _embed_pending_offers()
