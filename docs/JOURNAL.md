@@ -1260,3 +1260,22 @@ Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
 - Suppression en 3 étapes ordonnées (`SELECT id` → `DELETE matches` → `DELETE offers`) dans une session unique : garantit l'atomicité et évite les violations de contrainte FK — une suppression directe des offres laisserait les matches orphelins si la FK n'est pas `ON DELETE CASCADE`
 - `CLEANUP_OFFER_MAX_AGE_DAYS` partagée entre cleanup et fetch : la rétention est un paramètre métier unique, pas deux constantes à synchroniser
 - `ft_updated_at` prioritaire sur `collected_at` pour la date de référence : une offre sans `ft_updated_at` est traitée sur sa date de collecte en fallback
+
+---
+
+### PR #46 — feat: CI/CD build and push Docker images to ACR
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*GitHub Actions*
+- `.github/workflows/buildAgents.yml` : workflow déclenché sur push vers `dev` quand `JobFinder/python/**` change (+ `workflow_dispatch`) — build et push deux images Docker vers ACR avec `docker/build-push-action@v6` : `agents/matching` et `agents/cleanup`, tags `:latest` + `:sha`, layer cache via ACR
+
+**Décisions techniques :**
+- Auth ACR via `az acr login` après `azure/login@v2` OIDC : pas de service principal password stocké, même pattern que `offerFetch.yml`
+- Login server ACR lu depuis Key Vault (`acr-login-server`) avec `add-mask` : évite d'exposer le nom du registry dans les logs
+- `docker/setup-buildx-action@v3` requis avant `docker/build-push-action@v6` pour activer BuildKit — nécessaire pour le cache de type `registry`
+- Layer cache stocké dans ACR (`agents/<agent>:cache`, `mode=max`) : réduit le temps de build en réutilisant les layers `pip install` entre les runs
+- Tags `:latest` + `:<sha>` : `:latest` pour le déploiement Terraform, `:<sha>` pour la traçabilité et le rollback
+- Build context `JobFinder/python/` : couvre `shared/` requis par les deux agents
+- Path filter `JobFinder/python/**` : le workflow ne se déclenche que si du code Python change, pas sur des commits Terraform ou docs
