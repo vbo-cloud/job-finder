@@ -34,25 +34,12 @@ locals {
 # ==============================================================================
 # Managed Identity — Container App Jobs
 # ==============================================================================
-# Shared identity for all agent jobs — used to pull images from ACR.
-# AcrPull role is assigned below, scoped to the container registry.
+# UAMI and AcrPull role assignment are managed by lz_dev (sp-jf-platform).
+# sp-jf-github (Contributor only) cannot create role assignments.
 
-resource "azurerm_user_assigned_identity" "caj" {
+data "azurerm_user_assigned_identity" "caj" {
   name                = "id-${var.project}-${var.env}-${var.location_short}-caj"
-  location            = var.location
-  resource_group_name = data.azurerm_resource_group.rg_app.name
-
-  tags = {
-    environment = var.env
-    project     = var.project
-    owner       = var.owner
-  }
-}
-
-resource "azurerm_role_assignment" "caj_acr_pull" {
-  scope                = module.container_registry.id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+  resource_group_name = data.azurerm_resource_group.rg_core.name
 }
 
 # Agent 1 — Matching (queue: offer-ready)
@@ -70,9 +57,9 @@ module "job_matching" {
   environment          = var.env
   project              = var.project
   owner                = var.owner
-  identity_ids         = [azurerm_user_assigned_identity.caj.id]
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
   registry_server      = module.container_registry.login_server
-  registry_identity    = azurerm_user_assigned_identity.caj.id
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
   secrets = [
     {
       name  = "servicebus-connection-string"
@@ -88,8 +75,6 @@ module "job_matching" {
 }
 
 # Agent 4 — Cleanup (timer: once daily at 02:00 UTC)
-# M1: no secrets — placeholder image only.
-# M2: add postgresql-connection-string secret to purge stale offers and matches from the DB.
 module "job_cleanup" {
   source = "../../modules/container_app_job"
 
@@ -103,7 +88,7 @@ module "job_cleanup" {
   environment         = var.env
   project             = var.project
   owner               = var.owner
-  identity_ids        = [azurerm_user_assigned_identity.caj.id]
+  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
   registry_server     = module.container_registry.login_server
-  registry_identity   = azurerm_user_assigned_identity.caj.id
+  registry_identity   = data.azurerm_user_assigned_identity.caj.id
 }
