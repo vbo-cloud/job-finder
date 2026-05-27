@@ -137,6 +137,29 @@ variable "secrets" {
   description = "Secrets available to the container."
 }
 
+variable "identity_ids" {
+  type        = list(string)
+  default     = []
+  description = "List of User Assigned Managed Identity resource IDs to attach to the job. Required when pulling images from a private registry."
+}
+
+variable "registry_server" {
+  type        = string
+  default     = null
+  description = "Container registry login server hostname (e.g. acrjfdevfrc.azurecr.io). Required when pulling from a private registry."
+}
+
+variable "registry_identity" {
+  type        = string
+  default     = null
+  description = "Resource ID of the User Assigned Managed Identity used to authenticate to the registry. Required when registry_server is set."
+
+  validation {
+    condition     = var.registry_server == null || var.registry_identity != null
+    error_message = "registry_identity must be set when registry_server is provided."
+  }
+}
+
 variable "environment" {
   type        = string
   description = "Environment identifier applied to resource tags (e.g. dev)."

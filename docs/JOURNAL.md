@@ -777,7 +777,7 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 - Déploiement dans `envs/dev/container_apps.tf` :
   - `azurerm_container_app_environment` partagé par tous les agents, lié au Log Analytics Workspace
   - 5 Container App Jobs avec images placeholder (`containerapps-helloworld`) — images réelles construites et poussées en M2 :
-    - `job-offer-fetching` — timer, 06:00 et 18:00 UTC (écrit dans `offer-ready`)
+    - `job-offer-fetching` — timer, 12:00 et 20:00 UTC (écrit dans `offer-ready`)
     - `job-embedding-offer` — queue `offer-ready`
     - `job-embedding-cv` — queue `cv-ready`
     - `job-matching` — queue `match-ready`
@@ -1051,6 +1051,381 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 ║   Documentation                                                              ║
 ║   ─────────────────────────────────────────────────────────────────────      ║
 ║   • PR #38  Entrée journal + item backlog hardening sp-jf-platform scope    ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### PR #40 — fix: remove job-embedding-cv Container App Job and cv-ready Service Bus queue
+**Date :** 2026-05-18
+
+**Réalisé :**
+- `envs/dev/container_apps.tf` : suppression du bloc `module "job_embedding_cv"` (job-jf-dev-frc-embedding-cv, trigger queue `cv-ready`)
+- `envs/dev/servicebus.tf` : suppression de la queue `cv-ready` de la liste `queues` ; mise à jour du commentaire d'en-tête
+
+**Décisions techniques :**
+- L'embedding CV se fait désormais de manière synchrone dans la web app (M3) via `shared/embedder.py`, appelé directement au moment de l'upload utilisateur
+- Un Container App Job queue-triggered pour une action utilisateur unique (upload CV) ajoutait un cold start de 15-30s sans bénéfice réel — la latence est plus acceptable en synchrone dans la requête HTTP
+- La queue `cv-ready` n'a plus de producteur ni de consommateur — la supprimer évite de provisionner une ressource inutilisée
+
+---
+
+### PR #41 — feat: Python foundation — shared layer and agent scaffolding
+**Date :** 2026-05-19
+
+**Réalisé :**
+- `JobFinder/python/requirements.txt` : dépendances communes à tous les agents (SQLAlchemy, psycopg2, pgvector, azure-servicebus, azure-storage-blob, openai, alembic, python-dotenv, structlog)
+- `JobFinder/python/.env.example` : template des variables d'environnement requis, commité sans vraies valeurs
+- `JobFinder/python/shared/models.py` : modèles SQLAlchemy avec `Base` partagée — tables `offers`, `cvs`, `matches` ; UUID v4, contraintes nommées (`uq_offers_ft_id`, `fk_matches_cv_id_ref_cvs`, `fk_matches_offer_id_ref_offers`), embeddings `Vector(1536)` via `pgvector.sqlalchemy`
+- `JobFinder/python/shared/db.py` : `get_engine()` singleton via `lru_cache` ; `get_session()` via `Session(get_engine())` (SQLAlchemy 2.0, rollback automatique) ; `run_migrations()` via Alembic programmatique
+- `JobFinder/python/shared/bus.py` : `send_message()` sérialise en JSON ; `receive_messages()` décode le JSON et yield un `dict` — le ack/nack Service Bus est géré en interne
+- `JobFinder/python/shared/embedder.py` : `embed(texts: list[str]) -> list[list[float]]` — un seul appel API pour tout le batch, `try/except openai.OpenAIError` avec re-raise
+- Squelettes `# TODO` pour 4 agents dans `JobFinder/python/agents/` : `offer_fetching/`, `embedding_offer/`, `matching/`, `cleanup/`
+
+**Décisions techniques :**
+- Variables d'environnement et constantes lues au niveau module : une variable manquante échoue au démarrage du container — fail-fast
+- `Session(get_engine())` en context manager (SQLAlchemy 2.0) : remplace `sessionmaker(bind=...)` déprécié, `close()` géré par le context manager
+- `receive_messages()` yielde un `dict` : le décodage JSON est encapsulé dans `bus.py`, les agents ne manipulent pas le message Service Bus brut
+- `embed()` accepte un batch : un seul appel API pour N textes, réduit la latence et le coût par rapport à N appels unitaires
+
+---
+
+### PR #42 — feat: Alembic migration configuration and initial schema
+**Date :** 2026-05-19
+
+**Réalisé :**
+- `JobFinder/python/migrations/alembic.ini` : configuration Alembic — `script_location = migrations`, `prepend_sys_path = .` pour que `shared` soit importable, `sqlalchemy.url` laissé en placeholder (la connexion réelle vient de `get_engine()` dans env.py)
+- `JobFinder/python/migrations/env.py` : environnement Alembic en mode online uniquement — importe `Base.metadata` depuis `shared.models` et `get_engine()` depuis `shared.db` ; aucune dépendance directe à `sqlalchemy.url` de l'ini
+- `JobFinder/python/migrations/versions/001_initial_schema.py` : migration initiale créant les trois tables dans l'ordre des dépendances FK — `offers`, `cvs`, `matches` ; active l'extension `vector` (pgvector) avant la création des tables ; `downgrade()` supprime dans l'ordre inverse
+
+**Décisions techniques :**
+- `DateTime(timezone=True)` sur toutes les colonnes datetime : aligné sur la convention `datetime.now(timezone.utc)` des modèles — stockage UTC garanti côté base
+- `postgresql.UUID(as_uuid=True)` pour les PK et FK : cohérent avec `UUID(as_uuid=True)` dans les modèles SQLAlchemy
+- `CREATE EXTENSION IF NOT EXISTS vector` dans `upgrade()` : idempotent — pas d'erreur si l'extension est déjà présente ; nécessite que l'extension pgvector soit installée sur le serveur PostgreSQL (déjà activée via Terraform : `azurerm_postgresql_flexible_server_configuration` avec `azure.extensions = VECTOR`)
+- `run_migrations_offline()` explicitement défini dans env.py pour lever `NotImplementedError` — évite toute misconfiguration silencieuse si alembic est invoqué en mode offline
+- `downgrade()` implémenté (`matches` → `cvs` → `offers`) : convention de projet — toute migration doit être réversible
+
+**Corrections post-review :**
+- `server_default=sa.text("now()")` ajouté sur les trois colonnes `created_at` — garantit la valeur même lors d'un INSERT sans ORM (ex : scripts de migration de données)
+- Index ajoutés sur les FK de `matches` (`ix_matches_cv_id`, `ix_matches_offer_id`) — les FK sans index entraînent des full scans lors des JOINs
+- Contrainte d'unicité composite `uq_matches_cv_offer` (`cv_id`, `offer_id`) ajoutée dans la migration et dans `Match.__table_args__` — empêche un double matching du même couple CV/offre
+
+---
+
+### Décisions architecturales M2 — 2026-05-20
+
+Session de design ayant conduit à une refonte complète de l'architecture M2.
+Ces décisions sont reflétées dans `docs/ROADMAP.md` (section M2 réécrite).
+
+**Pivot fetch des offres**
+Le Container App Job `job-offer-fetching` (timer) est remplacé par un GitHub Actions
+cron. L'embedding des offres se fait inline dans le script de fetch — pas d'agent
+séparé. Raison : un Container App Job timer pour appeler une API externe est du
+sur-engineering. GitHub Actions est plus simple, sans coût infra, et démontre les
+mêmes compétences (OAuth2, pagination, gestion d'erreurs).
+
+**Pipeline multi-agent stabilisé**
+
+```
+GitHub Actions cron (2x/jour)
+  → fetch France Travail (OAuth2, pagination, par codes ROME)
+  → embedding batch inline
+  → stockage offers table + rome_code
+  → post offer-ready
+
+job-matching (queue: offer-ready)         ← Agent LLM 1
+  → filtre par rome_codes du profil utilisateur
+  → vector search pgvector
+  → GPT-4o-mini : score + explication
+  → post match-ready
+
+job-cv-review (queue: match-ready)        ← Agent LLM 2 (dernière feature)
+  → analyse CV vs top-3 offres
+  → GPT-4o-mini : gaps + suggestions personnalisées
+  → notification utilisateur
+```
+
+**Domaines de fetch — design intent-first**
+- Le fetch n'est pas total (tous les domaines IT) mais ciblé par codes ROME.
+- Les codes ROME viennent des profils utilisateurs, pas d'une config statique.
+- Onboarding : l'utilisateur sélectionne des **catégories lisibles** (Développement,
+  Data, DevOps…) — le mapping vers les codes ROME est fait en interne. Aucun code
+  ROME n'est exposé dans l'UI.
+- Upload CV : un agent CV-analysis (GPT-4o-mini) extrait et affine les codes ROME
+  depuis le texte du CV — le profil devient plus précis automatiquement.
+- Bootstrap (DB vide) : liste de secours prédéfinie (M1805, M1802, M1806…).
+- Le cron GitHub Actions lit l'union des `rome_codes` depuis `user_profiles` en DB.
+
+**Fetch et upload CV — déclenchement**
+- Le cron tourne 2x/jour indépendamment des uploads.
+- À l'upload d'un CV : matching immédiat contre les offres existantes en base
+  (max 12h de retard). L'utilisateur voit des résultats sans attendre le prochain cron.
+- Pas de fetch déclenché par l'upload — évite la dépendance à l'API GitHub depuis
+  la web app.
+
+**Nettoyage des codes ROME orphelins**
+- Le `job-cleanup` supprime les offres pour des codes ROME n'ayant plus aucun
+  utilisateur actif, avec une grace period de 7 jours.
+- La DB reste propre sans mécanisme dédié.
+
+**Schéma DB — ajouts M2**
+- Table `user_profiles` : `rome_codes TEXT[]`, `job_categories TEXT[]`,
+  `location TEXT`, `contract_types TEXT[]`
+- Table `offers` : colonne `rome_code TEXT` ajoutée (filtrage au matching)
+
+**Azure AI Search — note**
+pgvector reste le choix correct pour ce volume (<50K offres en dev). Azure AI Search
+(hybrid search BM25 + vectoriel + semantic reranker) devient pertinent au-delà de
+200-500K vecteurs ou si la recherche devient un goulot d'étranglement sur PostgreSQL.
+Tracé en BACKLOG comme évolution future (déjà documenté en ADR-003).
+
+---
+
+### PR #43 — feat(m2): GitHub Actions offer-fetch cron, user_profiles schema, Terraform M2 pivot
+**Date :** 2026-05-20
+
+**Réalisé :**
+
+*Terraform*
+- `envs/dev/container_apps.tf` : suppression des blocs `module "job_offer_fetching"` (timer) et `module "job_embedding_offer"` (queue offer-ready) — remplacés par le cron GitHub Actions
+- `envs/dev/container_apps.tf` : `module "job_matching"` rebranchée sur la queue `offer-ready` (anciennement `match-ready`) — le matching est déclenché dès qu'une nouvelle offre est disponible en base
+- `envs/dev/container_apps.tf` : suppression du bloc `moved {}` hérité de PR #35 — apply de migration de state confirmé lors du merge dev→main du 2026-05-18
+- `envs/dev/servicebus.tf` : commentaire d'en-tête mis à jour ; les deux queues `offer-ready` et `match-ready` sont conservées
+
+*Schéma DB*
+- `shared/models.py` : modèle `UserProfile` ajouté (`rome_codes`, `job_categories`, `location`, `contract_types`) ; colonnes `rome_code` et `ft_updated_at` ajoutées sur `Offer`
+- `migrations/versions/002_add_user_profiles_and_rome_code.py` : migration Alembic — table `user_profiles`, colonnes `offers.rome_code` (index `ix_offers_rome_code`) et `offers.ft_updated_at`
+
+*Python / scripts*
+- `agents/offer_fetching/` et `agents/embedding_offer/` supprimés
+- `scripts/ft_client.py` : client France Travail — `get_access_token()` OAuth2, `fetch_offers(token, rome_code)` avec pagination curseur par tranches de 50 ; `requests.Session` réutilisé entre les pages ; arrêt sur `Content-Range` total en plus de `len(page) < PAGE_SIZE`
+- `scripts/fetch_offers.py` : script cron complet — codes ROME depuis `user_profiles` (fallback liste IT prédéfinie), fetch par code ROME, upsert batch unique par code ROME avec `RETURNING xmax` pour comptage atomique des inserts, embedding réinitialisé conditionnellement via `case()` si `ft_updated_at` est plus récent ; session SELECT et session UPDATE séparées autour de l'appel OpenAI dans `_embed_pending_offers` ; mutation ORM + `add_all` pour batcher les UPDATEs en un seul flush ; `send_message(offer-ready)` conditionnel (`total_new > 0`)
+- `shared/db.py` : `POSTGRESQL_CONNECTION_STRING` → `DATABASE_URL`
+- `requirements.txt` : `requests` ajouté
+
+*Workflow & infra*
+- `.github/workflows/offerFetch.yml` : cron 12:00/20:00 UTC + `workflow_dispatch` ; secrets récupérés depuis Key Vault via `${{ vars.AZURE_KEYVAULT_NAME }}` (variable GitHub) via OIDC — aucun GitHub Secret applicatif ; `pip install --no-cache-dir` pour reproductibilité CI
+- `envs/dev/container_apps.tf` : note ajoutée en tête de section Agent Jobs indiquant que le fetch est désormais géré par GitHub Actions
+- `.gitignore` : patterns Python ajoutés (`__pycache__/`, `*.pyc`, `*.pyo`)
+- `docs/MANUAL_OPERATIONS.md` : section "France Travail API — Credentials" — procédure d'inscription et stockage des secrets dans le Key Vault
+- `docs/ROADMAP.md` : architecture M2 réécrite
+
+**Décisions techniques :**
+- Container App Jobs `job-offer-fetching` et `job-embedding-offer` supprimés : GitHub Actions cron élimine deux ressources Azure et leur coût de provisionnement ; embedding inline dans le script coélimine un aller-retour Service Bus
+- `job_matching` sur `offer-ready` (pas `match-ready`) : le matching est déclenché par l'arrivée de nouvelles offres — `match-ready` reste le signal de fin de matching pour la notification utilisateur (M3) et le futur agent cv-review
+- Pagination curseur (`range: 0-49, 50-99...`) : format imposé par l'API France Travail via le header `range` ; la boucle s'arrête dès qu'une page est incomplète
+- Upsert `ON CONFLICT (ft_id) DO UPDATE` avec réinitialisation conditionnelle de `embedding` : l'embedding est remis à `NULL` uniquement si `ft_updated_at` entrant est plus récent que la valeur stockée (ou si la valeur stockée est `NULL`) — les offres non modifiées conservent leur vecteur, économie de tokens OpenAI
+- Embedding batch après tous les upserts : un seul appel API pour toutes les nouvelles offres, quel que soit le nombre de codes ROME traités dans le run
+- Session DB fermée avant l'appel OpenAI dans `_embed_pending_offers` : un appel externe lent ou défaillant ne maintient pas de connexion ouverte inutilement
+- `RETURNING xmax` pour compter les vrais inserts dans `_upsert_offers` : atomique dans la même transaction, sans race condition possible avec un pre-fetch `SELECT`
+- Message `offer-ready` conditionnel (`total_new > 0`) : évite de déclencher `job-matching` inutilement si aucune nouvelle offre n'a été insérée
+- Secrets depuis Key Vault via OIDC : les secrets applicatifs vivent en un seul endroit ; pas de synchronisation manuelle ni de rotation en double entre KV et GitHub Secrets
+- `add-mask` avant injection dans `$GITHUB_ENV` : masquage dans les logs de l'étape courante, pas seulement des suivantes
+
+---
+
+### PR #44 — feat(matching): job-matching agent with pgvector cosine similarity
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Python / agents*
+- `agents/matching/main.py` : agent de matching — consomme un message `offer-ready`, requête tous les CVs avec embedding, calcule le top-20 des offres les plus proches par similarité cosine (pgvector `<=>`) pour chaque CV, upsert dans `matches`, poste un message `match-ready` avec résumé
+- `agents/matching/Dockerfile` : image Python 3.12-slim, workdir `/app`, `CMD ["python", "agents/matching/main.py"]`
+
+**Décisions techniques :**
+- Similarité cosine via pgvector `<=>` (distance) : score = `1 - cosine_distance`, tri `ORDER BY distance ASC` pour les K plus proches — pas de GPT-4o-mini à ce stade, score brut suffisant pour le ranking
+- `_get_top_matches` et `_upsert_matches` prennent une session en paramètre : une seule session ouverte par run de matching, partagée entre les deux fonctions pour éviter la multiplicité de connexions
+- `RETURNING xmax` dans `_upsert_matches` : comptage atomique des vrais inserts, cohérent avec le pattern établi dans `fetch_offers.py`
+- Si aucun CV en base : log `matching_no_cvs_found` et sortie propre (ack du message via `receive_message` contextmanager) — pas d'erreur, pas de message `match-ready`
+- `distance_expr` extrait en variable locale dans `_get_top_matches` : évite de dupliquer l'expression pgvector dans `select()` et `order_by()`
+
+---
+
+### PR #45 — feat(cleanup): cleanup agent — purge stale offers and orphaned matches
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Python / agents*
+- `agents/cleanup/main.py` : agent de cleanup — supprime les offres périmées (> `CLEANUP_OFFER_MAX_AGE_DAYS` jours) et leurs matches associés en 3 étapes atomiques dans une seule transaction ; aucune interaction avec Service Bus, déclenché par timer KEDA à 02:00 UTC
+- `agents/cleanup/Dockerfile` : image Python 3.12-slim, workdir `/app`, `PYTHONPATH=/app`, `CMD ["python", "agents/cleanup/main.py"]`
+
+*Python / scripts*
+- `scripts/ft_client.py` : `fetch_offers()` accepte un paramètre `min_date: str | None` — si fourni, ajoute `minDateActualisation` aux params de la requête API France Travail pour ne récupérer que les offres récentes
+- `scripts/fetch_offers.py` : calcul de `min_date` basé sur `CLEANUP_OFFER_MAX_AGE_DAYS` avant la boucle sur les codes ROME — même variable d'environnement que le cleanup, une seule valeur à configurer
+
+**Décisions techniques :**
+- Suppression en 3 étapes ordonnées (`SELECT id` → `DELETE matches` → `DELETE offers`) dans une session unique : garantit l'atomicité et évite les violations de contrainte FK — une suppression directe des offres laisserait les matches orphelins si la FK n'est pas `ON DELETE CASCADE`
+- `CLEANUP_OFFER_MAX_AGE_DAYS` partagée entre cleanup et fetch : la rétention est un paramètre métier unique, pas deux constantes à synchroniser
+- `ft_updated_at` prioritaire sur `collected_at` pour la date de référence : une offre sans `ft_updated_at` est traitée sur sa date de collecte en fallback
+
+---
+
+### PR #46 — feat: CI/CD build and push Docker images to ACR
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*GitHub Actions*
+- `.github/workflows/buildAgents.yml` : workflow déclenché sur push vers `dev` quand `JobFinder/python/**` change (+ `workflow_dispatch`) — build et push deux images Docker vers ACR avec `docker/build-push-action@v6` : `agents/matching` et `agents/cleanup`, tags `:latest` + `:sha`, layer cache via ACR
+
+**Décisions techniques :**
+- Auth ACR via `az acr login` après `azure/login@v2` OIDC : pas de service principal password stocké, même pattern que `offerFetch.yml`
+- Login server ACR lu depuis Key Vault (`acr-login-server`) avec `add-mask` : évite d'exposer le nom du registry dans les logs
+- `docker/setup-buildx-action@v3` requis avant `docker/build-push-action@v6` pour activer BuildKit — nécessaire pour le cache de type `registry`
+- Layer cache stocké dans ACR (`agents/<agent>:cache`, `mode=max`) : réduit le temps de build en réutilisant les layers `pip install` entre les runs
+- Tags `:latest` + `:<sha>` : `:latest` pour le déploiement Terraform, `:<sha>` pour la traçabilité et le rollback
+- Build context `JobFinder/python/` : couvre `shared/` requis par les deux agents
+- Path filter `JobFinder/python/**` : le workflow ne se déclenche que si du code Python change, pas sur des commits Terraform ou docs
+
+---
+
+### PR #47 — feat(lz): grant conditioned RBAC Administrator to sp-jf-github on dev resource groups
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / lz_dev*
+- `lz_dev/rbac.tf` : `azurerm_role_assignment.sp_github_rbac_admin` ajouté — RBAC Administrator conditionné scopé aux trois resource groups dev (`rg_core`, `rg_app`, `rg_data`), via `for_each` sur `local.sp_github_rbac_admin_scopes`
+
+**Décisions techniques :**
+- Même condition anti-escalade que `sp-jf-platform` : interdit d'assigner Owner, User Access Administrator, ou Role Based Access Control Administrator — sp-jf-github ne peut pas s'auto-élever
+- Scopé aux RGs dev uniquement (pas à la subscription) : surface d'exposition minimale
+- Géré dans `lz_dev/` plutôt que `iam/` : `sp-jf-platform` (qui possède RBAC Administrator) peut appliquer via CI/CD, sans intervention manuelle
+
+---
+
+### PR #48 — feat(module): add identity and registry support to container_app_job module
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / modules*
+- `modules/container_app_job/variables.tf` : trois variables ajoutées — `identity_ids` (list, défaut `[]`), `registry_server` (string nullable), `registry_identity` (string nullable)
+- `modules/container_app_job/main.tf` : deux blocs `dynamic` ajoutés après `secret` — `identity` (UserAssigned, conditionné sur `length(identity_ids) > 0`) et `registry` (conditionné sur `registry_server != null`)
+
+**Décisions techniques :**
+- Blocs `dynamic` conditionnels : si aucune identité ou registry n'est passé, les blocs sont absents du plan — rétrocompatibilité totale avec les callers existants sans modification
+- `identity_ids` en `list(string)` : l'azurerm provider attend une liste même pour une seule identité
+- `registry_identity` accepte `null` par défaut : permet d'utiliser `registry_server` avec une auth par token si besoin, sans forcer une UAMI
+
+---
+
+### PR #49 — feat: create UAMI and AcrPull role assignment for Container App Jobs
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / envs/dev*
+- `container_apps.tf` : `azurerm_user_assigned_identity.caj` créée (`id-jf-dev-frc-caj`) — identité partagée pour tous les agent jobs
+- `container_apps.tf` : `azurerm_role_assignment.caj_acr_pull` — rôle `AcrPull` assigné sur l'ACR, scopé à `module.container_registry.id`
+- `job_matching` et `job_cleanup` : `identity_ids`, `registry_server`, `registry_identity` câblés sur la UAMI
+
+**Décisions techniques :**
+- UAMI partagée entre les deux jobs : un seul objet à gérer, une seule assignation AcrPull — les jobs n'ont pas de secrets distincts liés à l'identité
+- `AcrPull` scopé à l'ACR (pas au RG) : surface minimale, le job peut seulement puller des images, pas pousser ni gérer le registry
+- Les images restent en placeholder (`mcr.microsoft.com/azuredocs/containerapps-helloworld`) sur cette branche — le câblage ACR est prêt, les images réelles seront poussées par `buildAgents.yml` et référencées dans une PR distincte
+
+---
+
+### PR #50 — feat(terraform): wire secrets and ACR images for matching and cleanup jobs
+**Date :** 2026-05-26
+
+**Réalisé :**
+
+*Terraform / envs/dev*
+- `container_apps.tf` — `job_matching` : image basculée sur ACR, 4 secrets ajoutés (servicebus, postgresql, openai-api-key, openai-endpoint), 5 env vars câblées dont `MATCHING_TOP_K`
+- `container_apps.tf` — `job_cleanup` : image basculée sur ACR, secret postgresql ajouté, 2 env vars câblées dont `CLEANUP_OFFER_MAX_AGE_DAYS`
+- Commentaire TODO `M2: basculer sur key_vault_secret_id` supprimé du bloc `locals`
+
+*Terraform / modules*
+- `modules/postgresql/outputs.tf` : output `connection_string` ajouté — expose la valeur de la connection string (sensitive) plutôt que le resource ID du KV secret
+
+**Décisions techniques :**
+- `module.postgresql.connection_string` (valeur en clair, sensitive) plutôt que `connection_string_secret_id` (resource ID) : les Container App Jobs consomment la chaîne de connexion directement dans le bloc `secret`
+- `MATCHING_TOP_K` et `CLEANUP_OFFER_MAX_AGE_DAYS` passés en valeur directe (`value = "20"` / `"60"`) : paramètres de tuning non sensibles, pas des secrets
+- La connection string Service Bus reste en `local.servicebus_connection_string` (plain string) — migration vers KV reference avec Managed Identity prévue en M3
+
+---
+
+### PR #51 — refactor(lz): move UAMI and AcrPull to lz_dev, update CAJ image on push
+**Date :** 2026-05-26
+
+**Contexte :**
+L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossible : la condition ABAC sur sp-jf-platform interdit à ce dernier d'assigner le rôle `Role Based Access Control Administrator`, même conditionné. La UAMI et le rôle AcrPull doivent donc être gérés directement par sp-jf-platform depuis lz_dev.
+
+**Réalisé :**
+
+*Terraform / lz_dev*
+- `lz_dev/rbac.tf` : suppression de `azurerm_role_assignment.sp_github_rbac_admin` et des locals associés (`sp_github_rbac_admin_scopes`, `rbac_admin_condition`) — approche impossible
+- `lz_dev/rbac.tf` : ajout de `azurerm_user_assigned_identity.caj` (`id-jf-dev-frc-caj`, dans `rg_core`) — géré par sp-jf-platform
+- `lz_dev/rbac.tf` : ajout de `data "azurerm_container_registry" "acr"` et `azurerm_role_assignment.caj_acr_pull` — rôle `AcrPull` assigné directement par sp-jf-platform
+- `lz_dev/outputs.tf` : outputs `caj_identity_id` et `caj_identity_principal_id` exposés pour référencement depuis dev/
+
+*Terraform / envs/dev*
+- `container_apps.tf` : `resource "azurerm_user_assigned_identity" "caj"` remplacé par `data "azurerm_user_assigned_identity" "caj"` — lit la UAMI créée par lz_dev
+- `container_apps.tf` : `resource "azurerm_role_assignment" "caj_acr_pull"` supprimé — désormais géré dans lz_dev
+
+*GitHub Actions*
+- `buildAgents.yml` : step `Update Container App Job images` ajouté après le push — met à jour les Container App Jobs avec le SHA précis via `az containerapp job update`
+
+**Décisions techniques :**
+- La condition ABAC de sp-jf-platform (`ForAnyOfAllValues:GuidNotEquals`) bloque l'assignation de `Role Based Access Control Administrator` — rôle exclus par la condition elle-même. L'approche RBAC Admin délégué est donc structurellement inapplicable.
+- UAMI déplacée dans `rg_core` (et non `rg_app`) : la Managed Identity est une ressource d'infrastructure partagée, pas une ressource applicative
+- `az containerapp job update --image` : force le job à utiliser l'image SHA précis du commit — évite les dérives de `:latest` entre deux builds
+- Séquencement d'apply : lz_dev doit être appliqué avant dev (la data source échoue si la UAMI n'existe pas)
+
+---
+
+### PR #52 — docs: mise à jour JOURNAL.md — entrée merge PR #53
+**Date :** 2026-05-27
+
+**Réalisé :**
+- Ajout de l'entrée de merge PR #53 dans `docs/JOURNAL.md` — récapitulatif des PRs #40 à #52 dans le format de PR #39
+
+---
+
+### PR #53
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-27                                         ║
+║   Milestone 2 — Agents Python + CI/CD images  (PRs #40 à #52)              ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Architecture M2 — Pivot                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #40  Suppression job-embedding-cv et queue cv-ready                  ║
+║   • PR #43  Cron GitHub Actions offer-fetch, schéma user_profiles,          ║
+║             pivot Terraform (jobs offer-fetching + embedding supprimés)     ║
+║                                                                              ║
+║   Agents Python                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #41  Couche shared (models, db, bus, embedder) + scaffolding         ║
+║   • PR #42  Alembic — migration initiale (tables offers, cvs, matches)      ║
+║   • PR #44  Agent matching — pgvector cosine similarity, upsert matches     ║
+║   • PR #45  Agent cleanup — purge offres périmées + matches orphelins       ║
+║                                                                              ║
+║   CI/CD & images Docker                                                      ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #46  Workflow build/push images Docker → ACR (matching, cleanup)     ║
+║             tags :latest + :sha, layer cache ACR, az containerapp update    ║
+║                                                                              ║
+║   Infrastructure Terraform                                                   ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #47  RBAC Admin conditionné sp-jf-github — inapplicable              ║
+║             (condition ABAC sp-jf-platform) ; remplacé par PR #51           ║
+║   • PR #48  Module container_app_job — support UAMI et registry             ║
+║   • PR #49  UAMI caj + rôle AcrPull sur ACR pour les Container App Jobs     ║
+║   • PR #50  Câblage secrets et images ACR (job_matching + job_cleanup)      ║
+║   • PR #51  UAMI migrée dans lz_dev, gérée par sp-jf-platform               ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #52  Mise à jour journal — entrée merge PR #53                       ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```

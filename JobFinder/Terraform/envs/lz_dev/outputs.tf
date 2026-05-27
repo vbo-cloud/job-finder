@@ -21,3 +21,13 @@ output "subnet_app_id" {
 output "keyvault_uri" {
   value = module.keyvault.uri
 }
+
+output "caj_identity_id" {
+  description = "Resource ID of the Container App Jobs User Assigned Managed Identity."
+  value       = azurerm_user_assigned_identity.caj.id
+}
+
+output "caj_identity_principal_id" {
+  description = "Principal ID of the Container App Jobs User Assigned Managed Identity."
+  value       = azurerm_user_assigned_identity.caj.principal_id
+}

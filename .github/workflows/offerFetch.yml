@@ -1,0 +1,75 @@
+name: Offer Fetch
+
+# Runs twice daily to fetch and embed job offers from France Travail.
+# workflow_dispatch allows manual triggering for testing.
+on:
+  schedule:
+    - cron: '0 12,20 * * *'
+  workflow_dispatch:
+
+permissions:
+  id-token: write  # Required for OIDC authentication with Azure
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch secrets from Key Vault
+        run: |
+          fetch_secret() {
+            az keyvault secret show --vault-name ${{ vars.AZURE_KEYVAULT_NAME }} --name "$1" --query value -o tsv
+          }
+
+          value=$(fetch_secret "postgresql-connection-string")
+          echo "::add-mask::$value"
+          echo "DATABASE_URL=$value" >> $GITHUB_ENV
+
+          value=$(fetch_secret "servicebus-connection-string")
+          echo "::add-mask::$value"
+          echo "AZURE_SERVICEBUS_CONNECTION_STRING=$value" >> $GITHUB_ENV
+
+          value=$(fetch_secret "openai-api-key")
+          echo "::add-mask::$value"
+          echo "AZURE_OPENAI_API_KEY=$value" >> $GITHUB_ENV
+
+          value=$(fetch_secret "openai-endpoint")
+          echo "::add-mask::$value"
+          echo "AZURE_OPENAI_ENDPOINT=$value" >> $GITHUB_ENV
+
+          value=$(fetch_secret "ft-client-id")
+          echo "::add-mask::$value"
+          echo "FT_CLIENT_ID=$value" >> $GITHUB_ENV
+
+          value=$(fetch_secret "ft-client-secret")
+          echo "::add-mask::$value"
+          echo "FT_CLIENT_SECRET=$value" >> $GITHUB_ENV
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: JobFinder/python
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run offer fetch script
+        working-directory: JobFinder/python
+        env:
+          PYTHONPATH: ${{ github.workspace }}/JobFinder/python
+        run: python scripts/fetch_offers.py

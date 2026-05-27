@@ -2,10 +2,8 @@
 # Service Bus
 # ==============================================================================
 # Queues:
-#   offer-ready  — Agent 1 (offer fetching) → Agent 2 (embedding)
-#   cv-ready     — user CV upload           → Agent 2 (embedding)
-#   match-ready  — Agent 2 (embedding)      → Agent 3 (matching + email)
-# Agent 4 (daily cleanup) is timer-triggered and does not use queues.
+#   offer-ready  — GitHub Actions cron (fetch+embed) → job-matching
+#   match-ready  — job-matching → notification utilisateur + futur agent cv-review
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -20,7 +18,6 @@ module "servicebus" {
 
   queues = [
     "offer-ready",
-    "cv-ready",
     "match-ready",
   ]
 }

@@ -1,0 +1,11 @@
+# TODO: pin all versions before first deployment (run pip freeze > requirements.txt)
+sqlalchemy>=2.0
+psycopg2-binary
+pgvector
+azure-servicebus
+azure-storage-blob
+openai
+alembic
+python-dotenv
+requests
+structlog

@@ -1,15 +1,15 @@
 # Roadmap — job-finder
 
-_Mis à jour : 2026-05-03_
+_Mis à jour : 2026-05-18_
 
 ---
 
 ## Vue d'ensemble
 
 ```
-M0 ✅ → M1 🎯 → Refacto 🔧 → M2 🔮 → M3 🔮 → M4 🔮 → M5 🔮
-Infra    Data    Git+Terraform   Agents   API      Frontend  Optim
-Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
+M0 ✅ → M1 ✅ → M2 🎯 → M3 🔮 → Refacto 🔧 → M4 🔮 → M5 🔮 → M6 🔮
+Infra    Data    Agents   API     Git+Terraform  AKS    Frontend  Optim
+Done    Done    En cours ~5 j     Avant prod     ~5 j    ~5 j    ongoing
 ```
 
 **Rythme :** 10h/jour
@@ -32,7 +32,7 @@ Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
 
 ---
 
-## Milestone 1 — Data Layer + Services IA 🎯 EN COURS
+## Milestone 1 — Data Layer + Services IA ✅ TERMINÉ
 
 > _Stack données et IA provisionnée sur Azure. Structure Terraform actuelle conservée (lz-dev, dev, lz-prod, prod) — le refactoring viendra après._
 > **Durée estimée : 3 à 5 jours**
@@ -77,9 +77,9 @@ Done    ~4 j      ~2 j           ~8 j    ~5 j      ~5 j     ongoing
 
 ---
 
-## Transition M1 → M2 — Refactoring Git + Terraform 🔧
+## Transition M3 → prod — Refactoring Git + Terraform 🔧
 
-> _Restructuration complète avant d'ajouter la couche applicative. Moment idéal : modules M1 déployés et validés, aucun composant applicatif existant encore → migration minimale._
+> _Restructuration Terraform par composant et mise en place du staging éphémère, avant la mise en production réelle. Délibérément décalé après M3 : le refacto a plus de valeur une fois que l'application est fonctionnelle et que les dépendances inter-composants sont connues._
 > **Durée estimée : 1 à 2 jours**
 > **Voir ADR-013 pour le détail complet**
 
@@ -128,62 +128,114 @@ feature/* → dev → release/vX.X.X → [staging éphémère] → main (tag vX.
 
 ---
 
-## Milestone 2 — Agents Python 🔮
+## Milestone 2 — Agents Python 🎯 EN COURS
 
-> _Cœur métier : collecte, analyse LLM, matching vectoriel, recommandations_
+> _Cœur métier : fetch, analyse LLM, matching vectoriel, cv-review_
 > **Durée estimée : 7 à 10 jours**
 > **Coût : ~25-35 €/mois** (tokens OpenAI en développement)
 
-### Jour 1 — Structure + modules partagés
+### Architecture cible M2
 
-- [ ] Repo structure : `agents/`, `shared/`, `api/`, `requirements.txt`
-- [ ] `shared/embedder.py` — `embed(text: str) -> list[float]`
-- [ ] `shared/db.py` — SQLAlchemy session factory
-- [ ] `shared/bus.py` — azure-servicebus client
-- [ ] Schéma PostgreSQL : tables `offers`, `cvs`, `matches`, `recommendations` (Alembic)
+```
+Onboarding utilisateur
+  → sélection catégories métier (UI lisible, pas de codes ROME exposés)
+  → mapping interne catégorie → codes ROME
+  → stockage dans user_profiles.rome_codes
 
-### Jours 2-3 — Agent Collecte
+Upload CV (M3 — web app)
+  → extraction texte PDF (pdfplumber)
+  → embedding (text-embedding-3-small) → cvs table
+  → CV-analysis agent (GPT-4o-mini)
+      → extrait codes ROME + compétences
+      → affine user_profiles.rome_codes
+  → matching immédiat contre offres existantes en base
 
-- [ ] Inscription France Travail API (francetravail.io) — `client_id` / `client_secret`
-- [ ] Credentials dans Key Vault
-- [ ] OAuth2 + pagination — collecte quotidienne des offres fraîches
-- [ ] Normalisation JSON → Blob Storage (`offers-raw/`)
-- [ ] Message dans queue `offers-collected`
-- [ ] Dockerisation + deploy Container Apps
+GitHub Actions cron (2x/jour — 12:00 et 20:00 UTC)
+  → lit l'union des rome_codes depuis user_profiles
+  → fetch France Travail (OAuth2, pagination) pour ces codes
+  → embedding batch inline (text-embedding-3-small)
+  → stockage dans offers table (rome_code inclus)
+  → post message offer-ready {"run_date": "...", "count": N}
 
-### Jours 4-5 — Agent Analyse
+job-matching (Container App Job, queue: offer-ready)
+  → pour chaque CV en base :
+      filtre offres WHERE rome_code = ANY(user.rome_codes)
+      + vector search (cosine similarity pgvector)
+      + GPT-4o-mini : score + explication par offre
+  → stockage dans matches table
+  → post message match-ready
 
-- [ ] Consomme queue `offers-collected`
-- [ ] Appel GPT-4o-mini : extraction structurée (compétences, contrat, salaire, localisation)
-- [ ] Génération embedding via `text-embedding-3-small`
-- [ ] Écriture dans PostgreSQL (`offers` + vecteur pgvector)
-- [ ] Message dans queue `offers-analyzed`
-- [ ] Dockerisation + deploy Container Apps
+job-cv-review (Container App Job, queue: match-ready) ← DERNIÈRE FEATURE
+  → analyse CV vs top-3 offres matchées
+  → GPT-4o-mini : gaps de compétences + suggestions personnalisées
+  → notification utilisateur
+```
 
-### Jours 6-7 — Agent Matching
+### Schéma DB — nouveautés M2
 
-- [ ] Consomme queue `offers-analyzed`
-- [ ] Parsing CV utilisateur → embedding
-- [ ] Recherche similarité cosine via pgvector (HNSW index)
-- [ ] Score de matching (0-100)
-- [ ] Écriture dans PostgreSQL (`matches` table)
-- [ ] Message dans queue `matches-ready`
+```
+user_profiles (nouveau)
+  user_id        UUID PK
+  rome_codes     TEXT[]     -- ex: ['M1805', 'M1802']
+  job_categories TEXT[]     -- ex: ['Développement', 'Data']
+  location       TEXT
+  contract_types TEXT[]     -- CDI, CDD, freelance
+  created_at     TIMESTAMPTZ
 
-### Jours 8-9 — Agent Recommandations
+offers (existant — colonne à ajouter)
+  rome_code      TEXT       -- pour filtrage au matching
+```
 
-- [ ] Consomme queue `matches-ready`
-- [ ] GPT-4o-mini : résumé personnalisé ("Pourquoi cette offre correspond à votre profil")
-- [ ] Écriture dans PostgreSQL (`recommendations` table)
-- [ ] Notification utilisateur (email ou API push)
+### Jour 1 — Fondations Python ✅ TERMINÉ
 
-### Jour 10 — Validation pipeline end-to-end
+- [x] `shared/models.py` — tables `offers`, `cvs`, `matches`
+- [x] `shared/db.py`, `shared/bus.py`, `shared/embedder.py`
+- [x] Migrations Alembic — schéma initial
+- [x] Squelettes agents
 
-- [ ] Pipeline complet fonctionnel : offre collectée → recommandation générée
-- [ ] Test avec 100 offres réelles France Travail
-- [ ] Qualité du matching validée manuellement sur 10 cas
+### Jour 2 — Schéma DB M2 + nettoyage Terraform
+
+- [x] Terraform : suppression `job-offer-fetching` et `job-embedding-offer`
+- [x] Terraform : `job-matching` rebranchée sur `offer-ready`
+- [ ] Migration Alembic : table `user_profiles` + colonne `rome_code` sur `offers`
+- [ ] `shared/models.py` : modèle `UserProfile`
+
+### Jours 3-4 — GitHub Actions fetch + CV-analysis agent
+
+- [ ] `.github/workflows/offerFetch.yml` : cron 12:00/20:00 UTC
+- [ ] `scripts/fetch_offers.py` : lit ROME codes depuis DB → France Travail OAuth2 → pagination → embed batch → stocke → post `offer-ready`
+- [ ] Credentials France Travail dans Key Vault (`ft-client-id`, `ft-client-secret`)
+- [ ] Agent CV-analysis : GPT-4o-mini → extraction ROME codes + compétences → `user_profiles`
+
+### Jours 5-6 — Agent Matching
+
+- [ ] `agents/matching/main.py` : consomme `offer-ready`
+- [ ] Filtre offres par `rome_codes` du profil utilisateur
+- [ ] Vector search pgvector (cosine similarity) → top-N
+- [ ] GPT-4o-mini : score + explication par offre
+- [ ] Stockage dans `matches` + post `match-ready`
+- [ ] Dockerisation + déploiement image réelle sur Container App Job
+
+### Jour 7 — Validation pipeline end-to-end
+
+- [ ] Seed script : crée un profil test avec rome_codes → déclenche le pipeline complet
+- [ ] Pipeline complet : fetch → matching → match-ready
 - [ ] Traces visibles dans Application Insights
-- [ ] Première release via `release/v0.2.0` → staging → `main` → tag `v0.2.0`
-- [ ] DOC.md mis à jour
+- [ ] Qualité du matching validée manuellement sur 10 cas
+
+### Jours 8-9 — Agent CV-review ← DERNIÈRE FEATURE
+
+- [ ] `agents/cv_review/main.py` : consomme `match-ready`
+- [ ] Analyse CV vs top-3 offres matchées
+- [ ] GPT-4o-mini : gaps de compétences + suggestions personnalisées
+- [ ] Notification utilisateur (email ou push — à définir en M3)
+- [ ] Dockerisation + déploiement
+
+### Jour 10 — Release M2
+
+- [ ] Test end-to-end avec profils réels
+- [ ] Première release `release/v0.3.0` → `main` → tag `v0.3.0`
+- [ ] JOURNAL.md mis à jour
 
 ---
 
