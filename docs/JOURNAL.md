@@ -1581,3 +1581,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - Le défaut du module (300 s) est trop court — l'embedding de ~3 000 offres dépasse 5 minutes avec les retries sur les 429 OpenAI ; Azure tue le container avant la fin
 - 3600 s (1 heure) absorbe les retries sans approcher la limite maximale du module (86 400 s)
 - Les autres jobs (matching, cleanup) conservent le défaut de 300 s — leurs opérations sont bornées en temps
+
+---
+
+### PR #65 — fix(shared): set max_retries=10 on AzureOpenAI client
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/embedder.py` : `max_retries=10` ajouté sur le client `AzureOpenAI`
+
+**Décisions techniques :**
+- Le SDK OpenAI applique un backoff exponentiel avec jitter sur les 429 (rate limit) — `max_retries=10` donne jusqu'à ~10 tentatives avant d'abandonner, suffisant pour absorber les bursts de 429 lors de l'embedding de plusieurs milliers d'offres
+- Le défaut SDK est 2 retries — trop faible pour un batch de ~3 000 offres contre un quota de 10K TPM
