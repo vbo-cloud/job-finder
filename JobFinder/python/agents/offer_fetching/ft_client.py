@@ -7,7 +7,7 @@ import structlog
 
 FT_TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
 FT_OFFERS_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-FT_SCOPE = "api_offresdemploi_v2 o2dsillage"
+FT_SCOPE = "api_offresdemploiv2 o2dsoffre"
 PAGE_SIZE = 50
 
 logger = structlog.get_logger()
