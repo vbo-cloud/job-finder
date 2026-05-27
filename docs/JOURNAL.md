@@ -1450,3 +1450,18 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `AZURE_OPENAI_ENDPOINT` passé en `value` (pas secret-backed) : l'endpoint OpenAI est une URL non sensible
 - `ft-client-id` et `ft-client-secret` lus depuis le Key Vault via data sources : secrets déjà posés manuellement en KV, cohérent avec le pattern des autres agents
 - Horaires conservés à 12:00/20:00 UTC (cron `0 12,20 * * *`) : identiques à l'ancien `offerFetch.yml`
+
+---
+
+### PR #55 — feat(lz): add dedicated subnet for Container App Environment VNet injection
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/network.tf` : ajout de `module "subnet_cae"` — `/23` (`10.0.2.0/23`), délégation `Microsoft.App/environments` avec action `join/action`
+- `lz_dev/outputs.tf` : ajout de l'output `subnet_cae_id` exposant le resource ID du subnet pour référencement depuis `dev/`
+
+**Décisions techniques :**
+- `/23` (512 adresses) : taille minimale imposée par Azure pour un CAE en VNet injection — un `/24` est insuffisant et provoque une erreur à la création
+- Délégation `Microsoft.App/environments` obligatoire : Azure refuse d'injecter un CAE dans un subnet non délégué
+- Subnet géré dans `lz_dev` (pas dans `dev`) : appartient à la couche réseau partagée du hub, comme `subnet_app` et `subnet_postgresql`
+- `subnet_cae_id` exposé en output : `dev/container_apps.tf` le consommera via `data "terraform_remote_state"` pour injecter le CAE sans hardcoder l'ID
