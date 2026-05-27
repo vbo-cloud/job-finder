@@ -1,3 +1,13 @@
+data "terraform_remote_state" "lz_dev" {
+  backend = "azurerm"
+  config = {
+    resource_group_name  = "rg-jf-tfstate-frc"
+    storage_account_name = "stjftfstatefrc"
+    container_name       = "app-tfstates"
+    key                  = "lz-dev.tfstate"
+  }
+}
+
 # ==============================================================================
 # Container Apps Environment
 # ==============================================================================
@@ -14,6 +24,7 @@ module "container_app_environment" {
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   log_analytics_workspace_id = module.application_insights.workspace_id
+  infrastructure_subnet_id   = data.terraform_remote_state.lz_dev.outputs.subnet_cae_id
   environment                = var.env
   project                    = var.project
   owner                      = var.owner
