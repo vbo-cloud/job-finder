@@ -1546,3 +1546,14 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - `Config("alembic.ini")` résout depuis le répertoire courant (`/app`, le WORKDIR Docker) — le fichier est en réalité dans `/app/migrations/alembic.ini`
 - `os.path.dirname(__file__)` pointe vers le répertoire de `db.py` (`/app/shared`) quelle que soit la CWD au démarrage — le chemin construit est robuste à tout changement de WORKDIR ou de point d'entrée
+
+---
+
+### PR #62 — fix(offer-fetching): correct FT_SCOPE constant
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/ft_client.py` : `FT_SCOPE` corrigé — `"api_offresdemploi_v2 o2dsillage"` → `"api_offresdemploiv2 o2dsoffre"`
+
+**Décisions techniques :**
+- La valeur incorrecte provoquait une erreur 401 à la demande de token OAuth2 — le scope ne correspond pas aux APIs déclarées dans le portail France Travail
