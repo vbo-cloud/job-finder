@@ -192,7 +192,8 @@ def _embed_pending_offers() -> int:
             session.execute(
                 update(Offer)
                 .where(Offer.id == bindparam("_id"))
-                .values(embedding=bindparam("_embedding")),
+                .values(embedding=bindparam("_embedding"))
+                .execution_options(synchronize_session=None),
                 update_mappings,
             )
             session.commit()
