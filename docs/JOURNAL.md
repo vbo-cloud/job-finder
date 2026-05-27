@@ -1593,3 +1593,16 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - Le SDK OpenAI applique un backoff exponentiel avec jitter sur les 429 (rate limit) — `max_retries=10` donne jusqu'à ~10 tentatives avant d'abandonner, suffisant pour absorber les bursts de 429 lors de l'embedding de plusieurs milliers d'offres
 - Le défaut SDK est 2 retries — trop faible pour un batch de ~3 000 offres contre un quota de 10K TPM
+
+---
+
+### PR #66 — fix(dev): raise OpenAI capacity_tpm from 10 to 1000 for both deployments
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `envs/dev/openai.tf` : `capacity_tpm` passé de `10` à `1000` sur `gpt-4o-mini` et `text-embedding-3-small`
+
+**Décisions techniques :**
+- `capacity_tpm` est exprimé en milliers : `10` = 10 000 TPM, `1000` = 1 000 000 TPM
+- Chaque apply Terraform réinitialise cette valeur — toute augmentation manuelle dans le portail Azure est écrasée au prochain apply
+- 10 000 TPM était insuffisant pour embedder ~3 000 offres en un seul run, générant des 429 en cascade malgré les retries
