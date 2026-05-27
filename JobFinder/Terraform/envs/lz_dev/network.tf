@@ -28,7 +28,7 @@ module "subnet_cae" {
   name                 = "snet-${var.project}-lz-dev-${var.location_short}-cae"
   resource_group_name  = module.rg.name
   virtual_network_name = module.vnet.name
-  address_prefixes     = ["10.0.2.0/23"]
+  address_prefixes     = ["10.0.4.0/23"]
   delegation_name      = "cae-delegation"
   delegation_service   = "Microsoft.App/environments"
   delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
