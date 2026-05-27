@@ -1596,6 +1596,22 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
+### PR #67 — fix(shared): batch embed() calls to avoid TPM limit on large corpora
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/embedder.py` : ajout de la constante `BATCH_SIZE = 100` ; `embed()` découpe maintenant `texts` en chunks de 100, appelle l'API une fois par chunk, collecte les vecteurs en ordre, et attend `time.sleep(1)` entre chaque batch (pas après le dernier)
+- Log `embedding_batch_progress` ajouté à chaque chunk avec `batch`, `total_batches`, `count`
+- `import time` ajouté
+
+**Décisions techniques :**
+- Avec ~3 185 offres (~1,5 M tokens total), un seul appel API dépassait systématiquement le quota TPM, générant des 429 malgré les 10 retries — le batching résout le problème structurellement, indépendamment de la capacité TPM configurée
+- `BATCH_SIZE = 100` : taille empiriquement sûre pour rester sous les limites TPM Azure OpenAI, quelle que soit la taille du modèle d'embedding
+- `sleep(1)` inter-batch (pas après le dernier) : laisse le fenêtre TPM se réinitialiser partiellement sans bloquer inutilement en fin de run
+- La signature `embed(texts: list[str]) -> list[list[float]]` est inchangée — aucun impact sur les appelants
+
+---
+
 ### PR #66 — fix(dev): raise OpenAI capacity_tpm from 10 to 1000 for both deployments
 **Date :** 2026-05-27
 
