@@ -1568,3 +1568,16 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 **Décisions techniques :**
 - L'API France Travail peut retourner la même offre sur plusieurs pages consécutives — sans déduplication, l'upsert batcherait des doublons, entraînant des conflits `ON CONFLICT (ft_id)` sur plusieurs lignes du même batch dans la même transaction
+
+---
+
+### PR #64 — fix(dev): increase replica_timeout for job_offer_fetching to 3600s
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `envs/dev/container_apps.tf` : `replica_timeout_in_seconds = 3600` ajouté sur `module "job_offer_fetching"`
+
+**Décisions techniques :**
+- Le défaut du module (300 s) est trop court — l'embedding de ~3 000 offres dépasse 5 minutes avec les retries sur les 429 OpenAI ; Azure tue le container avant la fin
+- 3600 s (1 heure) absorbe les retries sans approcher la limite maximale du module (86 400 s)
+- Les autres jobs (matching, cleanup) conservent le défaut de 300 s — leurs opérations sont bornées en temps
