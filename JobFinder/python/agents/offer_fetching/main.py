@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import bindparam, case, func, literal_column, select, update
+from sqlalchemy import case, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -184,18 +184,14 @@ def _embed_pending_offers() -> int:
     vectors = embed(descriptions)
 
     update_mappings = [
-        {"_id": row.id, "_embedding": vector}
+        {"id": row.id, "embedding": vector}
         for row, vector in zip(pending, vectors)
     ]
     try:
         with get_session() as session:
-            session.execute(
-                update(Offer)
-                .where(Offer.id == bindparam("_id"))
-                .values(embedding=bindparam("_embedding"))
-                .execution_options(synchronize_session=None),  # bulk UPDATE with WHERE on tracked objects raises InvalidRequestError without this
-                update_mappings,
-            )
+            # ORM bulk UPDATE by PK — SQLAlchemy generates UPDATE ... WHERE id = ?
+            # from the PK in each dict; no .where() / .values() needed
+            session.execute(update(Offer), update_mappings)
             session.commit()
     except SQLAlchemyError:
         logger.error("embed_update_failed", count=len(pending), exc_info=True)
