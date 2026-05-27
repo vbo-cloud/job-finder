@@ -1,4 +1,6 @@
-"""GitHub Actions cron script — fetch, embed, and dispatch job offers.
+"""Offer fetching agent — fetch, embed, and dispatch job offers from France Travail.
+
+Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC).
 
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
@@ -17,7 +19,7 @@ from sqlalchemy import bindparam, case, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
-from scripts.ft_client import fetch_offers, get_access_token
+from ft_client import fetch_offers, get_access_token
 from shared.bus import send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
@@ -194,7 +196,7 @@ def _embed_pending_offers() -> int:
 
 
 def main() -> None:
-    """Run the offer-fetch cron: fetch, upsert, embed, and signal readiness."""
+    """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
     run_migrations()
 
     rome_codes = _get_active_rome_codes()
