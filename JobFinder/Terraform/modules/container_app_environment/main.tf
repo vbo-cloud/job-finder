@@ -9,6 +9,7 @@ resource "azurerm_container_app_environment" "this" {
   location                   = var.location
   resource_group_name        = var.resource_group_name
   log_analytics_workspace_id = var.log_analytics_workspace_id
+  infrastructure_subnet_id   = var.infrastructure_subnet_id
 
   tags = {
     environment = var.environment
@@ -18,6 +19,8 @@ resource "azurerm_container_app_environment" "this" {
   }
 
   lifecycle {
-    prevent_destroy = true
+    # prevent_destroy temporarily removed — infrastructure_subnet_id is immutable and forces
+    # a replace. Re-added in the follow-up PR immediately after successful apply.
+    create_before_destroy = true
   }
 }

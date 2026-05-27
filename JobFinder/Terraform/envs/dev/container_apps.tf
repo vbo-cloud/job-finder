@@ -14,6 +14,7 @@ module "container_app_environment" {
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   log_analytics_workspace_id = module.application_insights.workspace_id
+  infrastructure_subnet_id   = data.azurerm_subnet.lz_vnet_cae.id
   environment                = var.env
   project                    = var.project
   owner                      = var.owner
