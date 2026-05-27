@@ -1494,3 +1494,16 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `default = null` : les callers existants sans VNet injection ne sont pas impactés — le module reste rétrocompatible
 - `data "azurerm_subnet"` plutôt que `terraform_remote_state` : appel API ARM direct, cohérent avec le pattern `network.tf` ; sp-jf-github a déjà `Reader` sur le resource group `lz_dev` depuis PR #33
 - PR 3 minimale prévue après apply réussi pour remettre `prevent_destroy = true`
+
+---
+
+### PR #59 — fix(module): remove create_before_destroy from container_app_environment — incompatible with Azure naming constraint
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `modules/container_app_environment/main.tf` : suppression de `create_before_destroy = true` du bloc `lifecycle` — le bloc ne contient plus que le commentaire de rappel pour `prevent_destroy`
+
+**Décisions techniques :**
+- `create_before_destroy = true` impose à Terraform de créer la nouvelle ressource avant de détruire l'ancienne — Azure refuse car les deux porteraient le même nom (`cae-jf-dev-frc`) dans le même resource group simultanément
+- Le comportement par défaut (destroy puis create) est ici le seul viable : le CAE doit être détruit avant que le nouveau puisse être créé avec `infrastructure_subnet_id`
+- La branche `feature/m2-cae-restore-prevent-destroy` (PR #58) sera rebasée sur dev après merge de cette PR
