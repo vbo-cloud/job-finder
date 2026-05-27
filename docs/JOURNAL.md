@@ -1507,3 +1507,17 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `create_before_destroy = true` impose à Terraform de créer la nouvelle ressource avant de détruire l'ancienne — Azure refuse car les deux porteraient le même nom (`cae-jf-dev-frc`) dans le même resource group simultanément
 - Le comportement par défaut (destroy puis create) est ici le seul viable : le CAE doit être détruit avant que le nouveau puisse être créé avec `infrastructure_subnet_id`
 - La branche `feature/m2-cae-restore-prevent-destroy` (PR #58) sera rebasée sur dev après merge de cette PR
+
+---
+
+### PR #60 — fix(lz): grant Network Contributor on subnet_cae to sp-jf-github
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/rbac.tf` : ajout de `subnet_cae_network_contributor` dans `local.sp_role_assignments` — rôle `Network Contributor` scopé à `module.subnet_cae.id` pour `sp-jf-github`
+
+**Décisions techniques :**
+- Azure exige `Microsoft.Network/virtualNetworks/subnets/join/action` sur le subnet cible quand une ressource d'un resource group différent s'y attache — c'est le cas du CAE (`rg-jf-dev-frc-app`) sur le subnet (`rg-jf-lz-dev-frc`)
+- `Network Contributor` est le rôle minimal incluant cette action — `Contributor` sur le RG ne suffit pas car il ne couvre pas les opérations réseau cross-RG
+- Géré dans `lz_dev/rbac.tf` (par sp-jf-platform) : sp-jf-github ne peut pas s'auto-assigner ce rôle
+- Ce fix doit être appliqué (lz_dev apply) avant de re-tenter l'apply de dev pour la VNet injection du CAE
