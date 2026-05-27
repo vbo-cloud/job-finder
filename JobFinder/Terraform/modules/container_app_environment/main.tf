@@ -9,6 +9,7 @@ resource "azurerm_container_app_environment" "this" {
   location                   = var.location
   resource_group_name        = var.resource_group_name
   log_analytics_workspace_id = var.log_analytics_workspace_id
+  infrastructure_subnet_id   = var.infrastructure_subnet_id
 
   tags = {
     environment = var.environment
@@ -17,7 +18,7 @@ resource "azurerm_container_app_environment" "this" {
     protect     = "true"
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  # prevent_destroy temporarily removed to allow subnet injection (immutable property — forces replace).
+  # Re-add after successful apply.
+  lifecycle {}
 }
