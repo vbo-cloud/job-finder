@@ -3,6 +3,7 @@
 import os
 from contextlib import contextmanager
 from functools import lru_cache
+from pathlib import Path
 from typing import Generator
 
 import structlog
@@ -44,7 +45,8 @@ def get_session() -> Generator[Session, None, None]:
 def run_migrations() -> None:
     """Apply all pending Alembic migrations (idempotent)."""
     logger.info("alembic_migrations_started")
-    cfg = Config("alembic.ini")
+    alembic_cfg_path = (Path(__file__).parent / ".." / "migrations" / "alembic.ini").resolve()
+    cfg = Config(str(alembic_cfg_path))
     try:
         command.upgrade(cfg, "head")
     except Exception:  # alembic raises generic Exception on migration failure — no narrower type available

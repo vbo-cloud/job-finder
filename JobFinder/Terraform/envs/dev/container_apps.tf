@@ -14,6 +14,7 @@ module "container_app_environment" {
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   log_analytics_workspace_id = module.application_insights.workspace_id
+  infrastructure_subnet_id   = data.azurerm_subnet.lz_vnet_cae.id
   environment                = var.env
   project                    = var.project
   owner                      = var.owner
@@ -22,12 +23,27 @@ module "container_app_environment" {
 # ==============================================================================
 # Agent Jobs
 # ==============================================================================
-# Offer fetch and embedding are handled by GitHub Actions (offerFetch.yml) — not a CAJ.
 # Agent 1 — Matching (queue: offer-ready)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
+# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+
+data "azurerm_key_vault_secret" "ft_client_id" {
+  name         = "ft-client-id"
+  key_vault_id = module.keyvault.id
+}
+
+data "azurerm_key_vault_secret" "ft_client_secret" {
+  name         = "ft-client-secret"
+  key_vault_id = module.keyvault.id
+}
 
 locals {
   servicebus_connection_string = module.servicebus.primary_connection_string
+  postgresql_connection_string = module.postgresql.connection_string
+  openai_api_key               = module.openai.primary_key
+  openai_endpoint              = module.openai.endpoint
+  ft_client_id                 = data.azurerm_key_vault_secret.ft_client_id.value
+  ft_client_secret             = data.azurerm_key_vault_secret.ft_client_secret.value
 }
 
 # ==============================================================================
@@ -132,6 +148,75 @@ module "job_cleanup" {
     {
       name  = "CLEANUP_OFFER_MAX_AGE_DAYS"
       value = "60"
+    },
+  ]
+}
+
+# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Replaces offerFetch.yml GitHub Actions workflow.
+module "job_offer_fetching" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-fetch"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 12,20 * * *"
+  replica_timeout_in_seconds = 3600
+  image                      = "${module.container_registry.login_server}/agents/offer-fetching:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  secrets = [
+    {
+      name  = "servicebus-connection-string"
+      value = local.servicebus_connection_string
+    },
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "openai-api-key"
+      value = local.openai_api_key
+    },
+    {
+      name  = "ft-client-id"
+      value = local.ft_client_id
+    },
+    {
+      name  = "ft-client-secret"
+      value = local.ft_client_secret
+    },
+  ]
+  env_vars = [
+    {
+      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
+      secret_name = "servicebus-connection-string"
+    },
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name        = "FT_CLIENT_ID"
+      secret_name = "ft-client-id"
+    },
+    {
+      name        = "FT_CLIENT_SECRET"
+      secret_name = "ft-client-secret"
     },
   ]
 }

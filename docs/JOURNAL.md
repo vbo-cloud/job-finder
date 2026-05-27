@@ -871,6 +871,7 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-09                                         ║
+║   🏷️  v0.1.1                                                                 ║
 ║   Full dev infrastructure + two-SP CI/CD governance  (PRs #14 à #30)       ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1031,6 +1032,7 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-18                                         ║
+║   🏷️  v0.2.0                                                                 ║
 ║   Full dev infrastructure cleaned  (PRs #34 à #38)                         ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1392,6 +1394,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-27                                         ║
+║   🏷️  v0.3.0                                                                 ║
 ║   Milestone 2 — Agents Python + CI/CD images  (PRs #40 à #52)              ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1426,6 +1429,286 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 ║   Documentation                                                              ║
 ║   ─────────────────────────────────────────────────────────────────────      ║
 ║   • PR #52  Mise à jour journal — entrée merge PR #53                       ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+### PR #54 — feat: migrate offer-fetching from GitHub Actions to Container App Job
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : contenu de `scripts/fetch_offers.py` déplacé ici — import mis à jour (`from ft_client import` au lieu de `from scripts.ft_client import`)
+- `agents/offer_fetching/ft_client.py` : contenu de `scripts/ft_client.py` déplacé ici
+- `scripts/` : supprimé (dossier devenu vide)
+- `agents/offer_fetching/Dockerfile` : image Python 3.12-slim identique aux autres agents
+- `envs/dev/container_apps.tf` : ajout de `module "job_offer_fetching"` — trigger timer `0 12,20 * * *`, image ACR, UAMI caj, 5 secrets (servicebus, postgresql, openai-api-key, ft-client-id, ft-client-secret) ; data sources `ft_client_id` et `ft_client_secret` ajoutés ; locals étendus (`postgresql_connection_string`, `openai_api_key`, `openai_endpoint`, `ft_client_id`, `ft_client_secret`)
+- `.github/workflows/buildAgents.yml` : step build/push `offer-fetching` ajouté, build summary et `az containerapp job update` mis à jour pour `job-jf-dev-frc-fetch`
+- `.github/workflows/offerFetch.yml` : supprimé
+
+**Décisions techniques :**
+- `scripts/fetch_offers.py` et `scripts/ft_client.py` déplacés dans `agents/offer_fetching/` : la logique métier vit au plus près de l'agent qui l'exécute — `scripts/` n'a plus de raison d'exister
+- `from ft_client import` (import bare) : le CMD Docker `python agents/offer_fetching/main.py` ajoute `/app/agents/offer_fetching` à `sys.path[0]`, rendant `ft_client.py` importable directement
+- `AZURE_OPENAI_ENDPOINT` passé en `value` (pas secret-backed) : l'endpoint OpenAI est une URL non sensible
+- `ft-client-id` et `ft-client-secret` lus depuis le Key Vault via data sources : secrets déjà posés manuellement en KV, cohérent avec le pattern des autres agents
+- Horaires conservés à 12:00/20:00 UTC (cron `0 12,20 * * *`) : identiques à l'ancien `offerFetch.yml`
+
+---
+
+### PR #55 — feat(lz): add dedicated subnet for Container App Environment VNet injection
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/network.tf` : ajout de `module "subnet_cae"` — `/23` (`10.0.4.0/23`), délégation `Microsoft.App/environments` avec action `join/action`
+- `lz_dev/outputs.tf` : ajout de l'output `subnet_cae_id` exposant le resource ID du subnet pour référencement depuis `dev/`
+
+**Décisions techniques :**
+- `/23` (512 adresses) : taille minimale imposée par Azure pour un CAE en VNet injection — un `/24` est insuffisant et provoque une erreur à la création
+- Délégation `Microsoft.App/environments` obligatoire : Azure refuse d'injecter un CAE dans un subnet non délégué
+- Subnet géré dans `lz_dev` (pas dans `dev`) : appartient à la couche réseau partagée du hub, comme `subnet_app` et `subnet_postgresql`
+- `subnet_cae_id` exposé en output : `dev/container_apps.tf` le consommera via `data "terraform_remote_state"` pour injecter le CAE sans hardcoder l'ID
+
+---
+
+### PR #56 — fix(lz): correct subnet_cae CIDR — 10.0.2.0/23 → 10.0.4.0/23
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/network.tf` : `address_prefixes` de `module "subnet_cae"` corrigé de `10.0.2.0/23` à `10.0.4.0/23`
+
+**Décisions techniques :**
+- `10.0.2.0/23` couvre `10.0.2.0–10.0.3.255` et chevauche `10.0.3.0/24` déjà réservé par le subnet PostgreSQL
+- `10.0.4.0/23` (`10.0.4.0–10.0.5.255`) est libre dans le VNet `10.0.0.0/16`
+
+---
+
+### PR #57 — feat: inject Container App Environment into VNet via subnet_cae
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `modules/container_app_environment/variables.tf` : ajout de `infrastructure_subnet_id` (nullable, défaut `null`) — rétrocompatible, pas de VNet injection si non fourni
+- `modules/container_app_environment/main.tf` : `infrastructure_subnet_id` câblé sur la ressource ; `prevent_destroy = true` retiré temporairement (`lifecycle {}`) pour autoriser le destroy + recreate imposé par la propriété immutable
+- `envs/dev/network.tf` : ajout de `data "azurerm_subnet" "lz_vnet_cae"` — appel ARM direct sur le subnet existant, cohérent avec le pattern `lz_vnet_app`
+- `envs/dev/container_apps.tf` : `infrastructure_subnet_id` câblé sur `data.azurerm_subnet.lz_vnet_cae.id`
+
+**Décisions techniques :**
+- `infrastructure_subnet_id` est une propriété immutable sur `azurerm_container_app_environment` — toute modification force un destroy + recreate ; `prevent_destroy = true` bloquerait le plan, d'où son retrait temporaire
+- `default = null` : les callers existants sans VNet injection ne sont pas impactés — le module reste rétrocompatible
+- `data "azurerm_subnet"` plutôt que `terraform_remote_state` : appel API ARM direct, cohérent avec le pattern `network.tf` ; sp-jf-github a déjà `Reader` sur le resource group `lz_dev` depuis PR #33
+- PR 3 minimale prévue après apply réussi pour remettre `prevent_destroy = true`
+
+---
+
+### PR #59 — fix(module): remove create_before_destroy from container_app_environment — incompatible with Azure naming constraint
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `modules/container_app_environment/main.tf` : suppression de `create_before_destroy = true` du bloc `lifecycle` — le bloc ne contient plus que le commentaire de rappel pour `prevent_destroy`
+
+**Décisions techniques :**
+- `create_before_destroy = true` impose à Terraform de créer la nouvelle ressource avant de détruire l'ancienne — Azure refuse car les deux porteraient le même nom (`cae-jf-dev-frc`) dans le même resource group simultanément
+- Le comportement par défaut (destroy puis create) est ici le seul viable : le CAE doit être détruit avant que le nouveau puisse être créé avec `infrastructure_subnet_id`
+- La branche `feature/m2-cae-restore-prevent-destroy` (PR #58) sera rebasée sur dev après merge de cette PR
+
+---
+
+### PR #60 — fix(lz): grant Network Contributor on subnet_cae to sp-jf-github
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/rbac.tf` : ajout de `subnet_cae_network_contributor` dans `local.sp_role_assignments` — rôle `Network Contributor` scopé à `module.subnet_cae.id` pour `sp-jf-github`
+
+**Décisions techniques :**
+- Azure exige `Microsoft.Network/virtualNetworks/subnets/join/action` sur le subnet cible quand une ressource d'un resource group différent s'y attache — c'est le cas du CAE (`rg-jf-dev-frc-app`) sur le subnet (`rg-jf-lz-dev-frc`)
+- `Network Contributor` est le rôle minimal incluant cette action — `Contributor` sur le RG ne suffit pas car il ne couvre pas les opérations réseau cross-RG
+- Géré dans `lz_dev/rbac.tf` (par sp-jf-platform) : sp-jf-github ne peut pas s'auto-assigner ce rôle
+- Ce fix doit être appliqué (lz_dev apply) avant de re-tenter l'apply de dev pour la VNet injection du CAE
+
+---
+
+### PR #58 — feat(module): restore prevent_destroy on container_app_environment after VNet injection
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `modules/container_app_environment/main.tf` : `prevent_destroy = true` restauré dans le bloc `lifecycle` aux côtés de `create_before_destroy = true`
+
+**Décisions techniques :**
+- `prevent_destroy` avait été temporairement retiré en PR #57 pour permettre le replace forcé imposé par `infrastructure_subnet_id` (propriété immuable)
+- Une fois l'apply réussi, la protection est immédiatement rétablie — aucune fenêtre de vulnérabilité prolongée
+- Les deux flags coexistent : `create_before_destroy = true` assure la continuité lors d'un futur replace éventuel ; `prevent_destroy = true` bloque toute destruction accidentelle via Terraform
+
+---
+
+### PR #61 — fix(shared): resolve alembic.ini path from __file__ instead of WORKDIR
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/db.py` : `Config("alembic.ini")` remplacé par un chemin absolu construit dynamiquement depuis `__file__`
+
+**Décisions techniques :**
+- `Config("alembic.ini")` résout depuis le répertoire courant (`/app`, le WORKDIR Docker) — le fichier est en réalité dans `/app/migrations/alembic.ini`
+- `os.path.dirname(__file__)` pointe vers le répertoire de `db.py` (`/app/shared`) quelle que soit la CWD au démarrage — le chemin construit est robuste à tout changement de WORKDIR ou de point d'entrée
+
+---
+
+### PR #62 — fix(offer-fetching): correct FT_SCOPE constant
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/ft_client.py` : `FT_SCOPE` corrigé — `"api_offresdemploi_v2 o2dsillage"` → `"api_offresdemploiv2 o2dsoffre"`
+
+**Décisions techniques :**
+- La valeur incorrecte provoquait une erreur 401 à la demande de token OAuth2 — le scope ne correspond pas aux APIs déclarées dans le portail France Travail
+
+---
+
+### PR #63 — fix(offer-fetching): deduplicate raw_offers by ft_id before upsert
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : déduplication par `ft_id` ajoutée au début de `_upsert_offers`, avant la construction de `values`
+
+**Décisions techniques :**
+- L'API France Travail peut retourner la même offre sur plusieurs pages consécutives — sans déduplication, l'upsert batcherait des doublons, entraînant des conflits `ON CONFLICT (ft_id)` sur plusieurs lignes du même batch dans la même transaction
+
+---
+
+### PR #64 — fix(dev): increase replica_timeout for job_offer_fetching to 3600s
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `envs/dev/container_apps.tf` : `replica_timeout_in_seconds = 3600` ajouté sur `module "job_offer_fetching"`
+
+**Décisions techniques :**
+- Le défaut du module (300 s) est trop court — l'embedding de ~3 000 offres dépasse 5 minutes avec les retries sur les 429 OpenAI ; Azure tue le container avant la fin
+- 3600 s (1 heure) absorbe les retries sans approcher la limite maximale du module (86 400 s)
+- Les autres jobs (matching, cleanup) conservent le défaut de 300 s — leurs opérations sont bornées en temps
+
+---
+
+### PR #65 — fix(shared): set max_retries=10 on AzureOpenAI client
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/embedder.py` : `max_retries=10` ajouté sur le client `AzureOpenAI`
+
+**Décisions techniques :**
+- Le SDK OpenAI applique un backoff exponentiel avec jitter sur les 429 (rate limit) — `max_retries=10` donne jusqu'à ~10 tentatives avant d'abandonner, suffisant pour absorber les bursts de 429 lors de l'embedding de plusieurs milliers d'offres
+- Le défaut SDK est 2 retries — trop faible pour un batch de ~3 000 offres contre un quota de 10K TPM
+
+---
+
+### PR #70 — fix(shared): materialize Service Bus msg.body generator before json.loads
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/bus.py` : `json.loads(msg.body)` → `json.loads(b"".join(msg.body))`
+
+**Décisions techniques :**
+- Le SDK Azure Service Bus retourne `msg.body` comme un générateur de chunks de bytes (format AMQP), pas un `str` ou `bytes` directement — `json.loads()` lève `TypeError: the JSON object must be str, bytes or bytearray, not generator`
+- `b"".join(msg.body)` matérialise le générateur en un seul objet `bytes` que `json.loads()` peut parser
+
+---
+
+### PR #69 — fix(offer-fetching): correct bulk embedding UPDATE to ORM bulk-by-PK pattern
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : remplacement du bulk `UPDATE` via `bindparam` par le pattern ORM bulk UPDATE par clé primaire de SQLAlchemy 2.x — clés du dict passées de `_id`/`_embedding` à `id`/`embedding`, suppression de `.where()`, `.values()` et `.execution_options(synchronize_session=None)`, suppression de l'import `bindparam` devenu inutile
+
+**Décisions techniques :**
+- SQLAlchemy 2.x route `session.execute(update(Model), list_of_dicts)` via le chemin "ORM bulk UPDATE by primary key" — il génère lui-même `UPDATE ... WHERE id = ?` à partir de la clé PK dans chaque dict ; `.where()` et `.values()` sont ignorés sur ce chemin, ce qui était la source de l'`InvalidRequestError: No primary key value supplied` (la clé `_id` ne correspondait pas au nom de colonne PK)
+- `bindparam` n'est plus utilisé dans le fichier — import supprimé
+
+---
+
+### PR #68 — fix(offer-fetching): bulk UPDATE synchronize_session + ft_client 429 retry
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : ajout de `.execution_options(synchronize_session=None)` sur le statement `update(Offer)` dans `_embed_pending_offers()` — corrige le `InvalidRequestError` SQLAlchemy lors du bulk UPDATE des embeddings
+- `agents/offer_fetching/ft_client.py` : ajout de `import time`, constantes `MAX_RETRIES = 5` et `INTER_PAGE_SLEEP = 0.5` ; boucle de retry sur HTTP 429 dans `fetch_offers()` — lit le header `Retry-After` (fallback 2s) et sleep avant chaque nouvelle tentative ; `time.sleep(INTER_PAGE_SLEEP)` ajouté entre les pages (pas après la dernière)
+
+**Décisions techniques :**
+- `synchronize_session=None` : SQLAlchemy refuse par défaut de synchroniser la session identity map lors d'un `UPDATE` bulk avec `WHERE` additionnel — l'option `None` bypasse cette synchronisation, ce qui est correct ici car les objets `Offer` chargés dans la session précédente ne sont plus référencés
+- `MAX_RETRIES = 5` avec `for/else` Python : si les 5 tentatives retournent toutes 429, le `else` raise une `HTTPError` explicite — le `for/else` évite un flag booléen et reste idiomatique
+- `Retry-After` fallback à 2s : si le header est absent (comportement non standard de certaines API), on attend 2s avant de réessayer plutôt que de réessayer immédiatement
+- `INTER_PAGE_SLEEP = 0.5` uniquement entre les pages intermédiaires (pas après la dernière) : réduit la pression sur le rate limiter sans allonger la durée totale d'un run sur une série courte de pages
+
+---
+
+### PR #67 — fix(shared): batch embed() calls to avoid TPM limit on large corpora
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/embedder.py` : ajout de la constante `BATCH_SIZE = 100` ; `embed()` découpe maintenant `texts` en chunks de 100, appelle l'API une fois par chunk, collecte les vecteurs en ordre, et attend `time.sleep(1)` entre chaque batch (pas après le dernier)
+- Log `embedding_batch_progress` ajouté à chaque chunk avec `batch`, `total_batches`, `count`
+- `import time` ajouté
+
+**Décisions techniques :**
+- Avec ~3 185 offres (~1,5 M tokens total), un seul appel API dépassait systématiquement le quota TPM, générant des 429 malgré les 10 retries — le batching résout le problème structurellement, indépendamment de la capacité TPM configurée
+- `BATCH_SIZE = 100` : taille empiriquement sûre pour rester sous les limites TPM Azure OpenAI, quelle que soit la taille du modèle d'embedding
+- `sleep(1)` inter-batch (pas après le dernier) : laisse le fenêtre TPM se réinitialiser partiellement sans bloquer inutilement en fin de run
+- La signature `embed(texts: list[str]) -> list[list[float]]` est inchangée — aucun impact sur les appelants
+
+---
+
+### PR #66 — fix(dev): raise OpenAI capacity_tpm from 10 to 1000 for both deployments
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `envs/dev/openai.tf` : `capacity_tpm` passé de `10` à `1000` sur `gpt-4o-mini` et `text-embedding-3-small`
+
+**Décisions techniques :**
+- `capacity_tpm` est exprimé en milliers : `10` = 10 000 TPM, `1000` = 1 000 000 TPM
+- Chaque apply Terraform réinitialise cette valeur — toute augmentation manuelle dans le portail Azure est écrasée au prochain apply
+- 10 000 TPM était insuffisant pour embedder ~3 000 offres en un seul run, générant des 429 en cascade malgré les retries
+
+---
+
+### PR #71 — docs: mise à jour JOURNAL.md — entrée merge PR #72 et tags versions
+**Date :** 2026-05-28
+
+**Réalisé :**
+- Ajout de l'entrée de merge PR #72 dans `docs/JOURNAL.md` — récapitulatif des PRs #54 à #71 dans le format de PR #53
+- Ajout des tags de version sur toutes les entrées de merge dev→main (`v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.4.0`)
+
+---
+
+### PR #72
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-28                                         ║
+║   🏷️  v0.4.0 — Pipeline end-to-end opérationnel  (PRs #54 à #71)           ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Container App Job — offer-fetching                                         ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #54  Migration offer-fetching GitHub Actions → Container App Job     ║
+║   • PR #55/#56  Subnet CAE /23 (10.0.4.0/23, fix CIDR overlap)             ║
+║   • PR #57/#58/#59  VNet injection CAE — infrastructure_subnet_id,          ║
+║             prevent_destroy restauré, create_before_destroy retiré          ║
+║   • PR #60  Network Contributor sur subnet_cae → sp-jf-github               ║
+║                                                                              ║
+║   Python — Pipeline fixes                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #61  Fix alembic.ini path (__file__ au lieu de WORKDIR)              ║
+║   • PR #62  Fix FT_SCOPE OAuth (api_offresdemploiv2 + o2dsoffre)            ║
+║   • PR #63  Déduplication raw_offers avant upsert (CardinalityViolation)    ║
+║   • PR #64  replica_timeout 300s → 3600s (embedding ~3000 offres)          ║
+║   • PR #65  max_retries=10 sur AzureOpenAI client                           ║
+║   • PR #66  capacity_tpm 10 → 1000 (10K → 1M TPM)                         ║
+║   • PR #67  Batching embed() — BATCH_SIZE=100, sleep(1) inter-batch         ║
+║   • PR #68  synchronize_session=None + retry 429 FT avec Retry-After        ║
+║   • PR #69  ORM bulk UPDATE par PK (fix InvalidRequestError SQLAlchemy)     ║
+║   • PR #70  Service Bus msg.body — b"".join() avant json.loads()            ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #71  Mise à jour journal + tags versions sur tous les merges main     ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```

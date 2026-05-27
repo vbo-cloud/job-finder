@@ -6,6 +6,7 @@ resource "azurerm_container_app_job" "this" {
   location                     = var.location
   resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
+  workload_profile_name        = "Consumption"
 
   replica_timeout_in_seconds = var.replica_timeout_in_seconds
   replica_retry_limit        = var.replica_retry_limit

@@ -1,4 +1,6 @@
-"""GitHub Actions cron script — fetch, embed, and dispatch job offers.
+"""Offer fetching agent — fetch, embed, and dispatch job offers from France Travail.
+
+Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC).
 
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
@@ -13,11 +15,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import bindparam, case, func, literal_column, select, update
+from sqlalchemy import case, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
-from scripts.ft_client import fetch_offers, get_access_token
+from ft_client import fetch_offers, get_access_token
 from shared.bus import send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
@@ -78,6 +80,15 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     """
     if not raw_offers:
         return 0
+
+    # Dédupliquer par ft_id — France Travail peut retourner la même offre sur plusieurs pages
+    seen: set[str] = set()
+    unique_offers: list[dict] = []
+    for raw in raw_offers:
+        if raw["id"] not in seen:
+            seen.add(raw["id"])
+            unique_offers.append(raw)
+    raw_offers = unique_offers
 
     now = datetime.now(timezone.utc)
     values = []
@@ -173,17 +184,14 @@ def _embed_pending_offers() -> int:
     vectors = embed(descriptions)
 
     update_mappings = [
-        {"_id": row.id, "_embedding": vector}
+        {"id": row.id, "embedding": vector}
         for row, vector in zip(pending, vectors)
     ]
     try:
         with get_session() as session:
-            session.execute(
-                update(Offer)
-                .where(Offer.id == bindparam("_id"))
-                .values(embedding=bindparam("_embedding")),
-                update_mappings,
-            )
+            # ORM bulk UPDATE by PK — SQLAlchemy generates UPDATE ... WHERE id = ?
+            # from the PK in each dict; no .where() / .values() needed
+            session.execute(update(Offer), update_mappings)
             session.commit()
     except SQLAlchemyError:
         logger.error("embed_update_failed", count=len(pending), exc_info=True)
@@ -194,7 +202,7 @@ def _embed_pending_offers() -> int:
 
 
 def main() -> None:
-    """Run the offer-fetch cron: fetch, upsert, embed, and signal readiness."""
+    """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
     run_migrations()
 
     rome_codes = _get_active_rome_codes()

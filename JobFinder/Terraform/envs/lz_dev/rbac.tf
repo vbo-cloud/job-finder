@@ -58,6 +58,12 @@ locals {
       scope                = module.rg_data.id
       role_definition_name = "Contributor"
     }
+    # Network Contributor on subnet_cae grants Microsoft.Network/virtualNetworks/subnets/join/action
+    # required by Azure when attaching a resource (CAE) from a different resource group than the subnet.
+    subnet_cae_network_contributor = {
+      scope                = module.subnet_cae.id
+      role_definition_name = "Network Contributor"
+    }
   }
 }
 

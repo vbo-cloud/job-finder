@@ -64,7 +64,7 @@ def receive_message(queue_name: str) -> Generator[dict, None, None]:
                 return
             msg = messages[0]
             try:
-                yield json.loads(msg.body)
+                yield json.loads(b"".join(msg.body))
                 receiver.complete_message(msg)
                 logger.info("servicebus_message_completed", queue=queue_name)
             except Exception:  # re-raise intentional — context manager pattern

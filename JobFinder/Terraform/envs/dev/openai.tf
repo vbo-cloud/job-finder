@@ -20,13 +20,13 @@ module "openai" {
     "gpt-4o-mini" = {
       model_name    = "gpt-4o-mini"
       model_version = "2024-07-18"
-      capacity_tpm  = 10               # 10K tokens per minute — sufficient for dev
+      capacity_tpm  = 1000             # 1M tokens per minute
       sku_name      = "GlobalStandard" # Standard not yet available in francecentral for this model
     }
     "text-embedding-3-small" = {
       model_name    = "text-embedding-3-small"
       model_version = "1"
-      capacity_tpm  = 10
+      capacity_tpm  = 1000             # 1M tokens per minute
       sku_name      = "GlobalStandard" # Standard not yet available in francecentral for this model
     }
   }
