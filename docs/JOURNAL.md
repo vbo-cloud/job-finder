@@ -1557,3 +1557,14 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 **Décisions techniques :**
 - La valeur incorrecte provoquait une erreur 401 à la demande de token OAuth2 — le scope ne correspond pas aux APIs déclarées dans le portail France Travail
+
+---
+
+### PR #63 — fix(offer-fetching): deduplicate raw_offers by ft_id before upsert
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : déduplication par `ft_id` ajoutée au début de `_upsert_offers`, avant la construction de `values`
+
+**Décisions techniques :**
+- L'API France Travail peut retourner la même offre sur plusieurs pages consécutives — sans déduplication, l'upsert batcherait des doublons, entraînant des conflits `ON CONFLICT (ft_id)` sur plusieurs lignes du même batch dans la même transaction

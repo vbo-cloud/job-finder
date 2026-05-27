@@ -81,6 +81,15 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     if not raw_offers:
         return 0
 
+    # Dédupliquer par ft_id — France Travail peut retourner la même offre sur plusieurs pages
+    seen: set[str] = set()
+    unique_offers: list[dict] = []
+    for raw in raw_offers:
+        if raw["id"] not in seen:
+            seen.add(raw["id"])
+            unique_offers.append(raw)
+    raw_offers = unique_offers
+
     now = datetime.now(timezone.utc)
     values = []
     for raw in raw_offers:
