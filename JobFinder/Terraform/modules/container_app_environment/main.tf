@@ -11,6 +11,13 @@ resource "azurerm_container_app_environment" "this" {
   log_analytics_workspace_id = var.log_analytics_workspace_id
   infrastructure_subnet_id   = var.infrastructure_subnet_id
 
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+    maximum_count         = 0
+    minimum_count         = 0
+  }
+
   tags = {
     environment = var.environment
     project     = var.project
@@ -19,7 +26,6 @@ resource "azurerm_container_app_environment" "this" {
   }
 
   lifecycle {
-    # prevent_destroy temporarily removed — infrastructure_subnet_id is immutable and forces
-    # a replace. Re-added in feature/m2-cae-restore-prevent-destroy after successful apply.
+    prevent_destroy       = true
   }
 }
