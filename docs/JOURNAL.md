@@ -1486,10 +1486,11 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Réalisé :**
 - `modules/container_app_environment/variables.tf` : ajout de `infrastructure_subnet_id` (nullable, défaut `null`) — rétrocompatible, pas de VNet injection si non fourni
 - `modules/container_app_environment/main.tf` : `infrastructure_subnet_id` câblé sur la ressource ; `prevent_destroy = true` retiré temporairement (`lifecycle {}`) pour autoriser le destroy + recreate imposé par la propriété immutable
-- `envs/dev/container_apps.tf` : ajout de `data "terraform_remote_state" "lz_dev"` lisant `lz-dev.tfstate` depuis `app-tfstates` ; `infrastructure_subnet_id` passé depuis l'output `subnet_cae_id`
+- `envs/dev/network.tf` : ajout de `data "azurerm_subnet" "lz_vnet_cae"` — appel ARM direct sur le subnet existant, cohérent avec le pattern `lz_vnet_app`
+- `envs/dev/container_apps.tf` : `infrastructure_subnet_id` câblé sur `data.azurerm_subnet.lz_vnet_cae.id`
 
 **Décisions techniques :**
 - `infrastructure_subnet_id` est une propriété immutable sur `azurerm_container_app_environment` — toute modification force un destroy + recreate ; `prevent_destroy = true` bloquerait le plan, d'où son retrait temporaire
 - `default = null` : les callers existants sans VNet injection ne sont pas impactés — le module reste rétrocompatible
-- Remote state dans `app-tfstates` (container de sp-jf-github) et non `lz-tfstates` : le state lz_dev est lisible par sp-jf-github depuis PR #32 (`Reader` sur le storage account)
+- `data "azurerm_subnet"` plutôt que `terraform_remote_state` : appel API ARM direct, cohérent avec le pattern `network.tf` ; sp-jf-github a déjà `Reader` sur le resource group `lz_dev` depuis PR #33
 - PR 3 minimale prévue après apply réussi pour remettre `prevent_destroy = true`
