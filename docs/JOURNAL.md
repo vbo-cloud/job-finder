@@ -1376,3 +1376,56 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - UAMI déplacée dans `rg_core` (et non `rg_app`) : la Managed Identity est une ressource d'infrastructure partagée, pas une ressource applicative
 - `az containerapp job update --image` : force le job à utiliser l'image SHA précis du commit — évite les dérives de `:latest` entre deux builds
 - Séquencement d'apply : lz_dev doit être appliqué avant dev (la data source échoue si la UAMI n'existe pas)
+
+---
+
+### PR #52 — docs: mise à jour JOURNAL.md — entrée merge PR #53
+**Date :** 2026-05-27
+
+**Réalisé :**
+- Ajout de l'entrée de merge PR #53 dans `docs/JOURNAL.md` — récapitulatif des PRs #40 à #52 dans le format de PR #39
+
+---
+
+### PR #53
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-27                                         ║
+║   Milestone 2 — Agents Python + CI/CD images  (PRs #40 à #52)              ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Architecture M2 — Pivot                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #40  Suppression job-embedding-cv et queue cv-ready                  ║
+║   • PR #43  Cron GitHub Actions offer-fetch, schéma user_profiles,          ║
+║             pivot Terraform (jobs offer-fetching + embedding supprimés)     ║
+║                                                                              ║
+║   Agents Python                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #41  Couche shared (models, db, bus, embedder) + scaffolding         ║
+║   • PR #42  Alembic — migration initiale (tables offers, cvs, matches)      ║
+║   • PR #44  Agent matching — pgvector cosine similarity, upsert matches     ║
+║   • PR #45  Agent cleanup — purge offres périmées + matches orphelins       ║
+║                                                                              ║
+║   CI/CD & images Docker                                                      ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #46  Workflow build/push images Docker → ACR (matching, cleanup)     ║
+║             tags :latest + :sha, layer cache ACR, az containerapp update    ║
+║                                                                              ║
+║   Infrastructure Terraform                                                   ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #47  RBAC Admin conditionné sp-jf-github — inapplicable              ║
+║             (condition ABAC sp-jf-platform) ; remplacé par PR #51           ║
+║   • PR #48  Module container_app_job — support UAMI et registry             ║
+║   • PR #49  UAMI caj + rôle AcrPull sur ACR pour les Container App Jobs     ║
+║   • PR #50  Câblage secrets et images ACR (job_matching + job_cleanup)      ║
+║   • PR #51  UAMI migrée dans lz_dev, gérée par sp-jf-platform               ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #52  Mise à jour journal — entrée merge PR #53                       ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
