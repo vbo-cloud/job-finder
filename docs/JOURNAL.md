@@ -1521,3 +1521,16 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `Network Contributor` est le rôle minimal incluant cette action — `Contributor` sur le RG ne suffit pas car il ne couvre pas les opérations réseau cross-RG
 - Géré dans `lz_dev/rbac.tf` (par sp-jf-platform) : sp-jf-github ne peut pas s'auto-assigner ce rôle
 - Ce fix doit être appliqué (lz_dev apply) avant de re-tenter l'apply de dev pour la VNet injection du CAE
+
+---
+
+### PR #58 — feat(module): restore prevent_destroy on container_app_environment after VNet injection
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `modules/container_app_environment/main.tf` : `prevent_destroy = true` restauré dans le bloc `lifecycle` aux côtés de `create_before_destroy = true`
+
+**Décisions techniques :**
+- `prevent_destroy` avait été temporairement retiré en PR #57 pour permettre le replace forcé imposé par `infrastructure_subnet_id` (propriété immuable)
+- Une fois l'apply réussi, la protection est immédiatement rétablie — aucune fenêtre de vulnérabilité prolongée
+- Les deux flags coexistent : `create_before_destroy = true` assure la continuité lors d'un futur replace éventuel ; `prevent_destroy = true` bloque toute destruction accidentelle via Terraform
