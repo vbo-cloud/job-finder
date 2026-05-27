@@ -1468,7 +1468,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #57 — fix(lz): correct subnet_cae CIDR — 10.0.2.0/23 → 10.0.4.0/23
+### PR #56 — fix(lz): correct subnet_cae CIDR — 10.0.2.0/23 → 10.0.4.0/23
 **Date :** 2026-05-27
 
 **Réalisé :**
