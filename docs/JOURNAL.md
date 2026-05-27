@@ -1534,3 +1534,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `prevent_destroy` avait été temporairement retiré en PR #57 pour permettre le replace forcé imposé par `infrastructure_subnet_id` (propriété immuable)
 - Une fois l'apply réussi, la protection est immédiatement rétablie — aucune fenêtre de vulnérabilité prolongée
 - Les deux flags coexistent : `create_before_destroy = true` assure la continuité lors d'un futur replace éventuel ; `prevent_destroy = true` bloque toute destruction accidentelle via Terraform
+
+---
+
+### PR #61 — fix(shared): resolve alembic.ini path from __file__ instead of WORKDIR
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/db.py` : `Config("alembic.ini")` remplacé par un chemin absolu construit dynamiquement depuis `__file__`
+
+**Décisions techniques :**
+- `Config("alembic.ini")` résout depuis le répertoire courant (`/app`, le WORKDIR Docker) — le fichier est en réalité dans `/app/migrations/alembic.ini`
+- `os.path.dirname(__file__)` pointe vers le répertoire de `db.py` (`/app/shared`) quelle que soit la CWD au démarrage — le chemin construit est robuste à tout changement de WORKDIR ou de point d'entrée
