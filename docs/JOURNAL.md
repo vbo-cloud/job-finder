@@ -1596,6 +1596,21 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
+### PR #68 — fix(offer-fetching): bulk UPDATE synchronize_session + ft_client 429 retry
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `agents/offer_fetching/main.py` : ajout de `.execution_options(synchronize_session=None)` sur le statement `update(Offer)` dans `_embed_pending_offers()` — corrige le `InvalidRequestError` SQLAlchemy lors du bulk UPDATE des embeddings
+- `agents/offer_fetching/ft_client.py` : ajout de `import time`, constantes `MAX_RETRIES = 5` et `INTER_PAGE_SLEEP = 0.5` ; boucle de retry sur HTTP 429 dans `fetch_offers()` — lit le header `Retry-After` (fallback 2s) et sleep avant chaque nouvelle tentative ; `time.sleep(INTER_PAGE_SLEEP)` ajouté entre les pages (pas après la dernière)
+
+**Décisions techniques :**
+- `synchronize_session=None` : SQLAlchemy refuse par défaut de synchroniser la session identity map lors d'un `UPDATE` bulk avec `WHERE` additionnel — l'option `None` bypasse cette synchronisation, ce qui est correct ici car les objets `Offer` chargés dans la session précédente ne sont plus référencés
+- `MAX_RETRIES = 5` avec `for/else` Python : si les 5 tentatives retournent toutes 429, le `else` raise une `HTTPError` explicite — le `for/else` évite un flag booléen et reste idiomatique
+- `Retry-After` fallback à 2s : si le header est absent (comportement non standard de certaines API), on attend 2s avant de réessayer plutôt que de réessayer immédiatement
+- `INTER_PAGE_SLEEP = 0.5` uniquement entre les pages intermédiaires (pas après la dernière) : réduit la pression sur le rate limiter sans allonger la durée totale d'un run sur une série courte de pages
+
+---
+
 ### PR #67 — fix(shared): batch embed() calls to avoid TPM limit on large corpora
 **Date :** 2026-05-27
 
