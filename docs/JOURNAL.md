@@ -1596,6 +1596,18 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
+### PR #70 — fix(shared): materialize Service Bus msg.body generator before json.loads
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `shared/bus.py` : `json.loads(msg.body)` → `json.loads(b"".join(msg.body))`
+
+**Décisions techniques :**
+- Le SDK Azure Service Bus retourne `msg.body` comme un générateur de chunks de bytes (format AMQP), pas un `str` ou `bytes` directement — `json.loads()` lève `TypeError: the JSON object must be str, bytes or bytearray, not generator`
+- `b"".join(msg.body)` matérialise le générateur en un seul objet `bytes` que `json.loads()` peut parser
+
+---
+
 ### PR #69 — fix(offer-fetching): correct bulk embedding UPDATE to ORM bulk-by-PK pattern
 **Date :** 2026-05-27
 
