@@ -23,6 +23,7 @@ _client = AzureOpenAI(
     azure_endpoint=_endpoint,
     api_key=_api_key,
     api_version=_API_VERSION,
+    max_retries=10,
 )
 
 
