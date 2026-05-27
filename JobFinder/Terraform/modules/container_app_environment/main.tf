@@ -18,7 +18,9 @@ resource "azurerm_container_app_environment" "this" {
     protect     = "true"
   }
 
-  # prevent_destroy temporarily removed to allow subnet injection (immutable property — forces replace).
-  # Re-add after successful apply.
-  lifecycle {}
+  lifecycle {
+    # prevent_destroy temporarily removed — infrastructure_subnet_id is immutable and forces
+    # a replace. Re-added in the follow-up PR immediately after successful apply.
+    create_before_destroy = true
+  }
 }

@@ -35,6 +35,7 @@ variable "owner" {
 
 variable "infrastructure_subnet_id" {
   type        = string
+  nullable    = true
   default     = null
   description = "Resource ID of the subnet to inject the Container App Environment into. Must be a /23 or larger, delegated to Microsoft.App/environments. Null = no VNet injection (Consumption-only mode)."
 }
