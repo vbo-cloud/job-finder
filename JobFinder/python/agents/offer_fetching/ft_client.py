@@ -107,6 +107,7 @@ def fetch_offers(token: str, rome_code: str, min_date: str | None = None) -> lis
                 )
                 time.sleep(retry_after)
             else:
+                # `response` holds the last 429 response from the loop
                 logger.error("ft_fetch_max_retries_exceeded", rome_code=rome_code, max_retries=MAX_RETRIES)
                 raise requests.HTTPError(f"Max retries ({MAX_RETRIES}) exceeded on 429", response=response)
 

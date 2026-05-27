@@ -193,7 +193,7 @@ def _embed_pending_offers() -> int:
                 update(Offer)
                 .where(Offer.id == bindparam("_id"))
                 .values(embedding=bindparam("_embedding"))
-                .execution_options(synchronize_session=None),
+                .execution_options(synchronize_session=None),  # bulk UPDATE with WHERE on tracked objects raises InvalidRequestError without this
                 update_mappings,
             )
             session.commit()
