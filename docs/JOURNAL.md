@@ -1457,7 +1457,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Date :** 2026-05-27
 
 **Réalisé :**
-- `lz_dev/network.tf` : ajout de `module "subnet_cae"` — `/23` (`10.0.2.0/23`), délégation `Microsoft.App/environments` avec action `join/action`
+- `lz_dev/network.tf` : ajout de `module "subnet_cae"` — `/23` (`10.0.4.0/23`), délégation `Microsoft.App/environments` avec action `join/action`
 - `lz_dev/outputs.tf` : ajout de l'output `subnet_cae_id` exposant le resource ID du subnet pour référencement depuis `dev/`
 
 **Décisions techniques :**
@@ -1465,3 +1465,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - Délégation `Microsoft.App/environments` obligatoire : Azure refuse d'injecter un CAE dans un subnet non délégué
 - Subnet géré dans `lz_dev` (pas dans `dev`) : appartient à la couche réseau partagée du hub, comme `subnet_app` et `subnet_postgresql`
 - `subnet_cae_id` exposé en output : `dev/container_apps.tf` le consommera via `data "terraform_remote_state"` pour injecter le CAE sans hardcoder l'ID
+
+---
+
+### PR #57 — fix(lz): correct subnet_cae CIDR — 10.0.2.0/23 → 10.0.4.0/23
+**Date :** 2026-05-27
+
+**Réalisé :**
+- `lz_dev/network.tf` : `address_prefixes` de `module "subnet_cae"` corrigé de `10.0.2.0/23` à `10.0.4.0/23`
+
+**Décisions techniques :**
+- `10.0.2.0/23` couvre `10.0.2.0–10.0.3.255` et chevauche `10.0.3.0/24` déjà réservé par le subnet PostgreSQL
+- `10.0.4.0/23` (`10.0.4.0–10.0.5.255`) est libre dans le VNet `10.0.0.0/16`
