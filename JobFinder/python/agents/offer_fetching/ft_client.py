@@ -1,6 +1,7 @@
 """France Travail API client — authenticate and paginate job offer results."""
 
 import os
+import time
 
 import requests
 import structlog
@@ -8,6 +9,8 @@ import structlog
 FT_TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
 FT_OFFERS_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
 FT_SCOPE = "api_offresdemploiv2 o2dsoffre"
+INTER_PAGE_SLEEP = 0.5
+MAX_RETRIES = 5
 PAGE_SIZE = 50
 
 logger = structlog.get_logger()
@@ -81,18 +84,36 @@ def fetch_offers(token: str, rome_code: str, min_date: str | None = None) -> lis
         http.headers.update({"Authorization": f"Bearer {token}"})
         while True:
             end = start + PAGE_SIZE - 1
-            logger.info("ft_fetch_offers_page", rome_code=rome_code, range=f"{start}-{end}")
-            params: dict[str, str] = {"range": f"{start}-{end}", "codeROME": rome_code}
+            range_str = f"{start}-{end}"
+            logger.info("ft_fetch_offers_page", rome_code=rome_code, range=range_str)
+            params: dict[str, str] = {"range": range_str, "codeROME": rome_code}
             if min_date:
                 params["minDateActualisation"] = min_date
-            try:
-                response = http.get(
-                    FT_OFFERS_URL,
-                    params=params,
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    response = http.get(FT_OFFERS_URL, params=params)
+                except requests.RequestException:
+                    logger.error("ft_fetch_offers_page_failed", rome_code=rome_code, range=range_str, exc_info=True)
+                    raise
+                if response.status_code != 429:
+                    break
+                retry_after = int(response.headers.get("Retry-After", "2"))
+                logger.warning(
+                    "ft_fetch_rate_limited",
+                    rome_code=rome_code,
+                    attempt=attempt + 1,
+                    retry_after=retry_after,
                 )
+                time.sleep(retry_after)
+            else:
+                logger.error("ft_fetch_max_retries_exceeded", rome_code=rome_code, max_retries=MAX_RETRIES)
+                raise requests.HTTPError(f"Max retries ({MAX_RETRIES}) exceeded on 429", response=response)
+
+            try:
                 response.raise_for_status()
             except requests.RequestException:
-                logger.error("ft_fetch_offers_page_failed", rome_code=rome_code, range=f"{start}-{end}", exc_info=True)
+                logger.error("ft_fetch_offers_page_failed", rome_code=rome_code, range=range_str, exc_info=True)
                 raise
 
             content_range = response.headers.get("Content-Range", "")
@@ -105,6 +126,7 @@ def fetch_offers(token: str, rome_code: str, min_date: str | None = None) -> lis
                 break
 
             start += PAGE_SIZE
+            time.sleep(INTER_PAGE_SLEEP)
 
     logger.info("ft_fetch_offers_completed", rome_code=rome_code, total=len(offers))
     return offers
