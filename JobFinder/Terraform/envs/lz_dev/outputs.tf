@@ -22,6 +22,11 @@ output "keyvault_uri" {
   value = module.keyvault.uri
 }
 
+output "subnet_cae_id" {
+  description = "Resource ID of the subnet dedicated to the Container App Environment."
+  value       = module.subnet_cae.id
+}
+
 output "caj_identity_id" {
   description = "Resource ID of the Container App Jobs User Assigned Managed Identity."
   value       = azurerm_user_assigned_identity.caj.id

@@ -19,3 +19,17 @@ module "subnet_app" {
   virtual_network_name = module.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
 }
+
+# Dedicated subnet for the Container App Environment.
+# /23 is the minimum size required by Azure for VNet-injected CAEs.
+# Delegation to Microsoft.App/environments is mandatory.
+module "subnet_cae" {
+  source               = "../../modules/subnet"
+  name                 = "snet-${var.project}-lz-dev-${var.location_short}-cae"
+  resource_group_name  = module.rg.name
+  virtual_network_name = module.vnet.name
+  address_prefixes     = ["10.0.2.0/23"]
+  delegation_name      = "cae-delegation"
+  delegation_service   = "Microsoft.App/environments"
+  delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+}
