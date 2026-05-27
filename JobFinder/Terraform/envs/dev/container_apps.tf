@@ -157,19 +157,20 @@ module "job_cleanup" {
 module "job_offer_fetching" {
   source = "../../modules/container_app_job"
 
-  name                = "job-jf-dev-frc-fetch"
-  location            = var.location
-  resource_group_name = data.azurerm_resource_group.rg_app.name
-  environment_id      = module.container_app_environment.id
-  trigger_type        = "timer"
-  cron_expression     = "0 12,20 * * *"
-  image               = "${module.container_registry.login_server}/agents/offer-fetching:latest"
-  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server     = module.container_registry.login_server
-  registry_identity   = data.azurerm_user_assigned_identity.caj.id
-  environment         = var.env
-  project             = var.project
-  owner               = var.owner
+  name                       = "job-jf-dev-frc-fetch"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 12,20 * * *"
+  replica_timeout_in_seconds = 3600
+  image                      = "${module.container_registry.login_server}/agents/offer-fetching:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
   secrets = [
     {
       name  = "servicebus-connection-string"
