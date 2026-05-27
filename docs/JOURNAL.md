@@ -871,6 +871,7 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-09                                         ║
+║   🏷️  v0.1.1                                                                 ║
 ║   Full dev infrastructure + two-SP CI/CD governance  (PRs #14 à #30)       ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1031,6 +1032,7 @@ Merge de `dev` vers `main` incluant les PRs #29 à #33. Déclenche l'apply lz_de
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-18                                         ║
+║   🏷️  v0.2.0                                                                 ║
 ║   Full dev infrastructure cleaned  (PRs #34 à #38)                         ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1392,6 +1394,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
 ║   🔀  MERGE dev → main — 2026-05-27                                         ║
+║   🏷️  v0.3.0                                                                 ║
 ║   Milestone 2 — Agents Python + CI/CD images  (PRs #40 à #52)              ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -1661,3 +1664,51 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `capacity_tpm` est exprimé en milliers : `10` = 10 000 TPM, `1000` = 1 000 000 TPM
 - Chaque apply Terraform réinitialise cette valeur — toute augmentation manuelle dans le portail Azure est écrasée au prochain apply
 - 10 000 TPM était insuffisant pour embedder ~3 000 offres en un seul run, générant des 429 en cascade malgré les retries
+
+---
+
+### PR #71 — docs: mise à jour JOURNAL.md — entrée merge PR #72 et tags versions
+**Date :** 2026-05-28
+
+**Réalisé :**
+- Ajout de l'entrée de merge PR #72 dans `docs/JOURNAL.md` — récapitulatif des PRs #54 à #71 dans le format de PR #53
+- Ajout des tags de version sur toutes les entrées de merge dev→main (`v0.1.1`, `v0.2.0`, `v0.3.0`, `v0.4.0`)
+
+---
+
+### PR #72
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-05-28                                         ║
+║   🏷️  v0.4.0 — Pipeline end-to-end opérationnel  (PRs #54 à #71)           ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Container App Job — offer-fetching                                         ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #54  Migration offer-fetching GitHub Actions → Container App Job     ║
+║   • PR #55/#56  Subnet CAE /23 (10.0.4.0/23, fix CIDR overlap)             ║
+║   • PR #57/#58/#59  VNet injection CAE — infrastructure_subnet_id,          ║
+║             prevent_destroy restauré, create_before_destroy retiré          ║
+║   • PR #60  Network Contributor sur subnet_cae → sp-jf-github               ║
+║                                                                              ║
+║   Python — Pipeline fixes                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #61  Fix alembic.ini path (__file__ au lieu de WORKDIR)              ║
+║   • PR #62  Fix FT_SCOPE OAuth (api_offresdemploiv2 + o2dsoffre)            ║
+║   • PR #63  Déduplication raw_offers avant upsert (CardinalityViolation)    ║
+║   • PR #64  replica_timeout 300s → 3600s (embedding ~3000 offres)          ║
+║   • PR #65  max_retries=10 sur AzureOpenAI client                           ║
+║   • PR #66  capacity_tpm 10 → 1000 (10K → 1M TPM)                         ║
+║   • PR #67  Batching embed() — BATCH_SIZE=100, sleep(1) inter-batch         ║
+║   • PR #68  synchronize_session=None + retry 429 FT avec Retry-After        ║
+║   • PR #69  ORM bulk UPDATE par PK (fix InvalidRequestError SQLAlchemy)     ║
+║   • PR #70  Service Bus msg.body — b"".join() avant json.loads()            ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #71  Mise à jour journal + tags versions sur tous les merges main     ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
