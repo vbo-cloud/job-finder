@@ -6,14 +6,17 @@ from contextlib import contextmanager
 from typing import Generator
 
 import structlog
+from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.exceptions import ServiceBusError
 
 logger = structlog.get_logger()
 
-_connection_string = os.environ.get("AZURE_SERVICEBUS_CONNECTION_STRING")
-if not _connection_string:
-    raise ValueError("AZURE_SERVICEBUS_CONNECTION_STRING environment variable is not set")
+_namespace = os.environ.get("AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE")
+if not _namespace:
+    raise ValueError("AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE environment variable is not set")
+
+_credential = DefaultAzureCredential()
 
 
 def send_message(queue_name: str, body: dict) -> None:
@@ -27,7 +30,7 @@ def send_message(queue_name: str, body: dict) -> None:
         None
     """
     logger.info("servicebus_send_started", queue=queue_name)
-    with ServiceBusClient.from_connection_string(_connection_string) as client:
+    with ServiceBusClient(fully_qualified_namespace=_namespace, credential=_credential) as client:
         with client.get_queue_sender(queue_name) as sender:
             message = ServiceBusMessage(json.dumps(body))
             try:
@@ -56,7 +59,7 @@ def receive_message(queue_name: str) -> Generator[dict, None, None]:
         dict: Decoded JSON message body.
     """
     logger.info("servicebus_receive_started", queue=queue_name)
-    with ServiceBusClient.from_connection_string(_connection_string) as client:
+    with ServiceBusClient(fully_qualified_namespace=_namespace, credential=_credential) as client:
         with client.get_queue_receiver(queue_name) as receiver:
             messages = receiver.receive_messages(max_message_count=1)
             if not messages:
