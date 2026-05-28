@@ -1764,3 +1764,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - Le `module "secret_servicebus"` est retiré : la connection string n'a plus de consommateur. La stocker en KV sans l'utiliser crée un artefact trompeur.
 - `openai_capacity_tpm` avec `default = 1000` : un apply Terraform sans `terraform.tfvars` ne peut plus remettre accidentellement la valeur à `10` (la valeur initiale du PR #23, corrigée manuellement ensuite).
 - **Breaking change fonctionnel** : les agents ne démarreront plus si `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` n'est pas injecté — la `ValueError` au démarrage du module remplace silencieusement l'ancienne connexion par string.
+
+---
+
+### PR #TBD — chore: add westeurope to allowed locations policy
+**Date :** 2026-05-28
+
+**Réalisé :**
+- `lz_dev/policies.tf` : ajout de `"westeurope"` dans la liste `allowed_locations` du module `policy_allowed_locations`
+
+**Décisions techniques :**
+- Microsoft Entra External ID (remplaçant d'Azure AD B2C) déploie son infrastructure interne en `westeurope`, indépendamment de la région de résidence des données sélectionnée à la création du tenant. La policy `Allowed locations` (mode `All`, scope subscription) bloquait la création avec un `RequestDisallowedByPolicy` sur la région `westeurope`.
+- `westeurope` est ajouté aux côtés de `francecentral` et `northeurope` — les deux régions EU déjà autorisées pour les ressources Azure standard du projet.
