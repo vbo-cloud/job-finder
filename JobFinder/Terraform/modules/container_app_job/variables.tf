@@ -46,6 +46,12 @@ variable "servicebus_namespace" {
   description = "Service Bus namespace name. Required if trigger_type = queue."
 }
 
+variable "uami_client_id" {
+  type        = string
+  default     = null
+  description = "Client ID of the User Assigned Managed Identity used for KEDA Service Bus workload identity authentication. When set, replaces the connection-string-based authentication block with workload identity. When null (default), the caller must provide a 'servicebus-connection-string' secret."
+}
+
 variable "image" {
   type        = string
   description = "Docker image to run. Use placeholder in M1."
