@@ -110,6 +110,8 @@ module "job_matching" {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
+    # Used by DefaultAzureCredential (bus.py) to select the right UAMI,
+    # and by KEDA (uami_client_id) to authenticate the Service Bus scaler.
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
@@ -214,6 +216,8 @@ module "job_offer_fetching" {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
+    # Used by DefaultAzureCredential (bus.py) to select the right UAMI.
+    # No KEDA auth here — this job is timer-triggered, not queue-triggered.
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
