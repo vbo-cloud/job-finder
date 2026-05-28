@@ -49,7 +49,13 @@ variable "servicebus_namespace" {
 variable "uami_client_id" {
   type        = string
   default     = null
+  nullable    = true
   description = "Client ID of the User Assigned Managed Identity used for KEDA Service Bus workload identity authentication. When set, replaces the connection-string-based authentication block with workload identity. When null (default), the caller must provide a 'servicebus-connection-string' secret."
+
+  validation {
+    condition     = var.uami_client_id == null || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.uami_client_id))
+    error_message = "uami_client_id must be a valid UUID (e.g. '00000000-0000-0000-0000-000000000000')."
+  }
 }
 
 variable "image" {
