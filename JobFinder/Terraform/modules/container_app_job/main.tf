@@ -37,14 +37,21 @@ resource "azurerm_container_app_job" "this" {
         rules {
           name             = "queue-trigger"
           custom_rule_type = "azure-servicebus"
-          metadata = {
-            queueName    = var.queue_name
-            namespace    = var.servicebus_namespace
-            messageCount = "1"
-          }
-          authentication {
-            secret_name       = "servicebus-connection-string"
-            trigger_parameter = "connection"
+          metadata = merge(
+            {
+              queueName    = var.queue_name
+              namespace    = var.servicebus_namespace
+              messageCount = "1"
+            },
+            var.uami_client_id != null ? { clientId = var.uami_client_id } : {}
+          )
+
+          dynamic "authentication" {
+            for_each = var.uami_client_id == null ? [1] : []
+            content {
+              secret_name       = "servicebus-connection-string"
+              trigger_parameter = "connection"
+            }
           }
         }
       }
