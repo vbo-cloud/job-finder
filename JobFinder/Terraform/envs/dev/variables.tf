@@ -52,3 +52,14 @@ variable "env" {
   description = "Environment identifier applied to all resource tags (e.g. dev)"
   default     = "dev"
 }
+
+variable "openai_capacity_tpm" {
+  type        = number
+  default     = 1000
+  description = "Token per minute quota (in thousands) for all Azure OpenAI model deployments. 1000 = 1M TPM. Each apply resets any manual portal change — update here to change the quota."
+
+  validation {
+    condition     = var.openai_capacity_tpm > 0
+    error_message = "openai_capacity_tpm must be greater than 0."
+  }
+}
