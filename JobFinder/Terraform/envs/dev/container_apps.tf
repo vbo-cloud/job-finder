@@ -38,7 +38,6 @@ data "azurerm_key_vault_secret" "ft_client_secret" {
 }
 
 locals {
-  servicebus_connection_string = module.servicebus.primary_connection_string
   postgresql_connection_string = module.postgresql.connection_string
   openai_api_key               = module.openai.primary_key
   openai_endpoint              = module.openai.endpoint
@@ -68,6 +67,7 @@ module "job_matching" {
   trigger_type         = "queue"
   queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
+  uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
   image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
   project              = var.project
@@ -76,10 +76,6 @@ module "job_matching" {
   registry_server      = module.container_registry.login_server
   registry_identity    = data.azurerm_user_assigned_identity.caj.id
   secrets = [
-    {
-      name  = "servicebus-connection-string"
-      value = local.servicebus_connection_string
-    },
     {
       name  = "postgresql-connection-string"
       value = module.postgresql.connection_string
@@ -95,10 +91,6 @@ module "job_matching" {
   ]
   env_vars = [
     {
-      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
-      secret_name = "servicebus-connection-string"
-    },
-    {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
     },
@@ -113,6 +105,14 @@ module "job_matching" {
     {
       name  = "MATCHING_TOP_K"
       value = "20"
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
     },
   ]
 }
@@ -173,10 +173,6 @@ module "job_offer_fetching" {
   owner                      = var.owner
   secrets = [
     {
-      name  = "servicebus-connection-string"
-      value = local.servicebus_connection_string
-    },
-    {
       name  = "postgresql-connection-string"
       value = local.postgresql_connection_string
     },
@@ -194,10 +190,6 @@ module "job_offer_fetching" {
     },
   ]
   env_vars = [
-    {
-      name        = "AZURE_SERVICEBUS_CONNECTION_STRING"
-      secret_name = "servicebus-connection-string"
-    },
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
@@ -217,6 +209,14 @@ module "job_offer_fetching" {
     {
       name        = "FT_CLIENT_SECRET"
       secret_name = "ft-client-secret"
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
     },
   ]
 }
