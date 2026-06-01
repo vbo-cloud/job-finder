@@ -1767,7 +1767,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #TBD — chore: add westeurope to allowed locations policy
+### PR #76 — chore: add westeurope to allowed locations policy
 **Date :** 2026-05-28
 
 **Réalisé :**
@@ -1776,3 +1776,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - Microsoft Entra External ID (remplaçant d'Azure AD B2C) déploie son infrastructure interne en `westeurope`, indépendamment de la région de résidence des données sélectionnée à la création du tenant. La policy `Allowed locations` (mode `All`, scope subscription) bloquait la création avec un `RequestDisallowedByPolicy` sur la région `westeurope`.
 - `westeurope` est ajouté aux côtés de `francecentral` et `northeurope` — les deux régions EU déjà autorisées pour les ressources Azure standard du projet.
+
+---
+
+### PR #TBD — chore: replace westeurope with europe in allowed locations for Entra External ID
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `lz_dev/policies.tf` : remplacement de `"westeurope"` par `"europe"` dans la liste `allowed_locations` du module `policy_allowed_locations`
+
+**Décisions techniques :**
+- L'Activity Log Azure révèle que la `resourceLocation` tentée lors de la création du tenant Entra External ID (`Microsoft.AzureActiveDirectory/ciamDirectories`) est `"europe"` — une valeur spéciale Azure pour les ressources d'identité multi-régions, distincte de `"westeurope"`.
+- PR #76 avait ajouté `"westeurope"` comme hypothèse ; cette PR corrige le tir en remplaçant `"westeurope"` par la valeur exacte retournée par Azure, sans exemption inutile de toute la région standard westeurope.
