@@ -1803,3 +1803,17 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - Les scripts PowerShell contenaient des IDs Azure (subscription, tenant) en clair — un repo public les aurait exposés. Le bloc `param(Mandatory)` force l'appelant à les fournir explicitement à l'exécution.
 - `MANUAL_OPERATIONS.md` contient des procédures opérationnelles sensibles (SPs, OIDC, rôles) : déplacé dans `job-finder-private/` et exclu du repo public.
 - `job-finder-private/` est un repo git indépendant imbriqué dans `job-finder/` — le gitignore du repo parent l'exclut entièrement pour éviter tout commit accidentel de son contenu.
+
+---
+
+### PR #TBD — feat: add Entra External ID setup PowerShell script
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `JobFinder/powershell/setup-entra-external-tenant.ps1` : script PowerShell idempotent créant le tenant Microsoft Entra External ID (`jobfinderapp`) via l'ARM API (`Microsoft.AzureActiveDirectory/ciamDirectories`) et l'app registration FastAPI dans ce tenant via Microsoft Graph ; génère un client secret et affiche les 3 valeurs à stocker dans Key Vault (`ENTRA_EXTERNAL_TENANT_ID`, `ENTRA_EXTERNAL_CLIENT_ID`, `ENTRA_EXTERNAL_CLIENT_SECRET`)
+
+**Décisions techniques :**
+- Le tenant a été créé manuellement le 2026-06-01 via le portail Azure avant que ce script existait — le script documente et automatise la procédure pour une reconstruction depuis zéro
+- La création de tenant CIAM est asynchrone côté Azure — `Start-Sleep -Seconds 60` suivi d'un GET de vérification pour lire le `tenantId` une fois la propagation terminée
+- La section 2 (app registration) nécessite `az login --tenant $externalTenantId` : les commandes `az ad app` ciblent le tenant actuellement authentifié — un re-login interactif est requis pour basculer du tenant principal vers le tenant CIAM
+- `--append` sur `az ad app credential reset` : ajoute un secret sans invalider les secrets existants — une ré-exécution ne casse pas les déploiements en cours
