@@ -1791,7 +1791,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #TBD — chore(m3): prepare repo for public visibility
+### PR #78 — chore(m3): prepare repo for public visibility
 **Date :** 2026-06-01
 
 **Réalisé :**
