@@ -220,3 +220,27 @@ En entreprise, une branche release déclenche un environnement staging — copie
 - **ADR-014** : Stratégie de cache (Redis vs cache applicatif)
 - **ADR-015** : Frontend (Next.js vs React SPA vs serveur-rendu)
 - **ADR-016** : Stratégie de test (unit, integration, e2e)
+
+---
+
+## Automatisation IA — idées futures
+
+### [optional] Tests unitaires générés par IA
+Utiliser Claude Code pour générer des tests pytest couvrant les agents Python :
+- `_upsert_offers` avec des données mockées (France Travail API simulée)
+- Logique de cleanup (cutoff, branches NULL)
+- `_embed_pending_offers` sans appel réel à l'API OpenAI (mock)
+- `send_message` / `receive_message` dans `shared/bus.py`
+
+### [optional] Enrichissement du reviewer agent — audit sécurité ciblé
+Étendre le system prompt du reviewer agent pour détecter automatiquement :
+- Secrets ou credentials exposés en clair
+- Ressources critiques sans `prevent_destroy`
+- NSG avec règles ouvertes à `0.0.0.0/0`
+- Variables sensibles passées en plain-text plutôt qu'en secret Key Vault
+
+### [optional] Analyse de logs Application Insights via IA
+Script qui récupère les logs des dernières 24h depuis Application Insights
+et les envoie à Claude pour détecter des anomalies, patterns d'erreur récurrents,
+ou dégradations de performance. Utile pour le monitoring et démontre l'usage
+de l'IA au-delà de la génération de code.

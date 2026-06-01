@@ -55,4 +55,6 @@ __pycache__/
 # Memory CLAUDE
 memory/
 docs/handoff-m3.md
-docs/MANUAL_OPERATIONS.md
+
+# Repo privé imbriqué — opérations sensibles (scripts PowerShell, doc ops)
+job-finder-private/
