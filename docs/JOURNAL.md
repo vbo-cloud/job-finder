@@ -1806,7 +1806,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #TBD — feat: complete Entra External ID setup script
+### PR #79 — feat: complete Entra External ID setup script
 **Date :** 2026-06-01
 
 **Réalisé :**
