@@ -1,7 +1,8 @@
 # ==============================================================================
 # Setup — Microsoft Entra External ID tenant + App Registration FastAPI
 # Crée le tenant CIAM "jobfinderapp" via ARM (Microsoft.AzureActiveDirectory/
-# ciamDirectories) et l'app registration FastAPI dans ce tenant via Graph.
+# ciamDirectories), l'app registration FastAPI, le scope access_as_user,
+# le user flow susi et le Google Identity Provider via Microsoft Graph.
 #
 # Prérequis : az login avec un compte Owner sur la subscription, autorisé
 #             à créer des tenants Entra External ID.
@@ -10,10 +11,13 @@
 # ==============================================================================
 
 # Valeurs disponibles dans : portail Azure → Subscriptions /
+# Google credentials : console.developers.google.com → Credentials
 param(
     [Parameter(Mandatory)][string]$subscriptionId,
     [Parameter(Mandatory)][string]$tenantId,
-    [Parameter(Mandatory)][string]$resourceGroupName
+    [Parameter(Mandatory)][string]$resourceGroupName,
+    [Parameter(Mandatory)][string]$googleClientId,
+    [Parameter(Mandatory)][string]$googleClientSecret
 )
 
 $domainName  = "jobfinderapp"
@@ -120,7 +124,190 @@ $clientSecret = $secretResult.password
 Write-Host "Client secret généré."
 
 # ==============================================================================
-# 5. Résumé — valeurs à stocker dans Key Vault (kv-jf-dev-frc)
+# 5. Scope access_as_user (idempotent)
+# PATCH Graph — ajoute le scope custom uniquement s'il n'existe pas déjà.
+# ==============================================================================
+
+Write-Host "Vérification du scope 'access_as_user'..."
+$appDetails     = az rest --method GET `
+    --url      "https://graph.microsoft.com/v1.0/applications/$appObjId" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+$existingScopes = $appDetails.api.oauth2PermissionScopes
+$scopeExists    = $existingScopes | Where-Object { $_.value -eq "access_as_user" }
+
+if ($null -ne $scopeExists) {
+    Write-Host "Scope 'access_as_user' existe déjà — ignoré."
+} else {
+    Write-Host "Création du scope 'access_as_user'..."
+    $scopeId = [System.Guid]::NewGuid().ToString()
+    $body = @{
+        api = @{
+            oauth2PermissionScopes = @(@{
+                id                      = $scopeId
+                adminConsentDescription = "Allows the app to access job-finder on behalf of the signed-in user"
+                adminConsentDisplayName = "Access job-finder as user"
+                userConsentDescription  = "Allows the app to access job-finder on behalf of the signed-in user"
+                userConsentDisplayName  = "Access job-finder as user"
+                isEnabled               = $true
+                type                    = "User"
+                value                   = "access_as_user"
+            })
+        }
+    } | ConvertTo-Json -Depth 5
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method PATCH `
+        --url      "https://graph.microsoft.com/v1.0/applications/$appObjId" `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "Scope 'access_as_user' créé (ID : $scopeId)."
+}
+
+# ==============================================================================
+# 6. User flow susi (idempotent)
+# ==============================================================================
+
+Write-Host "Vérification du user flow 'susi'..."
+$flowsResult  = az rest --method GET `
+    --url      "https://graph.microsoft.com/beta/identity/authenticationEventsFlows?`$filter=displayName eq 'susi'" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+
+if ($flowsResult.value.Count -gt 0) {
+    Write-Host "User flow 'susi' existe déjà — récupération de l'ID."
+    $flowId = $flowsResult.value[0].id
+} else {
+    Write-Host "Création du user flow 'susi'..."
+    $body = @{
+        "@odata.type" = "#microsoft.graph.externalUsersSelfServiceSignUpEventsFlow"
+        displayName   = "susi"
+        onAuthenticationMethodLoadStart = @{
+            "@odata.type"     = "#microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp"
+            identityProviders = @(@{ id = "EmailPassword-OAUTH" })
+        }
+        onInteractiveAuthFlowStart = @{
+            "@odata.type"   = "#microsoft.graph.onInteractiveAuthFlowStartExternalUsersSelfServiceSignUp"
+            isSignUpAllowed = $true
+        }
+        onAttributeCollection = @{
+            "@odata.type" = "#microsoft.graph.onAttributeCollectionExternalUsersSelfServiceSignUp"
+            attributes    = @(@{ id = "email" }, @{ id = "displayName" })
+        }
+    } | ConvertTo-Json -Depth 6
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    $flowResult = az rest --method POST `
+        --url      "https://graph.microsoft.com/beta/identity/authenticationEventsFlows" `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com" `
+        | ConvertFrom-Json
+    Remove-Item $tmpFile
+    $flowId = $flowResult.id
+    Write-Host "User flow 'susi' créé."
+}
+
+Write-Host "Flow ID : $flowId"
+
+# ==============================================================================
+# 7. Association fastapi-jobfinder ↔ user flow susi (idempotent)
+# ==============================================================================
+
+Write-Host "Vérification de l'association '$appName' ↔ user flow 'susi'..."
+$appsInFlowUrl  = "https://graph.microsoft.com/beta/identity/authenticationEventsFlows/$flowId/conditions/applications/includeApplications"
+$appsInFlow     = az rest --method GET --url $appsInFlowUrl --resource "https://graph.microsoft.com" | ConvertFrom-Json
+$appAlreadyLinked = $appsInFlow.value | Where-Object { $_.appId -eq $appId }
+
+if ($null -ne $appAlreadyLinked) {
+    Write-Host "App '$appName' déjà associée au user flow 'susi' — ignorée."
+} else {
+    Write-Host "Association de '$appName' au user flow 'susi'..."
+    $body    = @{ appId = $appId } | ConvertTo-Json
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method POST `
+        --url      $appsInFlowUrl `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "App '$appName' associée au user flow 'susi'."
+}
+
+# ==============================================================================
+# 8. Google Identity Provider (idempotent)
+# ==============================================================================
+
+Write-Host "Vérification du Google Identity Provider..."
+$idpListUrl = "https://graph.microsoft.com/v1.0/identity/identityProviders"
+$existingIdPs = az rest --method GET --url $idpListUrl --resource "https://graph.microsoft.com" | ConvertFrom-Json
+$googleIdP    = $existingIdPs.value | Where-Object { $_.identityProviderType -eq "Google" }
+
+if ($null -ne $googleIdP) {
+    Write-Host "Google Identity Provider existe déjà — récupération de l'ID."
+    $googleIdPId = $googleIdP.id
+} else {
+    Write-Host "Création du Google Identity Provider..."
+    $body = @{
+        "@odata.type"        = "#microsoft.graph.socialIdentityProvider"
+        displayName          = "Google"
+        identityProviderType = "Google"
+        clientId             = $googleClientId
+        clientSecret         = $googleClientSecret
+    } | ConvertTo-Json
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    $googleResult = az rest --method POST `
+        --url      $idpListUrl `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com" `
+        | ConvertFrom-Json
+    Remove-Item $tmpFile
+    $googleIdPId = $googleResult.id
+    Write-Host "Google Identity Provider créé (ID : $googleIdPId)."
+}
+
+# Ajout de Google au user flow susi (idempotent)
+Write-Host "Vérification de Google dans le user flow 'susi'..."
+$flowDetail    = az rest --method GET `
+    --url      "https://graph.microsoft.com/beta/identity/authenticationEventsFlows/$flowId" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+$currentIdPs   = $flowDetail.onAuthenticationMethodLoadStart.identityProviders
+$googleInFlow  = $currentIdPs | Where-Object { $_.id -eq $googleIdPId }
+
+if ($null -ne $googleInFlow) {
+    Write-Host "Google déjà présent dans le user flow 'susi' — ignoré."
+} else {
+    Write-Host "Ajout de Google au user flow 'susi'..."
+    $updatedIdPs = @($currentIdPs | ForEach-Object { @{ id = $_.id } }) + @(@{ id = $googleIdPId })
+    $body = @{
+        onAuthenticationMethodLoadStart = @{
+            "@odata.type"     = "#microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp"
+            identityProviders = $updatedIdPs
+        }
+    } | ConvertTo-Json -Depth 5
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method PATCH `
+        --url      "https://graph.microsoft.com/beta/identity/authenticationEventsFlows/$flowId" `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "Google ajouté au user flow 'susi'."
+}
+
+# ==============================================================================
+# 9. Résumé — valeurs à stocker dans Key Vault (kv-jf-dev-frc)
 # ==============================================================================
 
 Write-Host ""
@@ -130,8 +317,12 @@ Write-Host "Stocker dans kv-jf-dev-frc :"
 Write-Host "  entra-external-tenant-id     = $externalTenantId"
 Write-Host "  entra-external-client-id     = $appId"
 Write-Host "  entra-external-client-secret = $clientSecret"
+Write-Host "  google-oauth-client-id       = $googleClientId"
+Write-Host "  google-oauth-client-secret   = $googleClientSecret"
 Write-Host ""
 Write-Host "Variables d'environnement correspondantes :"
 Write-Host "  ENTRA_EXTERNAL_TENANT_ID     = $externalTenantId"
 Write-Host "  ENTRA_EXTERNAL_CLIENT_ID     = $appId"
 Write-Host "  ENTRA_EXTERNAL_CLIENT_SECRET = $clientSecret"
+Write-Host "  GOOGLE_OAUTH_CLIENT_ID       = $googleClientId"
+Write-Host "  GOOGLE_OAUTH_CLIENT_SECRET   = $googleClientSecret"

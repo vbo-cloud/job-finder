@@ -1806,14 +1806,26 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #TBD — feat: add Entra External ID setup PowerShell script
+### PR #TBD — feat: complete Entra External ID setup script
 **Date :** 2026-06-01
 
 **Réalisé :**
-- `JobFinder/powershell/setup-entra-external-tenant.ps1` : script PowerShell idempotent créant le tenant Microsoft Entra External ID (`jobfinderapp`) via l'ARM API (`Microsoft.AzureActiveDirectory/ciamDirectories`) et l'app registration FastAPI dans ce tenant via Microsoft Graph ; génère un client secret et affiche les 3 valeurs à stocker dans Key Vault (`ENTRA_EXTERNAL_TENANT_ID`, `ENTRA_EXTERNAL_CLIENT_ID`, `ENTRA_EXTERNAL_CLIENT_SECRET`)
+- `JobFinder/powershell/setup-entra-external-tenant.ps1` : script étendu pour couvrir toutes les opérations faites manuellement sur le portail — 9 sections au total :
+  1. Tenant CIAM via ARM (`Microsoft.AzureActiveDirectory/ciamDirectories`)
+  2. App Registration `fastapi-jobfinder` via `az ad app`
+  3. Scopes built-in OpenID Connect (openid, profile, email)
+  4. Client secret (`--append`, 2 ans)
+  5. Scope custom `access_as_user` via Graph PATCH sur l'application
+  6. User flow `susi` via Graph POST (`externalUsersSelfServiceSignUpEventsFlow`)
+  7. Association `fastapi-jobfinder` ↔ user flow `susi`
+  8. Google Identity Provider + ajout au user flow `susi`
+  9. Résumé des 5 valeurs à stocker dans Key Vault
+- Deux nouveaux paramètres obligatoires : `$googleClientId`, `$googleClientSecret`
 
 **Décisions techniques :**
 - Le tenant a été créé manuellement le 2026-06-01 via le portail Azure avant que ce script existait — le script documente et automatise la procédure pour une reconstruction depuis zéro
 - La création de tenant CIAM est asynchrone côté Azure — `Start-Sleep -Seconds 60` suivi d'un GET de vérification pour lire le `tenantId` une fois la propagation terminée
-- La section 2 (app registration) nécessite `az login --tenant $externalTenantId` : les commandes `az ad app` ciblent le tenant actuellement authentifié — un re-login interactif est requis pour basculer du tenant principal vers le tenant CIAM
+- La section 2 (app registration) nécessite `az login --tenant $externalTenantId` : les commandes `az ad app` et tous les appels Graph suivants ciblent le tenant CIAM — un re-login interactif est requis pour basculer du tenant principal vers le tenant External ID
+- `--resource https://graph.microsoft.com` sur tous les appels `az rest` Graph : explicite l'audience OAuth2 du token, nécessaire dans un tenant CIAM où l'audience par défaut pourrait différer
 - `--append` sur `az ad app credential reset` : ajoute un secret sans invalider les secrets existants — une ré-exécution ne casse pas les déploiements en cours
+- Mise à jour du user flow pour ajouter Google : GET du flow pour lire la liste courante des IdPs, puis PATCH avec la liste augmentée — évite d'écraser la config existante
