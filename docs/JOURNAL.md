@@ -1779,7 +1779,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #TBD — chore: replace westeurope with europe in allowed locations for Entra External ID
+### PR #77 — chore: replace westeurope with europe in allowed locations for Entra External ID
 **Date :** 2026-06-01
 
 **Réalisé :**
