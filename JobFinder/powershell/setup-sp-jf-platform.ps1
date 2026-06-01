@@ -8,8 +8,12 @@
 # Idempotent — peut être relancé sans risque si une étape a échoué.
 # ==============================================================================
 
-$subscriptionId = "58ccbf27-c35f-42ea-838b-3dbe9ce60fc6"
-$tenantId       = "0cca9098-1181-4b2e-bd1a-cba23f4f314b"
+# Valeurs disponibles dans : portail Azure → Subscriptions /
+param(
+    [Parameter(Mandatory)][string]$subscriptionId,
+    [Parameter(Mandatory)][string]$tenantId
+)
+
 $appName        = "sp-jf-platform"
 $repoFullName   = "vbo-cloud/job-finder"
 $rgTfstate      = "rg-jf-tfstate-frc"

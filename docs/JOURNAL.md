@@ -1788,3 +1788,18 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - L'Activity Log Azure révèle que la `resourceLocation` tentée lors de la création du tenant Entra External ID (`Microsoft.AzureActiveDirectory/ciamDirectories`) est `"europe"` — une valeur spéciale Azure pour les ressources d'identité multi-régions, distincte de `"westeurope"`.
 - PR #76 avait ajouté `"westeurope"` comme hypothèse ; cette PR corrige le tir en remplaçant `"westeurope"` par la valeur exacte retournée par Azure, sans exemption inutile de toute la région standard westeurope.
+
+---
+
+### PR #78 — chore(m3): prepare repo for public visibility
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `docs/` : remplacement de toutes les références "Azure AD B2C" par "Microsoft Entra External ID" — alignement avec le renommage officiel Microsoft
+- `.gitignore` : `docs/MANUAL_OPERATIONS.md` et `job-finder-private/` (repo git imbriqué pour les opérations sensibles) ajoutés à la liste d'exclusion ; `docs/MANUAL_OPERATIONS.md` désindexé via `git rm --cached`
+- `JobFinder/powershell/setup-sp-jf-platform.ps1` et `setup-sp-jf-github.ps1` : `$subscriptionId` et `$tenantId` hardcodés remplacés par un bloc `param([Parameter(Mandatory)])` — les valeurs ne sont plus stockées dans le code source
+
+**Décisions techniques :**
+- Les scripts PowerShell contenaient des IDs Azure (subscription, tenant) en clair — un repo public les aurait exposés. Le bloc `param(Mandatory)` force l'appelant à les fournir explicitement à l'exécution.
+- `MANUAL_OPERATIONS.md` contient des procédures opérationnelles sensibles (SPs, OIDC, rôles) : déplacé dans `job-finder-private/` et exclu du repo public.
+- `job-finder-private/` est un repo git indépendant imbriqué dans `job-finder/` — le gitignore du repo parent l'exclut entièrement pour éviter tout commit accidentel de son contenu.
