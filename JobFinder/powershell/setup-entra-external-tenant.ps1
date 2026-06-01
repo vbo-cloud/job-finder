@@ -62,12 +62,23 @@ if ($null -ne $existingTenant -and $null -ne $existingTenant.properties.tenantId
     az rest --method PUT --url $ciamUrl --body "@$tmpFile" --headers "Content-Type=application/json"
     Remove-Item $tmpFile
 
-    # La création de tenant est asynchrone côté Azure — attendre avant de lire le tenantId
-    Write-Host "Tenant en cours de création. Attente de la propagation (60s)..."
-    Start-Sleep -Seconds 60
-
-    $createdTenant    = az rest --method GET --url $ciamUrl | ConvertFrom-Json
-    $externalTenantId = $createdTenant.properties.tenantId
+    # La création de tenant est asynchrone — polling toutes les 10s jusqu'à disponibilité du tenantId
+    $maxAttempts      = 18  # 3 minutes max
+    $attempt          = 0
+    $externalTenantId = $null
+    while ($attempt -lt $maxAttempts -and $null -eq $externalTenantId) {
+        $attempt++
+        Write-Host "Attente de la propagation du tenant ($attempt/$maxAttempts)..."
+        Start-Sleep -Seconds 10
+        $polledTenant = az rest --method GET --url $ciamUrl 2>$null | ConvertFrom-Json
+        if ($null -ne $polledTenant -and $null -ne $polledTenant.properties.tenantId) {
+            $externalTenantId = $polledTenant.properties.tenantId
+        }
+    }
+    if ($null -eq $externalTenantId) {
+        Write-Error "Tenant '$domainName' non disponible après $maxAttempts tentatives — relancer le script."
+        exit 1
+    }
     Write-Host "Tenant créé."
 }
 
@@ -109,19 +120,28 @@ Write-Host "Client ID (ENTRA_EXTERNAL_CLIENT_ID) : $appId"
 Write-Host "Scopes openid / profile / email : built-in OIDC, aucune action requise."
 
 # ==============================================================================
-# 4. Client secret
-# --append : ajoute un nouveau secret sans invalider les secrets existants.
-# Chaque exécution génère un secret supplémentaire — stocker la valeur immédiatement.
+# 4. Client secret (idempotent — génère uniquement si aucun secret valide n'existe)
 # ==============================================================================
 
-Write-Host "Génération d'un client secret (valable 2 ans)..."
-$secretResult = az ad app credential reset `
-    --id     $appObjId `
-    --years  2 `
-    --append `
-    | ConvertFrom-Json
-$clientSecret = $secretResult.password
-Write-Host "Client secret généré."
+Write-Host "Vérification des secrets existants..."
+$now         = [datetime]::UtcNow
+$credentials = az ad app credential list --id $appObjId | ConvertFrom-Json
+$validSecret = @($credentials | Where-Object { [datetime]$_.endDateTime -gt $now })
+
+if ($validSecret.Count -gt 0) {
+    Write-Host "Secret valide existant (expire le $($validSecret[0].endDateTime)) — génération ignorée."
+    Write-Host "⚠️  La valeur n'est pas récupérable — utiliser le secret déjà stocké dans kv-jf-dev-frc."
+    $clientSecret = "<secret existant — voir kv-jf-dev-frc : entra-external-client-secret>"
+} else {
+    Write-Host "Aucun secret valide — génération d'un client secret (valable 2 ans)..."
+    $secretResult = az ad app credential reset `
+        --id     $appObjId `
+        --years  2 `
+        --append `
+        | ConvertFrom-Json
+    $clientSecret = $secretResult.password
+    Write-Host "Client secret généré."
+}
 
 # ==============================================================================
 # 5. Scope access_as_user (idempotent)
@@ -308,6 +328,8 @@ if ($null -ne $googleInFlow) {
 
 # ==============================================================================
 # 9. Résumé — valeurs à stocker dans Key Vault (kv-jf-dev-frc)
+# ⚠️  Script manuel uniquement — ne pas exécuter en CI/CD : les secrets
+#     apparaîtraient en clair dans les logs du runner.
 # ==============================================================================
 
 Write-Host ""

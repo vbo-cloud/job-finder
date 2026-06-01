@@ -1824,7 +1824,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 **Décisions techniques :**
 - Le tenant a été créé manuellement le 2026-06-01 via le portail Azure avant que ce script existait — le script documente et automatise la procédure pour une reconstruction depuis zéro
-- La création de tenant CIAM est asynchrone côté Azure — `Start-Sleep -Seconds 60` suivi d'un GET de vérification pour lire le `tenantId` une fois la propagation terminée
+- La création de tenant CIAM est asynchrone côté Azure — `Start-Sleep -Seconds 10` suivi d'un GET de vérification pour lire le `tenantId` une fois la propagation terminée
 - La section 2 (app registration) nécessite `az login --tenant $externalTenantId` : les commandes `az ad app` et tous les appels Graph suivants ciblent le tenant CIAM — un re-login interactif est requis pour basculer du tenant principal vers le tenant External ID
 - `--resource https://graph.microsoft.com` sur tous les appels `az rest` Graph : explicite l'audience OAuth2 du token, nécessaire dans un tenant CIAM où l'audience par défaut pourrait différer
 - `--append` sur `az ad app credential reset` : ajoute un secret sans invalider les secrets existants — une ré-exécution ne casse pas les déploiements en cours
