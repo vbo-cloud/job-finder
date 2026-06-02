@@ -233,6 +233,11 @@ le blob reste orphelin dans le Storage Account. Solution future :
 nettoyer les blobs orphelins via un job périodique ou stocker l'URL
 blob uniquement après le commit réussi (nécessite refacto du flow).
 
+### [v1.0.0] Renommer la UAMI `id-jf-dev-frc-caj` en `id-jf-dev-frc-apps`
+La UAMI est partagée entre les Container App Jobs et la webapp Container App.
+Le suffixe `caj` (Container App Job) ne reflète plus son périmètre réel.
+À renommer lors du provisionnement prod à v1.0.0 pour partir sur une base propre.
+
 ### [optional] Champ `updated_at` sur UserProfile
 Ajouter `updated_at` (DateTime, auto-update) sur le modèle `UserProfile`
 pour l'observabilité et l'audit. Nécessite une migration Alembic.

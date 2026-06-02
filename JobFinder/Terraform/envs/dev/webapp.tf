@@ -75,6 +75,9 @@ module "webapp" {
       name  = "AZURE_STORAGE_ACCOUNT_URL"
       value = module.storage.primary_blob_endpoint
     },
+    # Tenant ID and client ID are semi-public (visible in OAuth2 flows).
+    # Promoting them to secrets adds complexity without meaningful security gain.
+    # The client secret is already secret-backed; this split is intentional.
     {
       name  = "ENTRA_EXTERNAL_TENANT_ID"
       value = data.azurerm_key_vault_secret.entra_tenant_id.value
