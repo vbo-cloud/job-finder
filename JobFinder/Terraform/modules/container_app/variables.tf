@@ -62,6 +62,17 @@ variable "max_replicas" {
   }
 }
 
+variable "target_port" {
+  type        = number
+  default     = 8000
+  description = "Port the container listens on for HTTP ingress traffic."
+
+  validation {
+    condition     = var.target_port >= 1 && var.target_port <= 65535
+    error_message = "target_port must be between 1 and 65535."
+  }
+}
+
 variable "env_vars" {
   type = list(object({
     name        = string
