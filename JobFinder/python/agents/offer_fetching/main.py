@@ -203,7 +203,11 @@ def _embed_pending_offers() -> int:
 
 def main() -> None:
     """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
-    run_migrations()
+    try:
+        run_migrations()
+    except Exception:  # intentional: any migration error must halt the agent
+        logger.error("migrations_failed", exc_info=True)
+        raise
 
     rome_codes = _get_active_rome_codes()
     token = get_access_token()
