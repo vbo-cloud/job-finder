@@ -26,6 +26,7 @@ module "container_app_environment" {
 # Agent 1 — Matching (queue: offer-ready)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
 # Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Agent 4 — CV Analysis (queue: cv-analysis)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -218,6 +219,65 @@ module "job_offer_fetching" {
     },
     # Used by DefaultAzureCredential (bus.py) to select the right UAMI.
     # No KEDA auth here — this job is timer-triggered, not queue-triggered.
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent cv-analysis (queue: cv-analysis)
+# ==============================================================================
+module "job_cv_analysis" {
+  source = "../../modules/container_app_job"
+
+  name                 = "job-jf-dev-frc-cv-analysis"
+  location             = var.location
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
+  environment_id       = module.container_app_environment.id
+  trigger_type         = "queue"
+  queue_name           = "cv-analysis"
+  servicebus_namespace = module.servicebus.name
+  uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
+  image                = "${module.container_registry.login_server}/agents/cv-analysis:latest"
+  environment          = var.env
+  project              = var.project
+  owner                = var.owner
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "openai-api-key"
+      value = local.openai_api_key
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_OPENAI_ROME_DEPLOYMENT"
+      value = "gpt-4o-mini"
+    },
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id

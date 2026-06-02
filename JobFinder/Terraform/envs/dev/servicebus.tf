@@ -2,8 +2,9 @@
 # Service Bus
 # ==============================================================================
 # Queues:
-#   offer-ready  — GitHub Actions cron (fetch+embed) → job-matching
+#   offer-ready  — agent cv-analysis → job-matching
 #   match-ready  — job-matching → notification utilisateur + futur agent cv-review
+#   cv-analysis  — POST /cv/upload → agent cv-analysis (extrait les codes ROME)
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -19,6 +20,7 @@ module "servicebus" {
   queues = [
     "offer-ready",
     "match-ready",
+    "cv-analysis",
   ]
 }
 
