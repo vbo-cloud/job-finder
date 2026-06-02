@@ -82,12 +82,25 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetching:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetching:cache,mode=max
 
+      - name: Build and push webapp image
+        uses: docker/build-push-action@v6
+        with:
+          context: JobFinder/python
+          file: JobFinder/python/agents/webapp/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:latest
+            ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/webapp:cache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/webapp:cache,mode=max
+
       - name: Build summary
         run: |
           echo "### Images pushed" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/matching:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/cleanup:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/offer-fetching:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`$ACR_LOGIN_SERVER/agents/webapp:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Update Container App Job images
         run: |
@@ -106,3 +119,8 @@ jobs:
             --resource-group rg-jf-dev-frc-app \
             --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/offer-fetching:${{ github.sha }}
+          az containerapp update \
+            --name app-jf-dev-frc \
+            --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --image $ACR_LOGIN_SERVER/agents/webapp:${{ github.sha }}
