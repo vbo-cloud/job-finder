@@ -110,6 +110,11 @@ async def upload_cv(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="PDF exceeds maximum allowed size of 10 MB.",
         )
+    if not contents.startswith(b"%PDF"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File does not appear to be a valid PDF.",
+        )
     try:
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
             raw_text = "\n".join(page.extract_text() or "" for page in pdf.pages)

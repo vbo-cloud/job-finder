@@ -23,7 +23,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Yields:
         None: Control is yielded to FastAPI after startup completes.
     """
-    run_migrations()
+    try:
+        run_migrations()
+    except Exception:
+        logger.error("migrations_failed", exc_info=True)
+        raise
     yield
 
 
