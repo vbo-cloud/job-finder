@@ -1977,3 +1977,44 @@ Préparation du Milestone 4 (frontend Next.js) et du Milestone 5 (monitoring + t
 1. ADR-017 : Terraform — action group + 6 alertes + injection `APPLICATIONINSIGHTS_CONNECTION_STRING`
 2. ADR-017 : Python — instrumentation azure-monitor-opentelemetry + `duration_seconds`
 3. Tests unitaires Python (ADR-016)
+
+---
+
+## PR #86 — feat: add cv-analysis agent for ROME code extraction
+
+**Date :** 2026-06-02
+**Branche :** `feature/cv-analysis-agent` → `dev`
+
+### Ce qui a été fait
+
+Introduction de l'agent `cv-analysis` qui complète le pipeline d'upload CV : les codes ROME sont désormais extraits automatiquement depuis le texte brut du CV avant de déclencher le matching.
+
+**Problème résolu :** `user_profiles.rome_codes` restait vide pour les nouveaux utilisateurs. Le job `offer-fetching` utilisait des codes ROME fallback hardcodés au lieu des vrais besoins du candidat.
+
+**Nouveau flow :**
+```
+POST /cv/upload
+  → extraction PDF + embedding + upsert cvs + profil par défaut
+  → send_message("cv-analysis", {cv_id})          ← remplace offer-ready
+
+job-jf-dev-frc-cv-analysis (queue: cv-analysis)   ← NOUVEAU
+  → SELECT raw_text, user_id FROM cvs WHERE id = cv_id
+  → GPT-4o-mini : extrait 3–5 codes ROME (JSON strict)
+  → UPDATE user_profiles SET rome_codes = [...] WHERE user_id = ?
+  → send_message("offer-ready", {rome_codes, trigger: "cv_analysis"})
+```
+
+**Décisions techniques :**
+- Le message Service Bus ne transporte que `cv_id` (pas `user_id`, pas `raw_text`). L'agent lit `raw_text` et `user_id` depuis la table `cvs` en une seule requête — évite la limite 256 KB de Service Bus Standard et un round-trip blob inutile.
+- `_get_cv_text` retourne `tuple[str, str]` (raw_text, user_id) depuis la même requête, pas deux SELECT.
+- Validation des codes ROME par regex `^[A-Z]\d{4}$` — les codes invalides sont filtrés avec un warning plutôt qu'une erreur fatale.
+- Le CV est tronqué à 8 000 caractères pour le prompt GPT-4o-mini (limite tokens raisonnable).
+- Pas de `requirements.txt` par agent — l'image utilise le `requirements.txt` racine `JobFinder/python/` (build context partagé).
+
+**Fichiers modifiés :**
+- `agents/webapp/routers/cv.py` — `MATCHING_TRIGGER_QUEUE` → `CV_ANALYSIS_QUEUE`, message simplifié à `{cv_id}`, log renommé en `cv_upload_analysis_triggered`
+- `agents/cv_analysis/main.py` — nouvel agent (consume cv-analysis → extrait ROME → update user_profiles → envoie offer-ready)
+- `agents/cv_analysis/Dockerfile` — même pattern que les agents batch existants
+- `envs/dev/servicebus.tf` — queue `cv-analysis` ajoutée
+- `envs/dev/container_apps.tf` — module `job_cv_analysis` ajouté (queue trigger, image `agents/cv-analysis:latest`)
+- `.github/workflows/buildAgents.yml` — step build/push `agents/cv-analysis` + `az containerapp job update`

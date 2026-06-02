@@ -67,6 +67,10 @@ class UserProfile(Base):
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     contract_types: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class Match(Base):

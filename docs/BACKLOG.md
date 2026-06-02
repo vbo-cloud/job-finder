@@ -371,12 +371,6 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ## FastAPI — Dette technique
 
-### [pre-v1.0.0] Contrainte unique sur cvs.user_id
-Ajouter une migration Alembic `004_add_uq_cvs_user_id.py` avec
-`uq_cvs_user_id` sur `cvs.user_id`. Remplacer le select-then-insert
-dans `routers/cv.py` par un `pg_insert ON CONFLICT DO UPDATE` —
-cohérent avec le pattern `user_profiles`.
-
 ### [pre-v1.0.0] Pincer les dépendances de la webapp
 Lancer `pip-compile requirements.txt` dans `agents/webapp/` pour
 générer un lockfile reproductible. À faire avant v1.0.0.

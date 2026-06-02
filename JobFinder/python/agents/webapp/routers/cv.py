@@ -28,7 +28,7 @@ from schemas import CVUploadOut
 router = APIRouter(prefix="/cv", tags=["cv"])
 logger = structlog.get_logger()
 
-MATCHING_TRIGGER_QUEUE = "offer-ready"
+CV_ANALYSIS_QUEUE = "cv-analysis"
 CV_BLOB_CONTAINER = "cvs"
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -79,10 +79,11 @@ async def upload_cv(
     user_id: str = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> CVUploadOut:
-    """Upload a PDF CV, generate an embedding, and trigger matching.
+    """Upload a PDF CV, generate an embedding, and trigger ROME code analysis.
 
     Upserts the CV and a default user profile (if absent), then sends a message
-    to the matching queue.
+    to the cv-analysis queue. The cv-analysis agent extracts ROME codes from the
+    raw text and dispatches the offer-ready trigger once codes are populated.
 
     Args:
         file: The uploaded PDF file.
@@ -181,11 +182,6 @@ async def upload_cv(
             ).on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
         )
 
-        profile = session.execute(
-            select(UserProfile).where(UserProfile.user_id == user_id)
-        ).scalar_one()
-
-        rome_codes: list[str] = list(profile.rome_codes)
         logger.info("cv_upload_profile_upserted", user_id=user_id)
 
         session.commit()
@@ -198,19 +194,13 @@ async def upload_cv(
     # Sent after commit: the message is only dispatched if the DB write succeeded.
     try:
         send_message(
-            MATCHING_TRIGGER_QUEUE,
-            {
-                "run_date": now.date().isoformat(),
-                "rome_codes": rome_codes,
-                "new_offers_count": 0,
-                "embedded_count": 0,
-                "trigger": "cv_upload",
-            },
+            CV_ANALYSIS_QUEUE,
+            {"cv_id": str(cv_id)},
         )
-        logger.info("cv_upload_matching_triggered", user_id=user_id)
+        logger.info("cv_upload_analysis_triggered", user_id=user_id, cv_id=str(cv_id))
     except ServiceBusError:
         # Fire-and-forget: matching cron will pick up the CV on next run.
         # Do not fail the request — the CV was committed successfully.
-        logger.error("cv_upload_matching_trigger_failed", user_id=user_id, exc_info=True)
+        logger.error("cv_upload_analysis_trigger_failed", user_id=user_id, exc_info=True)
 
-    return CVUploadOut(cv_id=cv_id, blob_url=blob_url, message="CV uploaded and matching triggered")
+    return CVUploadOut(cv_id=cv_id, blob_url=blob_url, message="CV uploaded and analysis triggered")
