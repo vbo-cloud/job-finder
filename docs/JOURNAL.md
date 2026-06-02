@@ -1829,3 +1829,31 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `--resource https://graph.microsoft.com` sur tous les appels `az rest` Graph : explicite l'audience OAuth2 du token, nécessaire dans un tenant CIAM où l'audience par défaut pourrait différer
 - `--append` sur `az ad app credential reset` : ajoute un secret sans invalider les secrets existants — une ré-exécution ne casse pas les déploiements en cours
 - Mise à jour du user flow pour ajouter Google : GET du flow pour lire la liste courante des IdPs, puis PATCH avec la liste augmentée — évite d'écraser la config existante
+
+---
+
+### PR #80 — feat: FastAPI webapp — JWT auth, CV upload, matches, profile
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `agents/webapp/auth.py` : validation JWT Entra External ID avec python-jose — fetch JWKS avec TTL 24h + retry sur rotation de clé (`JWTError` → vider cache → re-fetch → réessayer une fois), décodage RS256, audience + issuer validés, retourne le claim `sub` ; `HTTPException 401` si token absent/invalide/expiré ; `load_dotenv()` appelé après tous les imports (convention CLAUDE.md)
+- `agents/webapp/schemas.py` : modèles Pydantic — `ProfileUpdate` (sans `rome_codes` — readonly), `OfferOut` (avec `skills: list[str] = []` pour NULL ORM), `MatchOut`, `MatchesOut` (wrapper `{ rome_codes, matches }`), `ProfileOut` (`rome_codes` readonly), `CVUploadOut` (avec `blob_url`) ; `from_attributes=True` pour sérialisation ORM
+- `agents/webapp/dependencies.py` : dépendance `get_db` — generateur FastAPI wrappant `get_session`
+- `agents/webapp/routers/cv.py` : `POST /cv/upload` — validation `content_type` (422 si non-PDF) + taille max 10 MB (413) avant lecture ; upload PDF dans Azure Blob Storage (`cvs/{user_id}/{uuid}.pdf`, `overwrite=False`, client singleton module-level) → `blob_url` ; extraction texte pdfplumber ; embedding `shared/embedder.embed()` ; upsert CV avec `blob_url` (select-then-update-or-insert — absence de contrainte unique sur `user_id` intentionnelle, supporte plusieurs CVs par utilisateur) ; upsert UserProfile `ON CONFLICT DO NOTHING` ; déclenchement matching `offer-ready` (après commit, `ServiceBusError` logué sans faire échouer la requête) ; `AzureError` → 503
+- `agents/webapp/routers/matches.py` : `GET /matches` → `MatchesOut { rome_codes, matches }` triés par score décroissant
+- `agents/webapp/routers/profile.py` : `GET /profile` (404 si absent) + `PUT /profile` — upsert sur `job_categories`, `location`, `contract_types` uniquement ; `rome_codes` jamais touché
+- `agents/webapp/main.py` : lifespan `run_migrations()` (fail-fast intentionnel) ; `AsyncGenerator[None, None]` comme type de retour ; 3 routers inclus
+- `agents/webapp/requirements.txt` : fastapi, uvicorn, python-jose, pdfplumber, sqlalchemy, psycopg2-binary, pgvector, azure-servicebus, azure-identity, azure-storage-blob, openai, structlog, pydantic, requests
+- `agents/webapp/Dockerfile` : build context `JobFinder/python/`, `uvicorn main:app --host 0.0.0.0 --port 8000`
+- `migrations/versions/003_add_cvs_blob_url.py` : `ADD COLUMN blob_url VARCHAR NULL` sur `cvs`
+- `shared/models.py` : `blob_url: Mapped[str | None]` ajouté sur `CV`
+
+**Décisions techniques :**
+- `rome_codes` géré exclusivement par l'agent GPT-4o-mini — absent de `ProfileUpdate` et du `set_{}` de `PUT /profile` ; exposé en lecture dans `ProfileOut` et `MatchesOut`. Un endpoint utilisateur ne doit jamais écraser une donnée produite par un agent IA.
+- `MatchesOut { rome_codes, matches }` : rome_codes retournés une seule fois au niveau racine — évite la redondance et épargne un second appel `GET /profile` au frontend.
+- JWKS TTL 24h + retry sur rotation : les clés Entra External ID changent rarement, mais une rotation dans la fenêtre TTL est couverte sans redémarrage du container.
+- Blob upload après validation PDF et avant embedding : évite de stocker un fichier invalide et de gaspiller des tokens si le storage est hors service.
+- `_blob_service_client` singleton module-level : évite de créer un nouveau `BlobServiceClient` (et une nouvelle credential) par requête.
+- Absence de contrainte unique sur `cvs.user_id` intentionnelle : supporte plusieurs CVs par utilisateur (rôles différents). Race condition select-then-insert acceptée — le webapp tourne sur un seul replica pendant cette phase.
+- `send_message` après `session.commit()` : le message n'est dispatché que si l'écriture DB a réussi. `ServiceBusError` logué sans faire échouer la requête — le cron de matching prendra le relai au prochain run.
+- Terraform et CI/CD (Container App permanent, build Docker, secrets) feront l'objet de PRs séparées.
