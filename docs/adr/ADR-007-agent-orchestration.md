@@ -1,6 +1,6 @@
 # ADR-007 : Orchestration des agents de job-finder
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

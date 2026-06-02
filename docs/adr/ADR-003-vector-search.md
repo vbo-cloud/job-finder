@@ -1,6 +1,6 @@
 # ADR-003 : Moteur de recherche vectorielle pour job-finder
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

@@ -1,6 +1,6 @@
 # ADR-005 : Container Registry pour les images Docker
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

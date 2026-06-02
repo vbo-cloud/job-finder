@@ -1,6 +1,6 @@
 # ADR-001 : Moteur de base de données pour le data layer de job-finder
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 
