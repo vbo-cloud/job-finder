@@ -1856,20 +1856,9 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `_blob_service_client` singleton module-level : évite de créer un nouveau `BlobServiceClient` (et une nouvelle credential) par requête.
 - Absence de contrainte unique sur `cvs.user_id` intentionnelle : supporte plusieurs CVs par utilisateur (rôles différents). Race condition select-then-insert acceptée — le webapp tourne sur un seul replica pendant cette phase.
 - `send_message` après `session.commit()` : le message n'est dispatché que si l'écriture DB a réussi. `ServiceBusError` logué sans faire échouer la requête — le cron de matching prendra le relai au prochain run.
+- `agents/webapp/main.py` : commentaire inline sur `except Exception` dans `lifespan` pour documenter l'intention fail-fast ; `run_migrations()` enveloppé dans un `try/except Exception` avec `logger.error("migrations_failed", exc_info=True)` — même pattern appliqué aux trois agents (`offer_fetching`, `matching`, `cleanup`).
+- `except Exception` intentionnel dans les 4 entrypoints : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement.
 - Terraform et CI/CD (Container App permanent, build Docker, secrets) feront l'objet de PRs séparées.
-
----
-
-### PR #81 — fix: log migration failures with structlog in webapp and all agents
-**Date :** 2026-06-02
-
-**Réalisé :**
-- `agents/webapp/main.py` : commentaire inline ajouté sur `except Exception` dans `lifespan` pour documenter l'intention (fail-fast intentionnel)
-- `agents/offer_fetching/main.py`, `agents/matching/main.py`, `agents/cleanup/main.py` : `run_migrations()` enveloppé dans un `try/except Exception` avec `logger.error("migrations_failed", exc_info=True)` et re-raise dans les trois agents
-
-**Décisions techniques :**
-- `except Exception` intentionnel dans tous les cas : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement. Le commentaire inline documente ce choix pour les futurs reviewers.
-- Comportement identique dans les 4 entrypoints : une migration ratée doit toujours stopper le démarrage, que ce soit la webapp FastAPI ou un Container App Job.
 
 ---
 
@@ -1889,7 +1878,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #83 — feat: add webapp to build and deploy pipeline
+### PR #82 — feat: add webapp to build and deploy pipeline
 **Date :** 2026-06-02
 
 **Réalisé :**
