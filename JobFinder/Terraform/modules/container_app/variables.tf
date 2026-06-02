@@ -3,11 +3,6 @@ variable "name" {
   description = "Name of the Container App."
 }
 
-variable "location" {
-  type        = string
-  description = "Azure region where the Container App is deployed."
-}
-
 variable "resource_group_name" {
   type        = string
   description = "Name of the resource group that contains the Container App."

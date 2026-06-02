@@ -21,7 +21,6 @@ module "webapp" {
   source = "../../modules/container_app"
 
   name                = "app-${var.project}-${var.env}-${var.location_short}"
-  location            = var.location
   resource_group_name = data.azurerm_resource_group.rg_app.name
   environment_id      = module.container_app_environment.id
   image               = "${module.container_registry.login_server}/agents/webapp:latest"
