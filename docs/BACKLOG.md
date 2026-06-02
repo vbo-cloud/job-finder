@@ -215,6 +215,30 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ---
 
+## FastAPI — Dette technique
+
+### [pre-v1.0.0] Contrainte unique sur cvs.user_id
+Ajouter une migration Alembic `003_add_uq_cvs_user_id.py` avec
+`uq_cvs_user_id` sur `cvs.user_id`. Remplacer le select-then-insert
+dans `routers/cv.py` par un `pg_insert ON CONFLICT DO UPDATE` —
+cohérent avec le pattern `user_profiles`.
+
+### [pre-v1.0.0] Pincer les dépendances de la webapp
+Lancer `pip-compile requirements.txt` dans `agents/webapp/` pour
+générer un lockfile reproductible. À faire avant v1.0.0.
+
+### [optional] Blob orphelin sur échec DB dans POST /cv/upload
+Si le blob est uploadé mais que le `session.commit()` échoue ensuite,
+le blob reste orphelin dans le Storage Account. Solution future :
+nettoyer les blobs orphelins via un job périodique ou stocker l'URL
+blob uniquement après le commit réussi (nécessite refacto du flow).
+
+### [optional] Champ `updated_at` sur UserProfile
+Ajouter `updated_at` (DateTime, auto-update) sur le modèle `UserProfile`
+pour l'observabilité et l'audit. Nécessite une migration Alembic.
+
+---
+
 ## ADRs à rédiger
 
 - **ADR-014** : Stratégie de cache (Redis vs cache applicatif)
