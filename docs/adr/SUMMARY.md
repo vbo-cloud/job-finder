@@ -106,5 +106,6 @@ Toutes les décisions d'architecture du projet, dans l'ordre de prise de décisi
 ## Prochaines décisions à documenter
 
 - ADR-014 : Stratégie de cache (Redis vs cache applicatif) — mise en cache des embeddings et des résultats de matching fréquents
-- ADR-015 : Frontend (Next.js vs React SPA vs serveur-rendu) — interface candidat pour upload CV et consultation des recommandations
-- ADR-016 : Stratégie de test (unit, integration, e2e) — couverture minimale et outils pour un projet solo
+- [ADR-015](ADR-015-frontend-framework.md) : Frontend — **Next.js 14** (App Router, TypeScript, Tailwind CSS, Framer Motion, MSAL) | Accepté
+- [ADR-016](ADR-016-testing-strategy.md) : Stratégie de test — **pytest unitaire ciblé** (cleanup, auth, CV upload) | e2e différé v1.1.0 | Accepté
+- [ADR-017](ADR-017-monitoring-alerting.md) : Monitoring et alerting — **Application Insights + KQL + Azure Monitor Alerts** | 6 alertes critiques | Dashboard opérationnel | Accepté
