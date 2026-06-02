@@ -1887,3 +1887,60 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - `az containerapp update` vs `az containerapp job update` : la webapp est un Container App permanent (service HTTP), pas un Container App Job (tâche ponctuelle) — les deux commandes CLI sont distinctes et non interchangeables
 - Même pattern tags `:latest` + `:<sha>` que les agents : `:latest` pour le déploiement Terraform initial, `:<sha>` pour la traçabilité et le rollback précis via la commande de mise à jour
+
+---
+
+### PR #83 — docs: update ADRs to Accepté and document AKS abandonment
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `docs/adr/ADR-*.md` : statut de tous les ADRs passé de "Proposé" à "Accepté" — les décisions sont implémentées et en production
+- `docs/adr/ADR-002-compute-platform.md` : révision complète — décision mise à jour de AKS vers Container Apps définitif ; section "Pourquoi la migration AKS a été abandonnée en Milestone 3" ajoutée ; conséquences et actions réalisées mises à jour
+
+**Décisions techniques :**
+- Migration AKS abandonnée : Container Apps couvre l'ensemble des besoins (Container App Jobs pour les agents batch, Container App pour la webapp HTTP) sans la complexité et le coût d'AKS. La valeur portfolio est couverte par l'architecture multi-agents, KEDA, les identités managées et les modules Terraform.
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-06-02                                         ║
+║   🏷️  v0.5.0 — Milestone 3 : webapp FastAPI + Entra External ID             ║
+║         (PRs #73 à #83)                                                      ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Identité managée & Service Bus                                             ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #73  Service Bus Data Owner → UAMI (lz_dev, sp-jf-platform)          ║
+║   • PR #74  Module container_app_job — workload identity KEDA                ║
+║   • PR #75  Migration auth Service Bus → Managed Identity (Python + TF)     ║
+║                                                                              ║
+║   Infrastructure réseau & gouvernance                                        ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #76  westeurope ajouté à allowed locations (Entra External ID)       ║
+║   • PR #77  westeurope → europe (resourceLocation réelle Azure)             ║
+║                                                                              ║
+║   Entra External ID                                                          ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #78  Repo préparé pour visibilité publique (secrets retirés)         ║
+║   • PR #79  Script PowerShell setup Entra External ID complet               ║
+║             (tenant, app registration, scopes, user flow, Google IdP)       ║
+║                                                                              ║
+║   FastAPI Webapp — Python                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #80  Webapp FastAPI — JWT Entra, POST /cv/upload (PDF + blob),       ║
+║             GET /matches, GET+PUT /profile ; migration 003 blob_url          ║
+║                                                                              ║
+║   FastAPI Webapp — Infrastructure & CI/CD                                   ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #81  Module container_app + déploiement Terraform dev                ║
+║   • PR #82  buildAgents.yml — build webapp + az containerapp update         ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #83  ADRs → Accepté ; ADR-002 révisé (AKS abandonné)                ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
