@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     try:
         run_migrations()
-    except Exception:
+    except Exception:  # intentional: any migration error must halt startup
         logger.error("migrations_failed", exc_info=True)
         raise
     yield
