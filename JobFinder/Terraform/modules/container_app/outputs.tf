@@ -5,5 +5,5 @@ output "id" {
 
 output "fqdn" {
   description = "Fully qualified domain name of the Container App."
-  value       = azurerm_container_app.this.latest_revision_fqdn
+  value       = "https://${azurerm_container_app.this.latest_revision_fqdn}"
 }

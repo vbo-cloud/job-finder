@@ -54,7 +54,7 @@ variable "min_replicas" {
 variable "max_replicas" {
   type        = number
   default     = 1
-  description = "Maximum number of replicas."
+  description = "Maximum number of replicas. Must be greater than or equal to min_replicas (Terraform cannot cross-validate variables, so this is a caller responsibility)."
 
   validation {
     condition     = var.max_replicas >= 1

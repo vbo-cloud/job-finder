@@ -51,23 +51,41 @@ module "webapp" {
   ]
 
   env_vars = [
-    { name = "DATABASE_URL",
-    secret_name = "postgresql-connection-string" },
-    { name = "AZURE_OPENAI_API_KEY",
-    secret_name = "openai-api-key" },
-    { name = "AZURE_OPENAI_ENDPOINT",
-    value = module.openai.endpoint },
-    { name = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE",
-    value = "${module.servicebus.name}.servicebus.windows.net" },
-    { name = "AZURE_CLIENT_ID",
-    value = data.azurerm_user_assigned_identity.caj.client_id },
-    { name = "AZURE_STORAGE_ACCOUNT_URL",
-    value = module.storage.primary_blob_endpoint },
-    { name = "ENTRA_EXTERNAL_TENANT_ID",
-    value = data.azurerm_key_vault_secret.entra_tenant_id.value },
-    { name = "ENTRA_EXTERNAL_CLIENT_ID",
-    value = data.azurerm_key_vault_secret.entra_client_id.value },
-    { name = "ENTRA_EXTERNAL_CLIENT_SECRET",
-    secret_name = "entra-external-client-secret" },
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = module.openai.endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name  = "AZURE_STORAGE_ACCOUNT_URL"
+      value = module.storage.primary_blob_endpoint
+    },
+    {
+      name  = "ENTRA_EXTERNAL_TENANT_ID"
+      value = data.azurerm_key_vault_secret.entra_tenant_id.value
+    },
+    {
+      name  = "ENTRA_EXTERNAL_CLIENT_ID"
+      value = data.azurerm_key_vault_secret.entra_client_id.value
+    },
+    {
+      name        = "ENTRA_EXTERNAL_CLIENT_SECRET"
+      secret_name = "entra-external-client-secret"
+    },
   ]
 }

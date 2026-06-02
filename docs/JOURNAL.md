@@ -1873,7 +1873,7 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 
 ---
 
-### PR #82 — feat: provision FastAPI webapp as Container App
+### PR #81 — feat: provision FastAPI webapp as Container App
 **Date :** 2026-06-02
 
 **Réalisé :**
