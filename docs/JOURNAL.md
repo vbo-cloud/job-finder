@@ -1856,20 +1856,9 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - `_blob_service_client` singleton module-level : évite de créer un nouveau `BlobServiceClient` (et une nouvelle credential) par requête.
 - Absence de contrainte unique sur `cvs.user_id` intentionnelle : supporte plusieurs CVs par utilisateur (rôles différents). Race condition select-then-insert acceptée — le webapp tourne sur un seul replica pendant cette phase.
 - `send_message` après `session.commit()` : le message n'est dispatché que si l'écriture DB a réussi. `ServiceBusError` logué sans faire échouer la requête — le cron de matching prendra le relai au prochain run.
+- `agents/webapp/main.py` : commentaire inline sur `except Exception` dans `lifespan` pour documenter l'intention fail-fast ; `run_migrations()` enveloppé dans un `try/except Exception` avec `logger.error("migrations_failed", exc_info=True)` — même pattern appliqué aux trois agents (`offer_fetching`, `matching`, `cleanup`).
+- `except Exception` intentionnel dans les 4 entrypoints : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement.
 - Terraform et CI/CD (Container App permanent, build Docker, secrets) feront l'objet de PRs séparées.
-
----
-
-### PR #81 — fix: log migration failures with structlog in webapp and all agents
-**Date :** 2026-06-02
-
-**Réalisé :**
-- `agents/webapp/main.py` : commentaire inline ajouté sur `except Exception` dans `lifespan` pour documenter l'intention (fail-fast intentionnel)
-- `agents/offer_fetching/main.py`, `agents/matching/main.py`, `agents/cleanup/main.py` : `run_migrations()` enveloppé dans un `try/except Exception` avec `logger.error("migrations_failed", exc_info=True)` et re-raise dans les trois agents
-
-**Décisions techniques :**
-- `except Exception` intentionnel dans tous les cas : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement. Le commentaire inline documente ce choix pour les futurs reviewers.
-- Comportement identique dans les 4 entrypoints : une migration ratée doit toujours stopper le démarrage, que ce soit la webapp FastAPI ou un Container App Job.
 
 ---
 
@@ -1886,3 +1875,15 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 - Module `container_app` distinct de `container_app_job` : un Container App est un service HTTP permanent (ingress, scaling horizontal) ; un Container App Job est une tâche ponctuelle (timer ou queue) — les deux ressources azurerm n'ont pas les mêmes attributs et ne partagent pas la même sémantique
 - `module.storage.primary_blob_endpoint` utilisé directement pour `AZURE_STORAGE_ACCOUNT_URL` : l'output du module expose déjà l'URL blob complète — plus cohérent que créer un data source redondant sur une ressource déjà en state
 - `data.azurerm_user_assigned_identity.caj` réutilisé depuis `container_apps.tf` : l'identité managée est partagée entre les Container App Jobs et la webapp — un seul objet IAM à gérer, une seule assignation AcrPull
+
+---
+
+### PR #82 — feat: add webapp to build and deploy pipeline
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `.github/workflows/buildAgents.yml` : ajout du step "Build and push webapp image" après offer-fetching, avec build context `JobFinder/python`, layer cache ACR `agents/webapp:cache` ; ajout de la ligne webapp dans le Build summary ; ajout de `az containerapp update` (pas `job update`) pour mettre à jour le Container App permanent après le push
+
+**Décisions techniques :**
+- `az containerapp update` vs `az containerapp job update` : la webapp est un Container App permanent (service HTTP), pas un Container App Job (tâche ponctuelle) — les deux commandes CLI sont distinctes et non interchangeables
+- Même pattern tags `:latest` + `:<sha>` que les agents : `:latest` pour le déploiement Terraform initial, `:<sha>` pour la traçabilité et le rollback précis via la commande de mise à jour
