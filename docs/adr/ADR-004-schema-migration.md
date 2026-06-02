@@ -1,6 +1,6 @@
 # ADR-004 : Outil de migration de schéma PostgreSQL
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

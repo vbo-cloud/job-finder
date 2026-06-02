@@ -1,6 +1,6 @@
 # ADR-011 : Authentification utilisateur
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 
@@ -8,32 +8,32 @@
 
 ## Contexte
 
-Job-finder a besoin d'un système d'authentification pour les utilisateurs finaux (candidats qui uploadent leur CV et consultent leurs recommandations). Les exigences : login social (Google, Microsoft), sécurité solide, conformité RGPD (données en Europe), et coût minimal pour un projet en phase portfolio. Trois approches : Azure AD B2C (CIAM managé), Auth0, ou une solution JWT custom.
+Job-finder a besoin d'un système d'authentification pour les utilisateurs finaux (candidats qui uploadent leur CV et consultent leurs recommandations). Les exigences : login social (Google, Microsoft), sécurité solide, conformité RGPD (données en Europe), et coût minimal pour un projet en phase portfolio. Trois approches : Microsoft Entra External ID (CIAM managé), Auth0, ou une solution JWT custom.
 
 ---
 
 ## Décision
 
-**Azure AD B2C** comme Identity Provider.
+**Microsoft Entra External ID** comme Identity Provider.
 
 ---
 
 ## Options considérées
 
-### Option A : Azure AD B2C
+### Option A : Microsoft Entra External ID
 
 | Dimension | Évaluation |
 |---|---|
 | Coût | Gratuit jusqu'à 50 000 MAU — largement suffisant pour un portfolio |
-| Souveraineté des données | ✅ EU — tenant B2C déployable en Europe |
+| Souveraineté des données | ✅ EU — External Tenant déployable en Europe (West Europe) |
 | Login social | ✅ — Google, Microsoft, Facebook configurables nativement |
 | MFA | ✅ — intégré, configurable par user flow |
 | Intégration FastAPI | ✅ — JWT validé via JWKS endpoint, bibliothèque `python-jose` |
-| Valeur portfolio | Très forte — Azure AD B2C est la solution enterprise standard Azure pour le CIAM |
+| Valeur portfolio | Très forte — Microsoft Entra External ID est la solution enterprise standard Azure pour le CIAM |
 
 **Pour :** gratuit jusqu'à 50K MAU, données en EU (RGPD), login social natif, MFA intégré, tokens JWT standards facilement validables dans FastAPI. Terraform supporte nativement (`azuread` provider). Cohérent avec le reste de la stack Azure.
 
-**Contre :** configuration des user flows B2C plus complexe que Auth0 ; tenant B2C séparé du tenant principal Azure AD.
+**Contre :** configuration des user flows Entra External ID plus complexe que Auth0 ; External Tenant séparé du tenant Azure principal.
 
 ---
 
@@ -50,7 +50,7 @@ Job-finder a besoin d'un système d'authentification pour les utilisateurs finau
 
 **Pour :** DX (Developer Experience) excellente, documentation très accessible, onboarding rapide.
 
-**Contre :** limite de 7 500 MAU gratuits (vs 50 000 pour B2C). Données aux US par défaut — problème RGPD pour un projet traitant des CVs. Ajoute une dépendance externe hors écosystème Azure alors que tout le reste est Azure-natif.
+**Contre :** limite de 7 500 MAU gratuits (vs 50 000 pour Entra External ID). Données aux US par défaut — problème RGPD pour un projet traitant des CVs. Ajoute une dépendance externe hors écosystème Azure alors que tout le reste est Azure-natif.
 
 ---
 
@@ -73,13 +73,13 @@ Job-finder a besoin d'un système d'authentification pour les utilisateurs finau
 
 ## Analyse des compromis
 
-Azure AD B2C résout tous les problèmes simultanément : RGPD (données en EU), gratuité à l'échelle du projet (50K MAU), login social natif, et cohérence totale avec la stack Azure. La limite de Auth0 à 7 500 MAU gratuits et la localisation US des données en font un mauvais choix pour ce contexte.
+Microsoft Entra External ID résout tous les problèmes simultanément : RGPD (données en EU), gratuité à l'échelle du projet (50K MAU), login social natif, et cohérence totale avec la stack Azure. La limite de Auth0 à 7 500 MAU gratuits et la localisation US des données en font un mauvais choix pour ce contexte.
 
 **Architecture d'authentification :**
 ```
-Utilisateur → Azure AD B2C (user flow "Sign up / Sign in")
+Utilisateur → Microsoft Entra External ID (user flow "Sign up / Sign in")
            → JWT émis (access token + refresh token)
-           → FastAPI valide le JWT via JWKS endpoint B2C
+           → FastAPI valide le JWT via JWKS endpoint Entra External ID
            → Claims extraits (user_id, email) → requêtes PostgreSQL
 ```
 
@@ -92,17 +92,24 @@ Utilisateur → Azure AD B2C (user flow "Sign up / Sign in")
 - ✅ Login social (Google, Microsoft) sans développement custom
 - ✅ MFA intégré et configurable par user flow
 - ✅ JWT standards validables avec `python-jose` dans FastAPI
-- ✅ Valeur portfolio : Azure AD B2C = solution CIAM enterprise Azure standard
-- ⚠️ Configuration des user flows B2C requiert une prise en main initiale
-- ⚠️ Tenant B2C séparé du tenant Azure principal — à documenter dans GETTING_STARTED
+- ✅ Valeur portfolio : Microsoft Entra External ID = solution CIAM enterprise Azure standard
+- ⚠️ Configuration des user flows Entra External ID requiert une prise en main initiale
+- ⚠️ External Tenant séparé du tenant Azure principal — à documenter dans GETTING_STARTED
 
 ---
 
 ## Actions suivantes
 
-- [ ] Créer le tenant Azure AD B2C (région West Europe)
+- [ ] Créer l'External Tenant Microsoft Entra External ID (West Europe)
 - [ ] Configurer le user flow "Sign up and sign in" avec Google et Microsoft comme IdP sociaux
-- [ ] Enregistrer l'application FastAPI dans B2C (`client_id`, scope `openid profile email`)
-- [ ] Implémenter la validation JWT dans FastAPI via `python-jose` + JWKS endpoint B2C
-- [ ] Créer le module Terraform `auth/b2c` (`azuread_b2c_directory`)
-- [ ] Stocker `B2C_CLIENT_ID`, `B2C_TENANT_NAME` dans Key Vault
+- [ ] Enregistrer l'application FastAPI dans l'External Tenant (`client_id`, scope `openid profile email`)
+- [ ] Implémenter la validation JWT dans FastAPI via `python-jose` + JWKS endpoint Entra External ID
+- [ ] Créer le module Terraform `entra_external_tenant`
+- [ ] Stocker `ENTRA_CLIENT_ID`, `ENTRA_TENANT_NAME` dans Key Vault
+
+---
+
+> **Note (2026-05-28) :** Azure AD B2C n'est plus disponible pour les nouveaux clients
+> depuis mai 2025. Microsoft Entra External ID est le remplaçant officiel.
+> Fonctionnellement équivalent : même JWT, même JWKS endpoint, même gratuité jusqu'à
+> 50 000 MAU, données stockées en EU. L'ADR reste valide dans son intégralité.

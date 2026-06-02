@@ -20,14 +20,14 @@ module "openai" {
     "gpt-4o-mini" = {
       model_name    = "gpt-4o-mini"
       model_version = "2024-07-18"
-      capacity_tpm  = 1000             # 1M tokens per minute
-      sku_name      = "GlobalStandard" # Standard not yet available in francecentral for this model
+      capacity_tpm  = var.openai_capacity_tpm # 1M TPM by default — update variable to change
+      sku_name      = "GlobalStandard"        # Standard not yet available in francecentral for this model
     }
     "text-embedding-3-small" = {
       model_name    = "text-embedding-3-small"
       model_version = "1"
-      capacity_tpm  = 1000             # 1M tokens per minute
-      sku_name      = "GlobalStandard" # Standard not yet available in francecentral for this model
+      capacity_tpm  = var.openai_capacity_tpm # 1M TPM by default — update variable to change
+      sku_name      = "GlobalStandard"        # Standard not yet available in francecentral for this model
     }
   }
 }

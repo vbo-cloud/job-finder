@@ -105,7 +105,11 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
 
 def main() -> None:
     """Consume one offer-ready message and run matching for all CVs."""
-    run_migrations()
+    try:
+        run_migrations()
+    except Exception:  # intentional: any migration error must halt the agent
+        logger.error("migrations_failed", exc_info=True)
+        raise
 
     with receive_message(OFFER_READY_QUEUE) as msg:
         run_date = msg.get("run_date", "")

@@ -1712,3 +1712,236 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+### PR #73 — feat(lz): grant Service Bus Data Owner to UAMI for managed identity auth
+**Date :** 2026-05-28
+
+**Réalisé :**
+- `lz_dev/rbac.tf` : ajout d'une data source `azurerm_servicebus_namespace "dev"` pointant sur `sb-jf-dev-frc` dans `module.rg_app.name`
+- `lz_dev/rbac.tf` : ajout de `azurerm_role_assignment.caj_servicebus_owner` — rôle `Azure Service Bus Data Owner` assigné sur le namespace Service Bus pour l'UAMI `id-jf-dev-frc-caj`
+
+**Décisions techniques :**
+- `Azure Service Bus Data Owner` est le rôle minimal permettant à la fois le send (agents Python), le receive (agents Python) et le manage (KEDA scaler pour le déclenchement des Container App Jobs) via l'identité managée — sans connection string.
+- Géré dans `lz_dev/rbac.tf` (par sp-jf-platform via CI/CD) : l'UAMI `id-jf-dev-frc-caj` est possédée par sp-jf-platform, et RBAC Administrator conditionné est requis pour assigner des rôles — sp-jf-github ne dispose pas de ce droit.
+- Cette PR (lz_dev apply) doit être appliquée avant le merge de `feature/m3-sb-mi-app` : le role assignment doit exister sur Azure avant que les Container App Jobs tentent de s'authentifier via l'identité managée.
+
+---
+
+### PR #74 — feat(module): add workload identity support for KEDA Service Bus trigger
+**Date :** 2026-05-28
+
+**Réalisé :**
+- `modules/container_app_job/variables.tf` : ajout de la variable `uami_client_id` (string nullable, défaut `null`) après `servicebus_namespace`
+- `modules/container_app_job/main.tf` : dans le bloc `rules{}` du trigger queue KEDA, remplacement du `metadata` statique par un `merge()` conditionnant l'ajout de `clientId`, et remplacement du bloc `authentication{}` fixe par un `dynamic "authentication"` conditionné sur `var.uami_client_id == null`
+
+**Décisions techniques :**
+- Le `merge()` sur `metadata` et le `dynamic "authentication"` permettent les deux modes d'authentification sans briser les callers existants : si `uami_client_id` est `null`, le comportement est identique à l'ancien module (connection string via secret). Si `uami_client_id` est fourni, KEDA utilise la workload identity Azure — `clientId` est injecté dans les metadata KEDA et le bloc `authentication` est absent, conformément au protocole KEDA workload identity.
+- Rétrocompatibilité totale : tous les callers existants (`job_matching`, `job_offer_fetching`) n'ont pas à être modifiés tant qu'ils ne passent pas `uami_client_id`.
+
+---
+
+### PR #75 — feat(dev): migrate Service Bus auth to Managed Identity + add openai_capacity_tpm variable
+**Date :** 2026-05-28
+
+**Réalisé :**
+
+*Terraform / envs/dev*
+- `container_apps.tf` — `job_matching` : suppression du secret `servicebus-connection-string` et de la variable d'environnement `AZURE_SERVICEBUS_CONNECTION_STRING` ; ajout de `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` et `AZURE_CLIENT_ID` en plain-text ; ajout de `uami_client_id` pour le scaler KEDA
+- `container_apps.tf` — `job_offer_fetching` : même suppression ; ajout de `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` et `AZURE_CLIENT_ID` en plain-text (pas de `uami_client_id` — job timer, pas de KEDA queue auth)
+- `container_apps.tf` — locals : suppression de `servicebus_connection_string`
+- `servicebus.tf` : suppression du `module "secret_servicebus"` (connection string KV) ; commentaire explicatif ajouté
+- `variables.tf` : ajout de `openai_capacity_tpm` (number, défaut 1000, validation > 0)
+- `openai.tf` : les deux `capacity_tpm = 1000` remplacés par `var.openai_capacity_tpm`
+
+*Python*
+- `shared/bus.py` : migration de `ServiceBusClient.from_connection_string(AZURE_SERVICEBUS_CONNECTION_STRING)` vers `ServiceBusClient(fully_qualified_namespace=_namespace, credential=_credential)` avec `DefaultAzureCredential()`
+- `requirements.txt` : ajout de `azure-identity`
+
+**Décisions techniques :**
+- `DefaultAzureCredential` lit `AZURE_CLIENT_ID` automatiquement pour sélectionner la bonne UAMI parmi celles attachées au Container App Job — aucun changement de code Python nécessaire pour passer le client ID.
+- Le `module "secret_servicebus"` est retiré : la connection string n'a plus de consommateur. La stocker en KV sans l'utiliser crée un artefact trompeur.
+- `openai_capacity_tpm` avec `default = 1000` : un apply Terraform sans `terraform.tfvars` ne peut plus remettre accidentellement la valeur à `10` (la valeur initiale du PR #23, corrigée manuellement ensuite).
+- **Breaking change fonctionnel** : les agents ne démarreront plus si `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` n'est pas injecté — la `ValueError` au démarrage du module remplace silencieusement l'ancienne connexion par string.
+
+---
+
+### PR #76 — chore: add westeurope to allowed locations policy
+**Date :** 2026-05-28
+
+**Réalisé :**
+- `lz_dev/policies.tf` : ajout de `"westeurope"` dans la liste `allowed_locations` du module `policy_allowed_locations`
+
+**Décisions techniques :**
+- Microsoft Entra External ID (remplaçant d'Azure AD B2C) déploie son infrastructure interne en `westeurope`, indépendamment de la région de résidence des données sélectionnée à la création du tenant. La policy `Allowed locations` (mode `All`, scope subscription) bloquait la création avec un `RequestDisallowedByPolicy` sur la région `westeurope`.
+- `westeurope` est ajouté aux côtés de `francecentral` et `northeurope` — les deux régions EU déjà autorisées pour les ressources Azure standard du projet.
+
+---
+
+### PR #77 — chore: replace westeurope with europe in allowed locations for Entra External ID
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `lz_dev/policies.tf` : remplacement de `"westeurope"` par `"europe"` dans la liste `allowed_locations` du module `policy_allowed_locations`
+
+**Décisions techniques :**
+- L'Activity Log Azure révèle que la `resourceLocation` tentée lors de la création du tenant Entra External ID (`Microsoft.AzureActiveDirectory/ciamDirectories`) est `"europe"` — une valeur spéciale Azure pour les ressources d'identité multi-régions, distincte de `"westeurope"`.
+- PR #76 avait ajouté `"westeurope"` comme hypothèse ; cette PR corrige le tir en remplaçant `"westeurope"` par la valeur exacte retournée par Azure, sans exemption inutile de toute la région standard westeurope.
+
+---
+
+### PR #78 — chore(m3): prepare repo for public visibility
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `docs/` : remplacement de toutes les références "Azure AD B2C" par "Microsoft Entra External ID" — alignement avec le renommage officiel Microsoft
+- `.gitignore` : `docs/MANUAL_OPERATIONS.md` et `job-finder-private/` (repo git imbriqué pour les opérations sensibles) ajoutés à la liste d'exclusion ; `docs/MANUAL_OPERATIONS.md` désindexé via `git rm --cached`
+- `JobFinder/powershell/setup-sp-jf-platform.ps1` et `setup-sp-jf-github.ps1` : `$subscriptionId` et `$tenantId` hardcodés remplacés par un bloc `param([Parameter(Mandatory)])` — les valeurs ne sont plus stockées dans le code source
+
+**Décisions techniques :**
+- Les scripts PowerShell contenaient des IDs Azure (subscription, tenant) en clair — un repo public les aurait exposés. Le bloc `param(Mandatory)` force l'appelant à les fournir explicitement à l'exécution.
+- `MANUAL_OPERATIONS.md` contient des procédures opérationnelles sensibles (SPs, OIDC, rôles) : déplacé dans `job-finder-private/` et exclu du repo public.
+- `job-finder-private/` est un repo git indépendant imbriqué dans `job-finder/` — le gitignore du repo parent l'exclut entièrement pour éviter tout commit accidentel de son contenu.
+
+---
+
+### PR #79 — feat: complete Entra External ID setup script
+**Date :** 2026-06-01
+
+**Réalisé :**
+- `JobFinder/powershell/setup-entra-external-tenant.ps1` : script étendu pour couvrir toutes les opérations faites manuellement sur le portail — 9 sections au total :
+  1. Tenant CIAM via ARM (`Microsoft.AzureActiveDirectory/ciamDirectories`)
+  2. App Registration `fastapi-jobfinder` via `az ad app`
+  3. Scopes built-in OpenID Connect (openid, profile, email)
+  4. Client secret (`--append`, 2 ans)
+  5. Scope custom `access_as_user` via Graph PATCH sur l'application
+  6. User flow `susi` via Graph POST (`externalUsersSelfServiceSignUpEventsFlow`)
+  7. Association `fastapi-jobfinder` ↔ user flow `susi`
+  8. Google Identity Provider + ajout au user flow `susi`
+  9. Résumé des 5 valeurs à stocker dans Key Vault
+- Deux nouveaux paramètres obligatoires : `$googleClientId`, `$googleClientSecret`
+
+**Décisions techniques :**
+- Le tenant a été créé manuellement le 2026-06-01 via le portail Azure avant que ce script existait — le script documente et automatise la procédure pour une reconstruction depuis zéro
+- La création de tenant CIAM est asynchrone côté Azure — `Start-Sleep -Seconds 10` suivi d'un GET de vérification pour lire le `tenantId` une fois la propagation terminée
+- La section 2 (app registration) nécessite `az login --tenant $externalTenantId` : les commandes `az ad app` et tous les appels Graph suivants ciblent le tenant CIAM — un re-login interactif est requis pour basculer du tenant principal vers le tenant External ID
+- `--resource https://graph.microsoft.com` sur tous les appels `az rest` Graph : explicite l'audience OAuth2 du token, nécessaire dans un tenant CIAM où l'audience par défaut pourrait différer
+- `--append` sur `az ad app credential reset` : ajoute un secret sans invalider les secrets existants — une ré-exécution ne casse pas les déploiements en cours
+- Mise à jour du user flow pour ajouter Google : GET du flow pour lire la liste courante des IdPs, puis PATCH avec la liste augmentée — évite d'écraser la config existante
+
+---
+
+### PR #80 — feat: FastAPI webapp — JWT auth, CV upload, matches, profile
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `agents/webapp/auth.py` : validation JWT Entra External ID avec python-jose — fetch JWKS avec TTL 24h + retry sur rotation de clé (`JWTError` → vider cache → re-fetch → réessayer une fois), décodage RS256, audience + issuer validés, retourne le claim `sub` ; `HTTPException 401` si token absent/invalide/expiré ; `load_dotenv()` appelé après tous les imports (convention CLAUDE.md)
+- `agents/webapp/schemas.py` : modèles Pydantic — `ProfileUpdate` (sans `rome_codes` — readonly), `OfferOut` (avec `skills: list[str] = []` pour NULL ORM), `MatchOut`, `MatchesOut` (wrapper `{ rome_codes, matches }`), `ProfileOut` (`rome_codes` readonly), `CVUploadOut` (avec `blob_url`) ; `from_attributes=True` pour sérialisation ORM
+- `agents/webapp/dependencies.py` : dépendance `get_db` — generateur FastAPI wrappant `get_session`
+- `agents/webapp/routers/cv.py` : `POST /cv/upload` — validation `content_type` (422 si non-PDF) + taille max 10 MB (413) avant lecture ; upload PDF dans Azure Blob Storage (`cvs/{user_id}/{uuid}.pdf`, `overwrite=False`, client singleton module-level) → `blob_url` ; extraction texte pdfplumber ; embedding `shared/embedder.embed()` ; upsert CV avec `blob_url` (select-then-update-or-insert — absence de contrainte unique sur `user_id` intentionnelle, supporte plusieurs CVs par utilisateur) ; upsert UserProfile `ON CONFLICT DO NOTHING` ; déclenchement matching `offer-ready` (après commit, `ServiceBusError` logué sans faire échouer la requête) ; `AzureError` → 503
+- `agents/webapp/routers/matches.py` : `GET /matches` → `MatchesOut { rome_codes, matches }` triés par score décroissant
+- `agents/webapp/routers/profile.py` : `GET /profile` (404 si absent) + `PUT /profile` — upsert sur `job_categories`, `location`, `contract_types` uniquement ; `rome_codes` jamais touché
+- `agents/webapp/main.py` : lifespan `run_migrations()` (fail-fast intentionnel) ; `AsyncGenerator[None, None]` comme type de retour ; 3 routers inclus
+- `agents/webapp/requirements.txt` : fastapi, uvicorn, python-jose, pdfplumber, sqlalchemy, psycopg2-binary, pgvector, azure-servicebus, azure-identity, azure-storage-blob, openai, structlog, pydantic, requests
+- `agents/webapp/Dockerfile` : build context `JobFinder/python/`, `uvicorn main:app --host 0.0.0.0 --port 8000`
+- `migrations/versions/003_add_cvs_blob_url.py` : `ADD COLUMN blob_url VARCHAR NULL` sur `cvs`
+- `shared/models.py` : `blob_url: Mapped[str | None]` ajouté sur `CV`
+
+**Décisions techniques :**
+- `rome_codes` géré exclusivement par l'agent GPT-4o-mini — absent de `ProfileUpdate` et du `set_{}` de `PUT /profile` ; exposé en lecture dans `ProfileOut` et `MatchesOut`. Un endpoint utilisateur ne doit jamais écraser une donnée produite par un agent IA.
+- `MatchesOut { rome_codes, matches }` : rome_codes retournés une seule fois au niveau racine — évite la redondance et épargne un second appel `GET /profile` au frontend.
+- JWKS TTL 24h + retry sur rotation : les clés Entra External ID changent rarement, mais une rotation dans la fenêtre TTL est couverte sans redémarrage du container.
+- Blob upload après validation PDF et avant embedding : évite de stocker un fichier invalide et de gaspiller des tokens si le storage est hors service.
+- `_blob_service_client` singleton module-level : évite de créer un nouveau `BlobServiceClient` (et une nouvelle credential) par requête.
+- Absence de contrainte unique sur `cvs.user_id` intentionnelle : supporte plusieurs CVs par utilisateur (rôles différents). Race condition select-then-insert acceptée — le webapp tourne sur un seul replica pendant cette phase.
+- `send_message` après `session.commit()` : le message n'est dispatché que si l'écriture DB a réussi. `ServiceBusError` logué sans faire échouer la requête — le cron de matching prendra le relai au prochain run.
+- `agents/webapp/main.py` : commentaire inline sur `except Exception` dans `lifespan` pour documenter l'intention fail-fast ; `run_migrations()` enveloppé dans un `try/except Exception` avec `logger.error("migrations_failed", exc_info=True)` — même pattern appliqué aux trois agents (`offer_fetching`, `matching`, `cleanup`).
+- `except Exception` intentionnel dans les 4 entrypoints : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement.
+- Terraform et CI/CD (Container App permanent, build Docker, secrets) feront l'objet de PRs séparées.
+
+---
+
+### PR #81 — feat: provision FastAPI webapp as Container App
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `modules/container_app/` : nouveau module Terraform réutilisable — `azurerm_container_app` avec ingress HTTP port 8000, `revision_mode = "Single"`, scale-to-zero (`min_replicas` configurable), `prevent_destroy = true`, tag `protect = "true"` ; blocs `dynamic` pour `env`, `secret`, `identity`, `registry`
+- `envs/dev/webapp.tf` : déploiement de la webapp FastAPI dans le CAE existant — image ACR `agents/webapp:latest`, UAMI `id-jf-dev-frc-caj`, 9 variables d'environnement câblées (DATABASE_URL, AZURE_OPENAI_*, AZURE_SERVICEBUS_*, AZURE_CLIENT_ID, AZURE_STORAGE_ACCOUNT_URL, ENTRA_EXTERNAL_*) ; secrets Entra External ID lus depuis Key Vault via data sources
+- `envs/dev/outputs.tf` : output `webapp_url` exposant le FQDN public du Container App
+- `envs/dev/main.tf` : provider azurerm déjà déclaré — aucune modification
+
+**Décisions techniques :**
+- Module `container_app` distinct de `container_app_job` : un Container App est un service HTTP permanent (ingress, scaling horizontal) ; un Container App Job est une tâche ponctuelle (timer ou queue) — les deux ressources azurerm n'ont pas les mêmes attributs et ne partagent pas la même sémantique
+- `module.storage.primary_blob_endpoint` utilisé directement pour `AZURE_STORAGE_ACCOUNT_URL` : l'output du module expose déjà l'URL blob complète — plus cohérent que créer un data source redondant sur une ressource déjà en state
+- `data.azurerm_user_assigned_identity.caj` réutilisé depuis `container_apps.tf` : l'identité managée est partagée entre les Container App Jobs et la webapp — un seul objet IAM à gérer, une seule assignation AcrPull
+
+---
+
+### PR #82 — feat: add webapp to build and deploy pipeline
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `.github/workflows/buildAgents.yml` : ajout du step "Build and push webapp image" après offer-fetching, avec build context `JobFinder/python`, layer cache ACR `agents/webapp:cache` ; ajout de la ligne webapp dans le Build summary ; ajout de `az containerapp update` (pas `job update`) pour mettre à jour le Container App permanent après le push
+
+**Décisions techniques :**
+- `az containerapp update` vs `az containerapp job update` : la webapp est un Container App permanent (service HTTP), pas un Container App Job (tâche ponctuelle) — les deux commandes CLI sont distinctes et non interchangeables
+- Même pattern tags `:latest` + `:<sha>` que les agents : `:latest` pour le déploiement Terraform initial, `:<sha>` pour la traçabilité et le rollback précis via la commande de mise à jour
+
+---
+
+### PR #83 — docs: update ADRs to Accepté and document AKS abandonment
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `docs/adr/ADR-*.md` : statut de tous les ADRs passé de "Proposé" à "Accepté" — les décisions sont implémentées et en production
+- `docs/adr/ADR-002-compute-platform.md` : révision complète — décision mise à jour de AKS vers Container Apps définitif ; section "Pourquoi la migration AKS a été abandonnée en Milestone 3" ajoutée ; conséquences et actions réalisées mises à jour
+
+**Décisions techniques :**
+- Migration AKS abandonnée : Container Apps couvre l'ensemble des besoins (Container App Jobs pour les agents batch, Container App pour la webapp HTTP) sans la complexité et le coût d'AKS. La valeur portfolio est couverte par l'architecture multi-agents, KEDA, les identités managées et les modules Terraform.
+
+---
+
+### PR #84
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🔀  MERGE dev → main — 2026-06-02                                         ║
+║   🏷️  v0.5.0 — Milestone 3 : webapp FastAPI + Entra External ID             ║
+║         (PRs #73 à #83)                                                      ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║   Identité managée & Service Bus                                             ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #73  Service Bus Data Owner → UAMI (lz_dev, sp-jf-platform)          ║
+║   • PR #74  Module container_app_job — workload identity KEDA                ║
+║   • PR #75  Migration auth Service Bus → Managed Identity (Python + TF)     ║
+║                                                                              ║
+║   Infrastructure réseau & gouvernance                                        ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #76  westeurope ajouté à allowed locations (Entra External ID)       ║
+║   • PR #77  westeurope → europe (resourceLocation réelle Azure)             ║
+║                                                                              ║
+║   Entra External ID                                                          ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #78  Repo préparé pour visibilité publique (secrets retirés)         ║
+║   • PR #79  Script PowerShell setup Entra External ID complet               ║
+║             (tenant, app registration, scopes, user flow, Google IdP)       ║
+║                                                                              ║
+║   FastAPI Webapp — Python                                                    ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #80  Webapp FastAPI — JWT Entra, POST /cv/upload (PDF + blob),       ║
+║             GET /matches, GET+PUT /profile ; migration 003 blob_url          ║
+║                                                                              ║
+║   FastAPI Webapp — Infrastructure & CI/CD                                   ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #81  Module container_app + déploiement Terraform dev                ║
+║   • PR #82  buildAgents.yml — build webapp + az containerapp update         ║
+║                                                                              ║
+║   Documentation                                                              ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   • PR #83  ADRs → Accepté ; ADR-002 révisé (AKS abandonné)                ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```

@@ -1,6 +1,6 @@
 # ADR-008 : Modèle d'embedding pour la vectorisation des offres et CVs
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

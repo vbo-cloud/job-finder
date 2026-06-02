@@ -1,6 +1,6 @@
 # ADR-009 : Framework API pour les endpoints job-finder
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

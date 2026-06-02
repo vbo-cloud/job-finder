@@ -215,8 +215,61 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ---
 
+## FastAPI — Dette technique
+
+### [pre-v1.0.0] Contrainte unique sur cvs.user_id
+Ajouter une migration Alembic `003_add_uq_cvs_user_id.py` avec
+`uq_cvs_user_id` sur `cvs.user_id`. Remplacer le select-then-insert
+dans `routers/cv.py` par un `pg_insert ON CONFLICT DO UPDATE` —
+cohérent avec le pattern `user_profiles`.
+
+### [pre-v1.0.0] Pincer les dépendances de la webapp
+Lancer `pip-compile requirements.txt` dans `agents/webapp/` pour
+générer un lockfile reproductible. À faire avant v1.0.0.
+
+### [optional] Blob orphelin sur échec DB dans POST /cv/upload
+Si le blob est uploadé mais que le `session.commit()` échoue ensuite,
+le blob reste orphelin dans le Storage Account. Solution future :
+nettoyer les blobs orphelins via un job périodique ou stocker l'URL
+blob uniquement après le commit réussi (nécessite refacto du flow).
+
+### [v1.0.0] Renommer la UAMI `id-jf-dev-frc-caj` en `id-jf-dev-frc-apps`
+La UAMI est partagée entre les Container App Jobs et la webapp Container App.
+Le suffixe `caj` (Container App Job) ne reflète plus son périmètre réel.
+À renommer lors du provisionnement prod à v1.0.0 pour partir sur une base propre.
+
+### [optional] Champ `updated_at` sur UserProfile
+Ajouter `updated_at` (DateTime, auto-update) sur le modèle `UserProfile`
+pour l'observabilité et l'audit. Nécessite une migration Alembic.
+
+---
+
 ## ADRs à rédiger
 
 - **ADR-014** : Stratégie de cache (Redis vs cache applicatif)
 - **ADR-015** : Frontend (Next.js vs React SPA vs serveur-rendu)
 - **ADR-016** : Stratégie de test (unit, integration, e2e)
+
+---
+
+## Automatisation IA — idées futures
+
+### [optional] Tests unitaires générés par IA
+Utiliser Claude Code pour générer des tests pytest couvrant les agents Python :
+- `_upsert_offers` avec des données mockées (France Travail API simulée)
+- Logique de cleanup (cutoff, branches NULL)
+- `_embed_pending_offers` sans appel réel à l'API OpenAI (mock)
+- `send_message` / `receive_message` dans `shared/bus.py`
+
+### [optional] Enrichissement du reviewer agent — audit sécurité ciblé
+Étendre le system prompt du reviewer agent pour détecter automatiquement :
+- Secrets ou credentials exposés en clair
+- Ressources critiques sans `prevent_destroy`
+- NSG avec règles ouvertes à `0.0.0.0/0`
+- Variables sensibles passées en plain-text plutôt qu'en secret Key Vault
+
+### [optional] Analyse de logs Application Insights via IA
+Script qui récupère les logs des dernières 24h depuis Application Insights
+et les envoie à Claude pour détecter des anomalies, patterns d'erreur récurrents,
+ou dégradations de performance. Utile pour le monitoring et démontre l'usage
+de l'IA au-delà de la génération de code.

@@ -1,6 +1,6 @@
 # ADR-010 : Stratégie de collecte des offres d'emploi
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 

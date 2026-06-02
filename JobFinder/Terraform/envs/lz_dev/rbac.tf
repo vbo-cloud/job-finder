@@ -99,6 +99,10 @@ resource "azurerm_user_assigned_identity" "caj" {
   }
 }
 
+# ==============================================================================
+# Role — ACR Pull
+# ==============================================================================
+
 data "azurerm_container_registry" "acr" {
   name                = "cr${var.project}dev${var.location_short}"
   resource_group_name = module.rg_app.name
@@ -107,5 +111,20 @@ data "azurerm_container_registry" "acr" {
 resource "azurerm_role_assignment" "caj_acr_pull" {
   scope                = data.azurerm_container_registry.acr.id
   role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
+
+# ==============================================================================
+# Role — Service Bus Data Owner
+# ==============================================================================
+
+data "azurerm_servicebus_namespace" "dev" {
+  name                = "sb-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_app.name
+}
+
+resource "azurerm_role_assignment" "caj_servicebus_owner" {
+  scope                = data.azurerm_servicebus_namespace.dev.id
+  role_definition_name = "Azure Service Bus Data Owner"
   principal_id         = azurerm_user_assigned_identity.caj.principal_id
 }

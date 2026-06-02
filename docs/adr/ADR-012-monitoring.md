@@ -1,6 +1,6 @@
 # ADR-012 : Monitoring et observabilité
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-01
 **Décideur :** Vincent Boutin
 
