@@ -1945,3 +1945,35 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+## PR #85 — docs: update backlog with M4 planning and PR roadmap
+
+**Date :** 2026-06-02
+**Branche :** `docs/m4-backlog-and-planning` → `dev`
+
+### Ce qui a été fait
+
+Préparation du Milestone 4 (frontend Next.js) et du Milestone 5 (monitoring + tests) via trois nouveaux ADRs et un backlog détaillé par PR.
+
+**Nouveaux ADRs :**
+- **ADR-015** — Framework frontend : Next.js 14 (App Router, TypeScript, Tailwind CSS, Framer Motion, MSAL). Choix justifié par la valeur portfolio et la cohérence avec l'infrastructure Container Apps existante.
+- **ADR-016** — Stratégie de test : tests unitaires Python ciblés (pytest) sur la logique critique (cleanup, auth JWT, validation CV). Tests e2e différés à v1.1.0 pour tenir le délai v1.0.0.
+- **ADR-017** — Monitoring et alerting : Application Insights + KQL + Azure Monitor Alerts. 6 alertes critiques définies (5xx, dead-letter, CPU PostgreSQL, quota OpenAI, agent fetch absent, disponibilité webapp).
+
+**Backlog M4 — 9 PRs planifiées :**
+1. Agent cv-analysis — extraction codes ROME depuis texte CV (GPT-4o-mini)
+2. Infrastructure frontend — Container App Next.js + CI/CD
+3. Frontend setup — projet Next.js + auth Entra External ID (MSAL)
+4. Frontend — page upload CV avec animation Three.js
+5. Frontend — bibliothèque de CV
+6. Frontend — vue détail CV (placeholders cv-review)
+7. Frontend — page profil utilisateur
+8. Agent cv-review — analyse CV vs offres (forces/faiblesses/suggestions)
+9. Frontend — brancher cv-review sur la vue détail CV
+
+**Backlog M5 — 3 PRs planifiées :**
+1. ADR-017 : Terraform — action group + 6 alertes + injection `APPLICATIONINSIGHTS_CONNECTION_STRING`
+2. ADR-017 : Python — instrumentation azure-monitor-opentelemetry + `duration_seconds`
+3. Tests unitaires Python (ADR-016)
