@@ -1,6 +1,6 @@
 # ADR-013 : Stratégie Git, Terraform et CI/CD
 
-**Statut :** Proposé
+**Statut :** Accepté
 **Date :** 2026-05-03
 **Décideur :** Vincent Boutin
 
