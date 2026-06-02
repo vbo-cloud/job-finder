@@ -1870,3 +1870,19 @@ L'approche PR #47 (RBAC Administrator conditionné sur sp-jf-github) est impossi
 **Décisions techniques :**
 - `except Exception` intentionnel dans tous les cas : Alembic et SQLAlchemy peuvent lever des exceptions de types variés (`CommandError`, `OperationalError`, `ProgrammingError`…) — catcher la base garantit qu'aucune ne passe silencieusement. Le commentaire inline documente ce choix pour les futurs reviewers.
 - Comportement identique dans les 4 entrypoints : une migration ratée doit toujours stopper le démarrage, que ce soit la webapp FastAPI ou un Container App Job.
+
+---
+
+### PR #82 — feat: provision FastAPI webapp as Container App
+**Date :** 2026-06-02
+
+**Réalisé :**
+- `modules/container_app/` : nouveau module Terraform réutilisable — `azurerm_container_app` avec ingress HTTP port 8000, `revision_mode = "Single"`, scale-to-zero (`min_replicas` configurable), `prevent_destroy = true`, tag `protect = "true"` ; blocs `dynamic` pour `env`, `secret`, `identity`, `registry`
+- `envs/dev/webapp.tf` : déploiement de la webapp FastAPI dans le CAE existant — image ACR `agents/webapp:latest`, UAMI `id-jf-dev-frc-caj`, 9 variables d'environnement câblées (DATABASE_URL, AZURE_OPENAI_*, AZURE_SERVICEBUS_*, AZURE_CLIENT_ID, AZURE_STORAGE_ACCOUNT_URL, ENTRA_EXTERNAL_*) ; secrets Entra External ID lus depuis Key Vault via data sources
+- `envs/dev/outputs.tf` : output `webapp_url` exposant le FQDN public du Container App
+- `envs/dev/main.tf` : provider azurerm déjà déclaré — aucune modification
+
+**Décisions techniques :**
+- Module `container_app` distinct de `container_app_job` : un Container App est un service HTTP permanent (ingress, scaling horizontal) ; un Container App Job est une tâche ponctuelle (timer ou queue) — les deux ressources azurerm n'ont pas les mêmes attributs et ne partagent pas la même sémantique
+- `module.storage.primary_blob_endpoint` utilisé directement pour `AZURE_STORAGE_ACCOUNT_URL` : l'output du module expose déjà l'URL blob complète — plus cohérent que créer un data source redondant sur une ressource déjà en state
+- `data.azurerm_user_assigned_identity.caj` réutilisé depuis `container_apps.tf` : l'identité managée est partagée entre les Container App Jobs et la webapp — un seul objet IAM à gérer, une seule assignation AcrPull
