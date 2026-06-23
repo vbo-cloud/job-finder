@@ -9,18 +9,33 @@ import { LogLevel } from "@azure/msal-browser";
  * `next build` runs (see `.env.local.example`).
  */
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
+// Next.js only inlines NEXT_PUBLIC_* into the client bundle when they are
+// referenced statically (process.env.NEXT_PUBLIC_FOO). A dynamic lookup such as
+// process.env[name] is NOT replaced at build time, leaving the value undefined
+// in the browser. So each variable is read statically and passed in for validation.
+function requireEnv(name: string, value: string | undefined): string {
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
 }
 
-const clientId = requireEnv("NEXT_PUBLIC_ENTRA_CLIENT_ID");
-const authority = requireEnv("NEXT_PUBLIC_ENTRA_AUTHORITY");
-const knownAuthority = requireEnv("NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY");
-const apiScope = requireEnv("NEXT_PUBLIC_ENTRA_API_SCOPE");
+const clientId = requireEnv(
+  "NEXT_PUBLIC_ENTRA_CLIENT_ID",
+  process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID,
+);
+const authority = requireEnv(
+  "NEXT_PUBLIC_ENTRA_AUTHORITY",
+  process.env.NEXT_PUBLIC_ENTRA_AUTHORITY,
+);
+const knownAuthority = requireEnv(
+  "NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY",
+  process.env.NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY,
+);
+const apiScope = requireEnv(
+  "NEXT_PUBLIC_ENTRA_API_SCOPE",
+  process.env.NEXT_PUBLIC_ENTRA_API_SCOPE,
+);
 
 // Defaults to the current origin in the browser; falls back to the env var
 // for SSR / build contexts where `window` is unavailable.
