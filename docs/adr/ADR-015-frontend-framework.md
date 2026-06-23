@@ -125,7 +125,7 @@ Le déploiement sur Container Apps (Node.js) est naturel pour Next.js — cohér
 
 ## Actions suivantes
 
-- [ ] Créer le projet Next.js dans `frontend/` à la racine du repo
+- [ ] Créer le projet Next.js dans `JobFinder/frontend/`
 - [ ] Configurer MSAL pour Entra External ID (tenant jobfinderapp)
 - [ ] Créer le module Terraform `container_app` pour le frontend (réutiliser le module existant)
 - [ ] Ajouter le build de l'image frontend dans `buildAgents.yml`
