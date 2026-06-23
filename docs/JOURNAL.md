@@ -2048,3 +2048,51 @@ App importée localement avec la stack webapp complète et un preflight `OPTIONS
 ### Fichiers modifiés
 
 - `agents/webapp/main.py` — constante `CORS_ALLOWED_ORIGINS` (parsing env), ajout du `CORSMiddleware` + warning si aucune origine configurée
+
+---
+
+## PR #88 — feat(frontend): scaffold Next.js project + fix(webapp): add alembic
+
+**Date :** 2026-06-23
+**Branche :** `feature/m4-frontend-scaffold` → `dev`
+
+Premier pas du Milestone 4 (proposition A — *walking skeleton*) : initialisation du projet frontend Next.js, plus un correctif de dépendance backend repéré pendant la PR CORS. Deux commits atomiques distincts dans une seule PR.
+
+### Commit 1 — `fix(webapp): add alembic to webapp requirements`
+
+`shared/db.py` importe `alembic` au chargement du module, mais le Dockerfile de la webapp n'installe que `agents/webapp/requirements.txt` (qui ne le listait pas) → la webapp plantait au démarrage. Ajout de `alembic` (même spécification non-épinglée que le `requirements.txt` racine).
+
+**Vérification :** dans un venv où seul `agents/webapp/requirements.txt` est installé, `python -c "import shared.db"` réussit (avec `DATABASE_URL` factice pour passer la validation au chargement).
+
+### Commit 2 — `feat(frontend): scaffold Next.js project with MSAL auth`
+
+Nouveau répertoire `JobFinder/frontend/` : Next.js 14 (App Router) + TypeScript + Tailwind CSS (cf. ADR-015), authentification Microsoft Entra External ID (CIAM) via `@azure/msal-browser` + `@azure/msal-react`, client HTTP `axios`.
+
+**Périmètre — squelette d'auth uniquement.** Aucune UI métier (pas d'upload, pas de bibliothèque) : juste une page d'accueil avec un bouton de connexion/déconnexion qui distingue l'état connecté / non connecté.
+
+**Décisions techniques :**
+- Configuration MSAL entièrement lue depuis des variables d'environnement `NEXT_PUBLIC_*` — rien codé en dur. Une variable manquante lève une erreur explicite au chargement de `msalConfig.ts`. Toutes documentées dans `.env.local.example`.
+- Instance MSAL partagée (`lib/auth/msalInstance.ts`) entre le `MsalProvider` (`AuthProvider`) et l'intercepteur axios, pour un cache de compte cohérent. `AuthProvider` attend `instance.initialize()` (requis par MSAL v3) avant de rendre ses enfants.
+- L'intercepteur axios (`lib/api/client.ts`) acquiert le jeton via `acquireTokenSilent` (scope `NEXT_PUBLIC_ENTRA_API_SCOPE`) et l'injecte en `Authorization: Bearer …` ; repli sur `acquireTokenRedirect` si une interaction est requise.
+- Dockerfile `node:20-alpine` (`npm ci` + `npm run build` + `npm start`, port 3000) ; `.dockerignore` exclut `node_modules`, `.next`, `.env*`.
+
+**Limite connue :** le login n'est **pas** testable de bout en bout tant que l'app registration SPA (Entra External ID) et son redirect URI n'existent pas — c'est l'étape manuelle suivante. Le build, le lint et le serveur de dev ont été validés avec des valeurs `NEXT_PUBLIC_*` factices.
+
+### Documentation
+
+- `docs/adr/ADR-015-frontend-framework.md` — emplacement corrigé `frontend/` → `JobFinder/frontend/`.
+- `docs/BACKLOG.md` (tests M5) — ajout de `tests/test_cors.py` (scénarios preflight origine présente/absente), follow-up identifié par le reviewer de la PR #87.
+
+### Correctif post-scaffold — `fix(frontend): reference NEXT_PUBLIC_* env vars statically`
+
+La page plantait au chargement navigateur (« Missing required environment variable: NEXT_PUBLIC_ENTRA_CLIENT_ID ») alors que `.env.local` était correct et chargé côté serveur. Cause : `msalConfig.ts` lisait les variables via un accès dynamique (`process.env[name]`). Next.js n'inline les `NEXT_PUBLIC_*` dans le bundle **client** que si elles sont référencées **statiquement** (`process.env.NEXT_PUBLIC_FOO`) → en accès dynamique, valeurs `undefined` côté navigateur (OK côté serveur).
+
+Correctif : `requireEnv(name, value)` reçoit désormais la valeur lue statiquement ; la validation est conservée. Vérifié dans un vrai navigateur (Edge headless) : la page affiche le titre + le bouton « Se connecter », sans erreur de page dans la console.
+
+### Correctif — `fix(frontend): surface MSAL initialization failures instead of blank screen`
+
+`AuthProvider` appelait `msalInstance.initialize().then(...)` sans `.catch()` : en cas d'échec d'initialisation (ex. autorité malformée), la promesse était avalée, `isReady` restait `false` et la page restait blanche, sans aucun message. Ajout d'un `.catch()` qui logge l'erreur, stocke un état `initError` et affiche un message visible (`role="alert"`) à la place de `null`. Objectif : ne plus jamais avoir d'écran blanc silencieux en cas de mauvaise configuration MSAL.
+
+### Investigation — resync `next` / `@next/swc` (aucun changement)
+
+Un resync de version `next` était envisagé car le lockfile montrait `next`/`@next/env` en `14.2.35` et les binaires `@next/swc-*` en `14.2.33`. Vérification faite : ce n'est **pas** une incohérence. `next@14.2.35` épingle lui-même ses `optionalDependencies` `@next/swc-*` à `14.2.33`, et `@next/swc-*@14.2.35` n'existe pas sur le registre npm (les binaires SWC n'ont pas été rebâtis pour les patchs 14.2.34/35). La résolution actuelle est donc correcte et la seule possible — aucun changement de dépendance n'a été apporté.
