@@ -250,6 +250,14 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub variable
 
 ---
 
+## Frontend / Next.js Conventions
+
+### Variables d'environnement publiques (`NEXT_PUBLIC_*`)
+- **Toujours référencer une variable `NEXT_PUBLIC_*` en toutes lettres et statiquement** : `process.env.NEXT_PUBLIC_FOO`. Jamais via un accès dynamique (`process.env[name]`, déstructuration calculée, etc.).
+- Raison : Next.js n'inline les `NEXT_PUBLIC_*` dans le bundle **client** qu'au prix d'un remplacement textuel à la compilation, qui n'a lieu **que** sur des références statiques. Un accès dynamique laisse la valeur `undefined` côté navigateur (alors qu'elle fonctionne côté serveur) → la page plante au chargement. Si une validation centralisée est souhaitée, lire la valeur statiquement puis la passer à une fonction de validation (ex. `requireEnv("NEXT_PUBLIC_FOO", process.env.NEXT_PUBLIC_FOO)`).
+
+---
+
 ## Code Review Standards
 
 Enforced automatically by the Claude reviewer agent (`.github/reviewer-agent/system-prompt.md`). Naming conventions, required tags, and module usage are already defined above — the sections below cover what is not.
