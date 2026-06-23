@@ -17,13 +17,17 @@ param(
     [Parameter(Mandatory)][string]$tenantId,
     [Parameter(Mandatory)][string]$resourceGroupName,
     [Parameter(Mandatory)][string]$googleClientId,
-    [Parameter(Mandatory)][string]$googleClientSecret
+    [Parameter(Mandatory)][string]$googleClientSecret,
+    # Redirect URIs de la plateforme SPA (frontend Next.js). Paramétrable pour
+    # ajouter l'URL du Container App plus tard sans modifier le script.
+    [string[]]$spaRedirectUris = @("http://localhost:3000")
 )
 
 $domainName  = "jobfinderapp"
 $displayName = "jobfinderapp"
 $countryCode = "FR"
 $appName     = "fastapi-jobfinder"
+$spaAppName  = "spa-jobfinder"
 
 az account set --subscription $subscriptionId
 
@@ -327,7 +331,151 @@ if ($null -ne $googleInFlow) {
 }
 
 # ==============================================================================
-# 9. Résumé — valeurs à stocker dans Key Vault (kv-jf-dev-frc)
+# 9. App Registration SPA (spa-jobfinder) — client public, sans secret (idempotent)
+# Carte applicative dédiée au frontend Next.js, distincte de l'API
+# fastapi-jobfinder. Aucun client secret : l'auth navigateur utilise
+# Authorization Code + PKCE (client public). Authentifié contre le tenant CIAM
+# via le az login de la section 2.
+# ==============================================================================
+
+Write-Host ""
+Write-Host "Vérification de l'App Registration SPA '$spaAppName'..."
+$existingSpaApp = az ad app list --display-name $spaAppName --query "[0]" | ConvertFrom-Json
+if ($null -ne $existingSpaApp) {
+    Write-Host "App Registration '$spaAppName' existe déjà — récupération des IDs."
+    $spaAppObjId = $existingSpaApp.id
+    $spaAppId    = $existingSpaApp.appId
+} else {
+    Write-Host "Création de l'App Registration '$spaAppName'..."
+    $spaApp = az ad app create `
+        --display-name     $spaAppName `
+        --sign-in-audience AzureADMyOrg `
+        | ConvertFrom-Json
+    $spaAppObjId = $spaApp.id
+    $spaAppId    = $spaApp.appId
+    Write-Host "App Registration '$spaAppName' créée."
+}
+
+Write-Host "SPA Client ID (NEXT_PUBLIC_ENTRA_CLIENT_ID) : $spaAppId"
+
+# ==============================================================================
+# 10. Plateforme SPA — redirect URIs (idempotent)
+# Les URIs sont enregistrées dans la propriété `spa` (et NON `web`) : c'est ce
+# qui active le flux Authorization Code + PKCE attendu par MSAL dans le
+# navigateur. Ajout additif — les URIs déjà présentes sont conservées.
+# ==============================================================================
+
+Write-Host "Vérification des redirect URIs de la plateforme SPA..."
+$spaDetails     = az rest --method GET `
+    --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+# Where-Object { $_ } : sur une app fraîchement créée, .spa.redirectUris vaut
+# $null et @($null) produirait un tableau contenant un élément vide.
+$currentSpaUris = @($spaDetails.spa.redirectUris | Where-Object { $_ })
+$missingUris    = @($spaRedirectUris | Where-Object { $currentSpaUris -notcontains $_ })
+
+if ($missingUris.Count -eq 0) {
+    Write-Host "Redirect URIs SPA déjà à jour ($($currentSpaUris -join ', ')) — ignoré."
+} else {
+    $mergedUris = @($currentSpaUris + $missingUris | Select-Object -Unique)
+    Write-Host "Enregistrement des redirect URIs SPA : $($mergedUris -join ', ')..."
+    # JSON construit manuellement : ConvertTo-Json désérialise un tableau
+    # mono-élément en scalaire sous PowerShell 5.1, ce que Graph rejette pour
+    # spa.redirectUris (Collection(String)).
+    $urisJson = '[' + (($mergedUris | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
+    $body     = '{"spa":{"redirectUris":' + $urisJson + '}}'
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method PATCH `
+        --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "Redirect URIs SPA enregistrées : $($mergedUris -join ', ')."
+}
+
+# ==============================================================================
+# 11. Permission API déléguée — spa-jobfinder → fastapi-jobfinder/access_as_user
+# Réutilise l'id du scope access_as_user créé en section 5 (ne le recrée pas).
+# ==============================================================================
+
+Write-Host "Récupération de l'id du scope 'access_as_user' de '$appName'..."
+$apiAppDetails       = az rest --method GET `
+    --url      "https://graph.microsoft.com/v1.0/applications/$appObjId" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+$accessAsUserScope   = $apiAppDetails.api.oauth2PermissionScopes | Where-Object { $_.value -eq "access_as_user" }
+$accessAsUserScopeId = $accessAsUserScope.id
+
+if ($null -eq $accessAsUserScopeId) {
+    Write-Error "Scope 'access_as_user' introuvable sur '$appName' — exécuter d'abord la section 5."
+    exit 1
+}
+
+Write-Host "Vérification de la permission API déléguée de '$spaAppName'..."
+$spaPermissionDetails = az rest --method GET `
+    --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+    --resource "https://graph.microsoft.com" `
+    | ConvertFrom-Json
+$apiAccessGranted = $false
+foreach ($resource in @($spaPermissionDetails.requiredResourceAccess)) {
+    if ($resource.resourceAppId -eq $appId) {
+        $scopeGranted = @($resource.resourceAccess) | Where-Object { $_.id -eq $accessAsUserScopeId -and $_.type -eq "Scope" }
+        if ($null -ne $scopeGranted) { $apiAccessGranted = $true }
+    }
+}
+
+if ($apiAccessGranted) {
+    Write-Host "Permission déléguée 'access_as_user' déjà accordée à '$spaAppName' — ignorée."
+} else {
+    Write-Host "Ajout de la permission déléguée 'access_as_user' à '$spaAppName'..."
+    # La SPA n'a qu'une dépendance API (fastapi-jobfinder) ; on positionne
+    # requiredResourceAccess sur cette unique entrée. JSON manuel pour garantir
+    # des tableaux (cf. note section 10).
+    $body = '{"requiredResourceAccess":[{"resourceAppId":"' + $appId + '",' +
+            '"resourceAccess":[{"id":"' + $accessAsUserScopeId + '","type":"Scope"}]}]}'
+
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method PATCH `
+        --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "Permission déléguée 'access_as_user' accordée à '$spaAppName'."
+}
+
+# ==============================================================================
+# 12. Association spa-jobfinder ↔ user flow susi (idempotent)
+# Même pattern que la section 7 — la SPA hérite d'Email + Google via susi.
+# ==============================================================================
+
+Write-Host "Vérification de l'association '$spaAppName' ↔ user flow 'susi'..."
+$spaInFlow          = az rest --method GET --url $appsInFlowUrl --resource "https://graph.microsoft.com" | ConvertFrom-Json
+$spaAlreadyLinked   = $spaInFlow.value | Where-Object { $_.appId -eq $spaAppId }
+
+if ($null -ne $spaAlreadyLinked) {
+    Write-Host "App '$spaAppName' déjà associée au user flow 'susi' — ignorée."
+} else {
+    Write-Host "Association de '$spaAppName' au user flow 'susi'..."
+    $body    = @{ appId = $spaAppId } | ConvertTo-Json
+    $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
+    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+    az rest --method POST `
+        --url      $appsInFlowUrl `
+        --body     "@$tmpFile" `
+        --headers  "Content-Type=application/json" `
+        --resource "https://graph.microsoft.com"
+    Remove-Item $tmpFile
+    Write-Host "App '$spaAppName' associée au user flow 'susi'."
+}
+
+# ==============================================================================
+# 13. Résumé — valeurs à stocker dans Key Vault (kv-jf-dev-frc)
 # ⚠️  Script manuel uniquement — ne pas exécuter en CI/CD : les secrets
 #     apparaîtraient en clair dans les logs du runner.
 # ==============================================================================
@@ -348,3 +496,18 @@ Write-Host "  ENTRA_EXTERNAL_CLIENT_ID     = $appId"
 Write-Host "  ENTRA_EXTERNAL_CLIENT_SECRET = $clientSecret"
 Write-Host "  GOOGLE_OAUTH_CLIENT_ID       = $googleClientId"
 Write-Host "  GOOGLE_OAUTH_CLIENT_SECRET   = $googleClientSecret"
+Write-Host ""
+Write-Host "À coller dans JobFinder/frontend/.env.local (frontend Next.js / MSAL) :"
+Write-Host "  NEXT_PUBLIC_ENTRA_CLIENT_ID      = $spaAppId"
+Write-Host "  NEXT_PUBLIC_ENTRA_AUTHORITY      = https://$domainName.ciamlogin.com/$externalTenantId"
+Write-Host "  NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY = $domainName.ciamlogin.com"
+Write-Host "  NEXT_PUBLIC_ENTRA_API_SCOPE      = api://$appId/access_as_user"
+Write-Host "  NEXT_PUBLIC_REDIRECT_URI         = $($spaRedirectUris[0])"
+Write-Host ""
+Write-Host "Exécution (script manuel — un az login interactif sur le tenant CIAM est requis, géré en section 2) :"
+Write-Host "  ./setup-entra-external-tenant.ps1 ``"
+Write-Host "      -subscriptionId <id> -tenantId <id> -resourceGroupName <rg> ``"
+Write-Host "      -googleClientId <id> -googleClientSecret <secret> ``"
+Write-Host "      [-spaRedirectUris @('http://localhost:3000','https://<frontend>.azurecontainerapps.io')]"
+Write-Host ""
+Write-Host "Ré-exécutable sans effet de bord : tout l'existant est détecté et préservé."

@@ -2096,3 +2096,30 @@ Correctif : `requireEnv(name, value)` reçoit désormais la valeur lue statiquem
 ### Investigation — resync `next` / `@next/swc` (aucun changement)
 
 Un resync de version `next` était envisagé car le lockfile montrait `next`/`@next/env` en `14.2.35` et les binaires `@next/swc-*` en `14.2.33`. Vérification faite : ce n'est **pas** une incohérence. `next@14.2.35` épingle lui-même ses `optionalDependencies` `@next/swc-*` à `14.2.33`, et `@next/swc-*@14.2.35` n'existe pas sur le registre npm (les binaires SWC n'ont pas été rebâtis pour les patchs 14.2.34/35). La résolution actuelle est donc correcte et la seule possible — aucun changement de dépendance n'a été apporté.
+
+---
+
+## PR #89 — feat: add SPA app registration to Entra External ID setup script
+
+**Date :** 2026-06-23
+**Branche :** `feature/m4-spa-app-registration` → `dev`
+
+### Ce qui a été fait
+
+Le scaffold frontend (PR #88) est en place mais le login MSAL ne fonctionnait pas : il manquait l'app registration SPA dans le tenant Entra External ID `jobfinderapp`. Ajout de cette carte applicative au script manuel `JobFinder/powershell/setup-entra-external-tenant.ps1`, dans le même style idempotent que les sections existantes.
+
+**Décision actée :** carte SPA dédiée (`spa-jobfinder`), distincte de l'API `fastapi-jobfinder` — séparation client public (navigateur) / API protégée.
+
+**Nouvelles sections du script (9 à 12, résumé renuméroté en 13) :**
+- **9.** App registration SPA `spa-jobfinder` — client public, **sans client secret** (`AzureADMyOrg`).
+- **10.** Plateforme SPA — redirect URIs enregistrées dans la propriété `spa` (et non `web`) : c'est ce qui active le flux **Authorization Code + PKCE** attendu par MSAL. Paramétrables via le nouveau paramètre `$spaRedirectUris` (défaut `@("http://localhost:3000")`), ajout additif pour pouvoir ajouter l'URL du Container App plus tard sans modifier le script.
+- **11.** Permission API déléguée — référence à `fastapi-jobfinder` (son `appId`) + l'id du scope `access_as_user` (réutilisé depuis la section 5, **non recréé**, type `Scope`).
+- **12.** Association `spa-jobfinder` ↔ user flow `susi` (même pattern que la section 7) → la SPA hérite d'Email + Google.
+
+**Résumé (section 13) :** ajout du bloc de valeurs exactes à coller dans `JobFinder/frontend/.env.local` (`NEXT_PUBLIC_ENTRA_CLIENT_ID`, `NEXT_PUBLIC_ENTRA_AUTHORITY`, `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`, `NEXT_PUBLIC_ENTRA_API_SCOPE`, `NEXT_PUBLIC_REDIRECT_URI`), plus la commande d'exécution et le rappel qu'un `az login` interactif sur le tenant CIAM est requis.
+
+**Décisions techniques :**
+- Aucun client secret pour la SPA (client public PKCE).
+- Redirect URIs dans `spa.redirectUris` via PATCH Graph, pas dans `web`.
+- JSON des tableaux (`redirectUris`, `requiredResourceAccess`) construit manuellement : `ConvertTo-Json` désérialise un tableau mono-élément en scalaire sous PowerShell 5.1, ce que Graph rejette.
+- Idempotence : re-run détecte tout l'existant (app, redirect URIs, permission, association) et ne crée que la SPA si absente. Vérifié par parsing PowerShell (aucune erreur de syntaxe). Application manuelle par l'utilisateur, hors CI/CD.
