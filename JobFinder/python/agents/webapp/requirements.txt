@@ -5,6 +5,7 @@ pdfplumber
 sqlalchemy>=2.0
 psycopg2-binary
 pgvector
+alembic
 azure-servicebus
 azure-identity
 azure-storage-blob
