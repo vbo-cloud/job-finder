@@ -2018,3 +2018,33 @@ job-jf-dev-frc-cv-analysis (queue: cv-analysis)   ← NOUVEAU
 - `envs/dev/servicebus.tf` — queue `cv-analysis` ajoutée
 - `envs/dev/container_apps.tf` — module `job_cv_analysis` ajouté (queue trigger, image `agents/cv-analysis:latest`)
 - `.github/workflows/buildAgents.yml` — step build/push `agents/cv-analysis` + `az containerapp job update`
+
+---
+
+## PR #87 — feat: add configurable CORS middleware to webapp API
+
+**Date :** 2026-06-23
+**Branche :** `feature/m4-webapp-cors` → `dev`
+
+### Ce qui a été fait
+
+Première étape du Milestone 4 (frontend Next.js) : autoriser le futur frontend à appeler l'API FastAPI depuis le navigateur. Jusqu'ici `agents/webapp/main.py` n'avait aucun middleware CORS — tout appel cross-origin était bloqué par le navigateur.
+
+Ajout du middleware `CORSMiddleware` sur l'objet `app`, configuré de façon non-bloquante pour la webapp déjà déployée :
+- Origines autorisées lues depuis la variable d'environnement `CORS_ALLOWED_ORIGINS` (chaîne séparée par des virgules), parsée au niveau module en `list[str]` (trim des espaces, entrées vides ignorées).
+- Méthodes : `GET, POST, PUT, DELETE, OPTIONS`. En-têtes : `Authorization, Content-Type`.
+
+### Décisions techniques
+
+- **Deny-by-default non-bloquant :** si `CORS_ALLOWED_ORIGINS` est absente ou vide, la liste d'origines est vide (aucune origine autorisée → comportement actuel inchangé) et un `logger.warning("cors_no_allowed_origins_configured")` est émis. Aucune exception levée : la webapp démarre normalement. Pas de `["*"]` par défaut pour ne pas ouvrir l'API par accident.
+- **`allow_credentials=False` :** l'authentification se fait par jeton Bearer dans l'en-tête `Authorization`, jamais par cookie. Inutile (et risqué) d'autoriser les credentials cross-origin.
+
+### Vérification
+
+App importée localement avec la stack webapp complète et un preflight `OPTIONS` via `TestClient` :
+- Avec `CORS_ALLOWED_ORIGINS=http://localhost:3000` : preflight `200`, en-tête `Access-Control-Allow-Origin: http://localhost:3000` présent, méthodes et en-têtes corrects, pas d'`Access-Control-Allow-Credentials`.
+- Sans la variable : warning loggé, app démarre, preflight rejeté (`400`, pas d'`Allow-Origin`), `/docs` reste accessible.
+
+### Fichiers modifiés
+
+- `agents/webapp/main.py` — constante `CORS_ALLOWED_ORIGINS` (parsing env), ajout du `CORSMiddleware` + warning si aucune origine configurée
