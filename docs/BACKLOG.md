@@ -53,6 +53,7 @@ job-jf-dev-frc-cv-analysis (queue: cv-analysis)  ← NOUVEAU
   - `NEXT_PUBLIC_ENTRA_CLIENT_ID` : valeur de `data.azurerm_key_vault_secret.entra_client_id`
 - `buildAgents.yml` : ajouter step build/push `JobFinder/frontend` → `agents/frontend:latest` + `az containerapp update` pour le frontend
 - `outputs.tf` : exposer `frontend_url` (FQDN public du Container App frontend)
+- **Dockerfile frontend en build multi-stage** : passer du build mono-stage actuel (PR #88) à `builder` → `runner` (sortie `.next/standalone`, dépendances dev élaguées) pour réduire fortement la taille de l'image. Nécessite `output: "standalone"` dans `next.config.mjs`. La taille d'image ne compte qu'au déploiement Container Apps, d'où le report dans cette PR d'infra.
 - `docs/JOURNAL.md` mis à jour
 
 ---
@@ -220,6 +221,7 @@ Implémentation de l'ADR-017, partie code.
 - `tests/test_cleanup.py` : logique cutoff, branche NULL `ft_updated_at`
 - `tests/test_auth.py` : validation JWT, expiration, mauvais issuer (mock JWKS)
 - `tests/test_cv_upload.py` : validation content_type, magic bytes, taille max
+- `tests/test_cors.py` : scénarios preflight CORS (origine autorisée présente → en-tête `Access-Control-Allow-Origin` ; origine absente / `CORS_ALLOWED_ORIGINS` non configurée → preflight rejeté, pas d'en-tête) — follow-up identifié par le reviewer de la PR #87 (CORS)
 - Step `pytest` dans le workflow CI/CD : déclenché sur tout changement dans `JobFinder/python/**` (indépendamment des path filters Terraform par environnement), s'exécute avant les steps de plan. Trigger à spécifier explicitement dans le PR pour éviter toute ambiguité lors de l'implémentation.
 ---
 
