@@ -2260,3 +2260,28 @@ Ajout de la variable d'environnement `CORS_ALLOWED_ORIGINS=http://localhost:3000
 - Valeur plain-text (pas un secret) : les origines CORS sont semi-publiques, visibles dans les headers de réponse HTTP.
 - `http://localhost:3000` uniquement pour l'instant — l'URL du Container App frontend s'ajoutera ici (séparée par une virgule) lors du déploiement du frontend (M4 PR #2).
 - Commentaire en place dans `webapp.tf` pour rappeler l'action à faire lors du déploiement frontend.
+
+---
+
+## PR #93 — fix(webapp): fix JWT issuer — use tenant GUID subdomain
+
+**Date :** 2026-06-24
+**Branche :** `fix/webapp-jwt-issuer` → `dev`
+
+### Ce qui s'est passé
+
+Tous les endpoints authentifiés retournaient 401 "Invalid token claims". Diagnostic via le header `Authorization` de la première requête réelle (`GET /profile`) : le token était bien envoyé, l'audience (`aud`) était correcte, mais l'issuer ne correspondait pas.
+
+- **Token `iss` (réel) :** `https://067e6a3a-2b6f-41ad-96fb-0785f1ba73bc.ciamlogin.com/067e6a3a-2b6f-41ad-96fb-0785f1ba73bc/v2.0`
+- **`ISSUER` attendu par le backend :** `https://jobfinderapp.ciamlogin.com/067e6a3a-2b6f-41ad-96fb-0785f1ba73bc/v2.0`
+
+Entra External ID (CIAM) émet les tokens avec le GUID du tenant comme sous-domaine (`{tenant_id}.ciamlogin.com`) quel que soit le domaine custom utilisé pour l'authentification (`jobfinderapp.ciamlogin.com`). La constante `ISSUER` dans `auth.py` était hardcodée sur le domaine custom → `JWTClaimsError` sur chaque requête authentifiée.
+
+### Correctif
+
+```python
+# auth.py — avant
+ISSUER = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
+# après
+ISSUER = f"https://{ENTRA_EXTERNAL_TENANT_ID}.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
+```
