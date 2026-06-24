@@ -387,13 +387,16 @@ if ($missingUris.Count -eq 0) {
     $body     = '{"spa":{"redirectUris":' + $urisJson + '}}'
 
     $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
-    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
-    az rest --method PATCH `
-        --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
-        --body     "@$tmpFile" `
-        --headers  "Content-Type=application/json" `
-        --resource "https://graph.microsoft.com"
-    Remove-Item $tmpFile
+    try {
+        [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+        az rest --method PATCH `
+            --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+            --body     "@$tmpFile" `
+            --headers  "Content-Type=application/json" `
+            --resource "https://graph.microsoft.com"
+    } finally {
+        Remove-Item $tmpFile
+    }
     Write-Host "Redirect URIs SPA enregistrées : $($mergedUris -join ', ')."
 }
 
@@ -487,15 +490,19 @@ if ($null -ne $spaAlreadyLinked) {
     Write-Host "App '$spaAppName' déjà associée au user flow 'susi' — ignorée."
 } else {
     Write-Host "Association de '$spaAppName' au user flow 'susi'..."
+    # objet simple (une seule propriété), pas un tableau — ConvertTo-Json fiable ici
     $body    = @{ appId = $spaAppId } | ConvertTo-Json
     $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
-    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
-    az rest --method POST `
-        --url      $appsInFlowUrl `
-        --body     "@$tmpFile" `
-        --headers  "Content-Type=application/json" `
-        --resource "https://graph.microsoft.com"
-    Remove-Item $tmpFile
+    try {
+        [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+        az rest --method POST `
+            --url      $appsInFlowUrl `
+            --body     "@$tmpFile" `
+            --headers  "Content-Type=application/json" `
+            --resource "https://graph.microsoft.com"
+    } finally {
+        Remove-Item $tmpFile
+    }
     Write-Host "App '$spaAppName' associée au user flow 'susi'."
 }
 
