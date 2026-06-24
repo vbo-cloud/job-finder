@@ -432,20 +432,45 @@ if ($apiAccessGranted) {
     Write-Host "Permission déléguée 'access_as_user' déjà accordée à '$spaAppName' — ignorée."
 } else {
     Write-Host "Ajout de la permission déléguée 'access_as_user' à '$spaAppName'..."
-    # La SPA n'a qu'une dépendance API (fastapi-jobfinder) ; on positionne
-    # requiredResourceAccess sur cette unique entrée. JSON manuel pour garantir
-    # des tableaux (cf. note section 10).
-    $body = '{"requiredResourceAccess":[{"resourceAppId":"' + $appId + '",' +
-            '"resourceAccess":[{"id":"' + $accessAsUserScopeId + '","type":"Scope"}]}]}'
+    # Lire-fusionner-écrire (même logique additive que les redirect URIs en
+    # section 10) : on repart du requiredResourceAccess courant pour ne pas
+    # écraser d'éventuelles autres permissions déjà enregistrées (ex. un futur
+    # microservice de facturation). JSON manuel pour garantir des tableaux
+    # (cf. note section 10).
+    $resourceEntries = @()
+    $apiEntryHandled = $false
+    foreach ($resource in @($spaPermissionDetails.requiredResourceAccess)) {
+        $accessItems = @($resource.resourceAccess | ForEach-Object {
+                '{"id":"' + $_.id + '","type":"' + $_.type + '"}'
+            })
+        if ($resource.resourceAppId -eq $appId) {
+            # Entrée fastapi-jobfinder déjà présente : ajouter le scope manquant
+            # sans dupliquer ni toucher aux autres resourceAccess de l'entrée.
+            if (-not (@($resource.resourceAccess) | Where-Object { $_.id -eq $accessAsUserScopeId -and $_.type -eq "Scope" })) {
+                $accessItems += '{"id":"' + $accessAsUserScopeId + '","type":"Scope"}'
+            }
+            $apiEntryHandled = $true
+        }
+        $resourceEntries += '{"resourceAppId":"' + $resource.resourceAppId + '","resourceAccess":[' + ($accessItems -join ',') + ']}'
+    }
+    if (-not $apiEntryHandled) {
+        # fastapi-jobfinder absent du requiredResourceAccess courant — l'ajouter
+        # aux entrées existantes.
+        $resourceEntries += '{"resourceAppId":"' + $appId + '","resourceAccess":[{"id":"' + $accessAsUserScopeId + '","type":"Scope"}]}'
+    }
+    $body = '{"requiredResourceAccess":[' + ($resourceEntries -join ',') + ']}'
 
     $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
-    [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
-    az rest --method PATCH `
-        --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
-        --body     "@$tmpFile" `
-        --headers  "Content-Type=application/json" `
-        --resource "https://graph.microsoft.com"
-    Remove-Item $tmpFile
+    try {
+        [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
+        az rest --method PATCH `
+            --url      "https://graph.microsoft.com/v1.0/applications/$spaAppObjId" `
+            --body     "@$tmpFile" `
+            --headers  "Content-Type=application/json" `
+            --resource "https://graph.microsoft.com"
+    } finally {
+        Remove-Item $tmpFile
+    }
     Write-Host "Permission déléguée 'access_as_user' accordée à '$spaAppName'."
 }
 
