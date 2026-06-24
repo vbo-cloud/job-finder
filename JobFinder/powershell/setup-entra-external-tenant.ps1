@@ -35,19 +35,34 @@ az account set --subscription $subscriptionId
 # 1. Tenant Microsoft Entra External ID (idempotent)
 # ==============================================================================
 
-$ciamUrl = "https://management.azure.com/subscriptions/$subscriptionId" +
-           "/resourceGroups/$resourceGroupName" +
-           "/providers/Microsoft.AzureActiveDirectory/ciamDirectories/${domainName}" +
-           "?api-version=2023-05-17-preview"
+# Nom de ressource ARM du tenant CIAM : Azure nomme la ressource d'après le
+# domaine initial complet ("$domainName.onmicrosoft.com"), PAS d'après
+# $domainName seul. $domainName reste "jobfinderapp" pour l'autorité ciamlogin
+# (jobfinderapp.ciamlogin.com) — seule la résolution de la ressource ARM ajoute
+# le suffixe ".onmicrosoft.com".
+$ciamDomain = "$domainName.onmicrosoft.com"
+$emptyGuid  = "00000000-0000-0000-0000-000000000000"
 
-Write-Host "Vérification du tenant '$domainName'..."
-$existingTenant = az rest --method GET --url $ciamUrl 2>$null | ConvertFrom-Json
+$ciamResourceUrl = "https://management.azure.com/subscriptions/$subscriptionId" +
+                   "/resourceGroups/$resourceGroupName" +
+                   "/providers/Microsoft.AzureActiveDirectory/ciamDirectories/$ciamDomain" +
+                   "?api-version=2023-05-17-preview"
+$ciamListUrl     = "https://management.azure.com/subscriptions/$subscriptionId" +
+                   "/resourceGroups/$resourceGroupName" +
+                   "/providers/Microsoft.AzureActiveDirectory/ciamDirectories" +
+                   "?api-version=2023-05-17-preview"
 
-if ($null -ne $existingTenant -and $null -ne $existingTenant.properties.tenantId) {
-    Write-Host "Tenant '$domainName' existe déjà — récupération du Tenant ID."
-    $externalTenantId = $existingTenant.properties.tenantId
-} else {
-    Write-Host "Création du tenant '$domainName'..."
+# Détection robuste : on LISTE les ciamDirectories du resource group et on
+# retrouve l'existant via properties.domainName. Un GET direct sur un nom de
+# ressource supposé ("$domainName" sans suffixe) renvoyait 404 sur le tenant
+# réel ("$domainName.onmicrosoft.com"), faisant entrer le script en création
+# et dupliquant le tenant.
+Write-Host "Vérification du tenant '$ciamDomain' dans '$resourceGroupName'..."
+$ciamList       = az rest --method GET --url $ciamListUrl 2>$null | ConvertFrom-Json
+$existingTenant = $ciamList.value | Where-Object { $_.properties.domainName -eq $ciamDomain } | Select-Object -First 1
+
+if ($null -eq $existingTenant) {
+    Write-Host "Aucun tenant '$ciamDomain' trouvé — création..."
 
     $body = @{
         location   = "Europe"
@@ -63,27 +78,35 @@ if ($null -ne $existingTenant -and $null -ne $existingTenant.properties.tenantId
     $tmpFile = [System.IO.Path]::GetTempFileName() + ".json"
     # UTF8 sans BOM — Set-Content -Encoding UTF8 ajoute un BOM en PowerShell 5 ce qui casse az rest
     [System.IO.File]::WriteAllText($tmpFile, $body, (New-Object System.Text.UTF8Encoding $false))
-    az rest --method PUT --url $ciamUrl --body "@$tmpFile" --headers "Content-Type=application/json"
+    az rest --method PUT --url $ciamResourceUrl --body "@$tmpFile" --headers "Content-Type=application/json"
     Remove-Item $tmpFile
+} else {
+    Write-Host "Tenant '$ciamDomain' existe déjà — récupération du Tenant ID."
+}
 
-    # La création de tenant est asynchrone — polling toutes les 10s jusqu'à disponibilité du tenantId
-    $maxAttempts      = 18  # 3 minutes max
-    $attempt          = 0
-    $externalTenantId = $null
-    while ($attempt -lt $maxAttempts -and $null -eq $externalTenantId) {
-        $attempt++
+# Récupération du tenantId — polling robuste (re-list + match sur domainName).
+# La création est asynchrone et, pendant le provisioning, l'API renvoie le GUID
+# tout-à-zéro ($emptyGuid) : on le considère comme « pas prêt » et on continue
+# le polling jusqu'à un vrai GUID. Pour un tenant déjà prêt (existant), la 1re
+# itération retourne immédiatement le bon tenantId, sans attente.
+$externalTenantId = $null
+$maxAttempts      = 18  # 3 minutes max
+$attempt          = 0
+while ($attempt -lt $maxAttempts -and $null -eq $externalTenantId) {
+    $attempt++
+    $polledList  = az rest --method GET --url $ciamListUrl 2>$null | ConvertFrom-Json
+    $polledMatch = $polledList.value | Where-Object { $_.properties.domainName -eq $ciamDomain } | Select-Object -First 1
+    $polledId    = $polledMatch.properties.tenantId
+    if (-not [string]::IsNullOrEmpty($polledId) -and $polledId -ne $emptyGuid) {
+        $externalTenantId = $polledId
+    } else {
         Write-Host "Attente de la propagation du tenant ($attempt/$maxAttempts)..."
         Start-Sleep -Seconds 10
-        $polledTenant = az rest --method GET --url $ciamUrl 2>$null | ConvertFrom-Json
-        if ($null -ne $polledTenant -and $null -ne $polledTenant.properties.tenantId) {
-            $externalTenantId = $polledTenant.properties.tenantId
-        }
     }
-    if ($null -eq $externalTenantId) {
-        Write-Error "Tenant '$domainName' non disponible après $maxAttempts tentatives — relancer le script."
-        exit 1
-    }
-    Write-Host "Tenant créé."
+}
+if ($null -eq $externalTenantId) {
+    Write-Error "Tenant '$ciamDomain' : aucun tenantId valide après $maxAttempts tentatives — relancer le script."
+    exit 1
 }
 
 Write-Host "External Tenant ID (ENTRA_EXTERNAL_TENANT_ID) : $externalTenantId"
