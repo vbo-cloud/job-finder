@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+python-multipart
 python-jose[cryptography]
 pdfplumber
 sqlalchemy>=2.0

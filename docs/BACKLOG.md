@@ -399,9 +399,22 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ## FastAPI — Dette technique
 
-### [pre-v1.0.0] Pincer les dépendances de la webapp
-Lancer `pip-compile requirements.txt` dans `agents/webapp/` pour
-générer un lockfile reproductible. À faire avant v1.0.0.
+### [urgent] Pincer les dépendances de la webapp avec pip-compile
+
+`alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement dans `agents/webapp/requirements.txt`, causant des crash-loops en production. Sans lockfile, chaque dépendance implicite doit être découverte à la main par un crash en prod.
+
+**Solution :** adopter `pip-tools` pour séparer les dépendances directes (non épinglées, dans `requirements.in`) des dépendances résolues et épinglées (générées dans `requirements.txt` par `pip-compile`). Le Dockerfile installe `requirements.txt` — toujours reproductible.
+
+```bash
+pip install pip-tools
+cd JobFinder/python/agents/webapp
+# renommer requirements.txt → requirements.in (dépendances directes uniquement)
+pip-compile requirements.in  # génère requirements.txt épinglé
+```
+
+`pip-compile` résout aussi les dépendances transverses — `python-multipart` (requis par FastAPI pour `UploadFile`) serait apparu automatiquement.
+
+**Fichiers :** `agents/webapp/requirements.in` (à créer), `agents/webapp/requirements.txt` (regénéré).
 
 ### [optional] Blob orphelin sur échec DB dans POST /cv/upload
 Si le blob est uploadé mais que le `session.commit()` échoue ensuite,

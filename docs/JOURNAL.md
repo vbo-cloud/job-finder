@@ -2189,3 +2189,28 @@ Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP,
 - **Null guard `$spaAppObjId`** : garde ajouté après `az ad app create` en section 9 — fail-fast explicite si la création ne retourne pas d'ID (même style que le garde `$flowId` en section 6).
 - **Commentaire `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`** : précise que `knownAuthorities` dans MSAL attend un nom d'hôte brut (sans `https://`).
 - **Backlog** : item ajouté — extraire `Invoke-GraphRequest` dans `graph-utils.ps1` (dot-sourcing) à partir d'un 3ᵉ script Graph.
+
+---
+
+## PR #90 — fix(webapp): add python-multipart to webapp requirements
+
+**Date :** 2026-06-24
+**Branche :** `fix/webapp-python-multipart` → `dev`
+
+### Ce qui s'est passé
+
+Crash-loop confirmé sur `app-jf-dev-frc` après le merge de PR #89 :
+
+```
+RuntimeError: Form data requires "python-multipart" to be installed.
+```
+
+FastAPI exige `python-multipart` pour parser les corps `multipart/form-data` (`UploadFile` dans `POST /cv/upload`). La dépendance manquait dans `agents/webapp/requirements.txt` → crash à l'import, uvicorn ne démarre pas (exit code 1).
+
+### Correctif
+
+Ajout de `python-multipart` dans `agents/webapp/requirements.txt`. Le rebuild de l'image via `buildAgents.yml` et le redéploiement via `az containerapp update` restaurent le démarrage normal d'uvicorn.
+
+### Audit
+
+`alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement, causant deux crash-loops consécutifs. Pattern identifié : sans lockfile, les dépendances implicites de FastAPI ne sont pas visibles et doivent être découvertes par un crash en prod. Item backlog « pip-compile / lock des dépendances webapp » renforcé en `[urgent]` avec description complète de la solution (`requirements.in` + `pip-compile`).
