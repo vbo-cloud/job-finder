@@ -2173,3 +2173,12 @@ Les POST sur `includeApplications` (sections 7 et 12) échouaient silencieusemen
 **Décision architecturale :** le secret du SP de setup n'est jamais affiché en console — il rejoint `kv-jf-dev-frc` dès sa génération, cohérent avec le backlog item "écrire les secrets dans Key Vault" déjà tracé.
 
 **Vérification :** parsing PowerShell sans erreur ; seul un run réel par l'utilisateur (sans aucun faux succès) validera ces corrections.
+
+### Finalisation auth frontend — affichage identité
+
+Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP, cause externe au frontend), dernière itération sur `LoginButton.tsx` :
+
+- **Priorité d'affichage :** `preferred_username` (email, claim le plus fiable dans un tenant CIAM) → `name` si présent et différent de `"unknown"` → `"Connecté"`.
+- **Lecture des claims :** `accounts[0]?.idTokenClaims` casté en `Record<string, unknown>`, lecture explicite de `preferred_username` et `name`.
+- **Instrumentation de diagnostic retirée :** `console.log("[MSAL] claims")` (LoginButton), `console.error("[MSAL] auth failure")` (AuthProvider event callback), `LogLevel.Verbose` + `loggerCallback` (msalConfig → remis en `LogLevel.Warning` + no-op).
+- `npm run build` passe (TypeScript + lint) après nettoyage du cache `.next`.
