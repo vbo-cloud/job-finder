@@ -2096,3 +2096,96 @@ Correctif : `requireEnv(name, value)` reçoit désormais la valeur lue statiquem
 ### Investigation — resync `next` / `@next/swc` (aucun changement)
 
 Un resync de version `next` était envisagé car le lockfile montrait `next`/`@next/env` en `14.2.35` et les binaires `@next/swc-*` en `14.2.33`. Vérification faite : ce n'est **pas** une incohérence. `next@14.2.35` épingle lui-même ses `optionalDependencies` `@next/swc-*` à `14.2.33`, et `@next/swc-*@14.2.35` n'existe pas sur le registre npm (les binaires SWC n'ont pas été rebâtis pour les patchs 14.2.34/35). La résolution actuelle est donc correcte et la seule possible — aucun changement de dépendance n'a été apporté.
+
+---
+
+## PR #89 — feat: add SPA app registration to Entra External ID setup script
+
+**Date :** 2026-06-23
+**Branche :** `feature/m4-spa-app-registration` → `dev`
+
+### Ce qui a été fait
+
+Le scaffold frontend (PR #88) est en place mais le login MSAL ne fonctionnait pas : il manquait l'app registration SPA dans le tenant Entra External ID `jobfinderapp`. Ajout de cette carte applicative au script manuel `JobFinder/powershell/setup-entra-external-tenant.ps1`, dans le même style idempotent que les sections existantes.
+
+**Décision actée :** carte SPA dédiée (`spa-jobfinder`), distincte de l'API `fastapi-jobfinder` — séparation client public (navigateur) / API protégée.
+
+**Nouvelles sections du script (9 à 12, résumé renuméroté en 13) :**
+- **9.** App registration SPA `spa-jobfinder` — client public, **sans client secret** (`AzureADMyOrg`).
+- **10.** Plateforme SPA — redirect URIs enregistrées dans la propriété `spa` (et non `web`) : c'est ce qui active le flux **Authorization Code + PKCE** attendu par MSAL. Paramétrables via le nouveau paramètre `$spaRedirectUris` (défaut `@("http://localhost:3000")`), ajout additif pour pouvoir ajouter l'URL du Container App plus tard sans modifier le script.
+- **11.** Permission API déléguée — référence à `fastapi-jobfinder` (son `appId`) + l'id du scope `access_as_user` (réutilisé depuis la section 5, **non recréé**, type `Scope`).
+- **12.** Association `spa-jobfinder` ↔ user flow `susi` (même pattern que la section 7) → la SPA hérite d'Email + Google.
+
+**Résumé (section 13) :** ajout du bloc de valeurs exactes à coller dans `JobFinder/frontend/.env.local` (`NEXT_PUBLIC_ENTRA_CLIENT_ID`, `NEXT_PUBLIC_ENTRA_AUTHORITY`, `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`, `NEXT_PUBLIC_ENTRA_API_SCOPE`, `NEXT_PUBLIC_REDIRECT_URI`), plus la commande d'exécution et le rappel qu'un `az login` interactif sur le tenant CIAM est requis.
+
+**Décisions techniques :**
+- Aucun client secret pour la SPA (client public PKCE).
+- Redirect URIs dans `spa.redirectUris` via PATCH Graph, pas dans `web`.
+- JSON des tableaux (`redirectUris`, `requiredResourceAccess`) construit manuellement : `ConvertTo-Json` désérialise un tableau mono-élément en scalaire sous PowerShell 5.1, ce que Graph rejette.
+- Idempotence : re-run détecte tout l'existant (app, redirect URIs, permission, association) et ne crée que la SPA si absente. Vérifié par parsing PowerShell (aucune erreur de syntaxe). Application manuelle par l'utilisateur, hors CI/CD.
+
+### Raffinements post-revue (non bloquants)
+
+Suite à la revue du reviewer, sur la même PR :
+- **Section 11 — `requiredResourceAccess` additif.** Le PATCH écrasait tout le tableau (il ne posait que l'entrée `fastapi-jobfinder`). Remplacé par un patron lire-fusionner-écrire (même logique additive que les redirect URIs en section 10) : GET de la SPA, fusion du scope `access_as_user` dans l'entrée `fastapi-jobfinder` existante (ou ajout d'une nouvelle entrée), sans supprimer d'autres permissions ni dupliquer. Motivation : ne pas effacer une future 2e permission (ex. microservice de facturation).
+- **Nettoyage `$tmpFile`.** Les blocs de fichier temporaire des sections 10/11/12 sont désormais en `try { … } finally { Remove-Item }` — suppression garantie même si `az rest` échoue.
+- **Commentaires.** Section 12 : explication de l'usage volontaire de `ConvertTo-Json` (objet simple, pas un tableau, contrairement aux sections 10/11). Section 13 : précision que seule la 1re redirect URI (localhost dev) est reprise dans le hint, les autres restant enregistrées.
+- **`$externalTenantId` :** vérifié défini dans tous les chemins de la section 1 avant le résumé (section 13) — aucun correctif nécessaire.
+### Correctif — incident tenant Entra en double (détection + polling)
+
+Lors d'une exécution réelle, le script a **créé un second tenant Entra External ID en double**, alors que le tenant correct (`jobfinderapp.onmicrosoft.com`, dans `rg-jf-dev-frc-core`) existait déjà. Deux bugs cumulés en section 1 :
+
+1. **Détection erronée du tenant.** Le nom de ressource ARM était construit depuis `$domainName = "jobfinderapp"` (`GET .../ciamDirectories/jobfinderapp`), alors que le vrai nom est `jobfinderapp.onmicrosoft.com` (Azure ajoute le suffixe du domaine initial) → 404 → le script concluait « le tenant n'existe pas » et entrait dans la branche création, dupliquant le tenant.
+2. **Polling acceptant le GUID vide.** La boucle de polling acceptait `properties.tenantId` même quand il valait `00000000-0000-0000-0000-000000000000` (valeur renvoyée pendant le provisioning), enregistrant un tenantId invalide.
+
+**Corrections :**
+1. **Détection robuste par listing.** On LISTE les `ciamDirectories` du resource group et on retrouve l'existant en matchant sur `properties.domainName == "$domainName.onmicrosoft.com"`. La branche création n'est atteinte que si aucune ressource ne correspond — fini la dépendance à un nom de ressource supposé. `$domainName` reste `"jobfinderapp"` pour l'autorité ciamlogin ; seule la résolution ARM utilise le suffixe `.onmicrosoft.com` (variable `$ciamDomain`).
+2. **Polling rejetant le GUID tout-à-zéro.** Le GUID tout-à-zéro est traité comme « pas prêt » ; le polling (re-list + match) continue jusqu'à un vrai GUID, avec échec explicite (`exit 1`) si `maxAttempts` est atteint. Un tenant déjà prêt est résolu dès la 1re itération.
+
+**Backlog :** item de durcissement ajouté (`docs/BACKLOG.md`, section Sécurité) : écrire les secrets sensibles (client secret Entra, secret Google) directement dans Key Vault via `az keyvault secret set` plutôt que de les afficher en console.
+
+**Vérification :** logique vérifiée statiquement (pas d'accès Azure depuis l'environnement) — parsing PowerShell sans erreur ; une ré-exécution détecte le tenant `jobfinderapp.onmicrosoft.com` existant via le listing et **n'entre pas** dans la branche création.
+
+### Correctifs reproductibilité — défauts constatés sur run réel (Défauts 1, 2a, 2b, 3)
+
+Lors du premier run complet après les corrections du tenant, trois catégories de défauts ont empêché le script de terminer proprement :
+
+**Défaut 1 — Faux succès sur les appels Graph (`az rest` ne lève pas d'exception sur erreur)**
+
+`az rest` retourne `$LASTEXITCODE = 0` (ou absorbe les erreurs) même quand un appel Graph échoue avec un 4xx, rendant le diagnostic impossible et masquant les échecs réels sous des messages de succès. Correctif : introduction de la fonction `Invoke-GraphRequest` dans `setup-entra-external-tenant.ps1`. La fonction capture stderr dans un fichier temporaire, contrôle `$LASTEXITCODE`, vérifie la présence de `.error` ou `.@odata.error` dans la réponse JSON, et lève une exception PowerShell avec le message d'erreur complet. Tous les appels Graph des sections 5 à 12 passent désormais par cette fonction ; les appels ARM de la section 1 (management.azure.com) sont inchangés.
+
+**Défaut 2a — Association app ↔ user flow rejetée (`"application id is invalid"`)**
+
+Les POST sur `includeApplications` (sections 7 et 12) échouaient silencieusement. L'API Graph exige `@odata.type = "#microsoft.graph.authenticationConditionApplication"` dans le body — sans ce champ, même avec un `appId` correct, la requête est rejetée. Correctif : ajout du champ dans les sections 7 et 12 ; commentaire explicatif ajouté.
+
+**Défaut 2b — Absence de service principal pour les apps créées**
+
+`az ad app create` (CLI 2.x) ne crée **pas** automatiquement le service principal correspondant. L'association d'une app au user flow nécessite l'existence du SP. Correctif : ajout d'un bloc idempotent `az ad sp list / az ad sp create` après chaque `az ad app create`, dans les sections 2 et 9. Le bloc est **séparé** de la création de l'app (pas dans le `else`) pour garantir l'existence du SP même si l'app existait déjà sans SP lors d'un re-run.
+
+**Défaut 3 — Token Azure CLI sans les permissions Graph nécessaires**
+
+`az login --tenant $externalTenantId` ne procure pas les permissions `IdentityProvider.ReadWrite.All` et `EventListener.ReadWrite.All` dans le token, qui sont absentes du jeu de scopes par défaut du CLI sur un tenant CIAM. Correctif en deux parties :
+
+1. **Nouveau script `JobFinder/powershell/setup-sp-jf-ciam-setup.ps1`** (bootstrap, idempotent) : crée le SP `sp-jf-ciam-setup` dans le tenant CIAM, lui assigne les 3 permissions Graph applicatives (`Application.ReadWrite.All`, `IdentityProvider.ReadWrite.All`, `EventListener.ReadWrite.All`) via `POST /servicePrincipals/{id}/appRoleAssignments` (admin consent programmatique, ou fail-fast avec instructions portail si le token ne dispose pas de `AppRoleAssignment.ReadWrite.All`), génère un client secret et l'écrit dans `kv-jf-dev-frc` (`ciam-setup-sp-client-id` et `ciam-setup-sp-secret`) — jamais affiché en console. Idempotent : re-run détecte l'app, le SP, les assignations existantes et le secret KV, et ne recrée que ce qui manque.
+
+2. **Section 1-bis dans `setup-entra-external-tenant.ps1`** : lit les credentials de `sp-jf-ciam-setup` depuis `kv-jf-dev-frc` (fail-fast si absents avec instructions de bootstrap) et effectue `az login --service-principal` avant les sections 2–12. Le login interactif `az login --tenant` est supprimé.
+
+**Décision architecturale :** le secret du SP de setup n'est jamais affiché en console — il rejoint `kv-jf-dev-frc` dès sa génération, cohérent avec le backlog item "écrire les secrets dans Key Vault" déjà tracé.
+
+**Vérification :** parsing PowerShell sans erreur ; seul un run réel par l'utilisateur (sans aucun faux succès) validera ces corrections.
+
+### Finalisation auth frontend — affichage identité
+
+Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP, cause externe au frontend), dernière itération sur `LoginButton.tsx` :
+
+- **Priorité d'affichage :** `preferred_username` (email, claim le plus fiable dans un tenant CIAM) → `name` si présent et différent de `"unknown"` → `"Connecté"`.
+- **Lecture des claims :** `accounts[0]?.idTokenClaims` casté en `Record<string, unknown>`, lecture explicite de `preferred_username` et `name`.
+- **Instrumentation de diagnostic retirée :** `console.log("[MSAL] claims")` (LoginButton), `console.error("[MSAL] auth failure")` (AuthProvider event callback), `LogLevel.Verbose` + `loggerCallback` (msalConfig → remis en `LogLevel.Warning` + no-op).
+- `npm run build` passe (TypeScript + lint) après nettoyage du cache `.next`.
+
+### Retours reviewer non bloquants (suite)
+
+- **Polling break** : boucle de détection du tenant restructurée avec `break` explicite sur ID valide — `Start-Sleep` devient le chemin de fall-through (jamais atteint si le tenant existe déjà), éliminant l'attente inutile de 10s sur tenant existant.
+- **Null guard `$spaAppObjId`** : garde ajouté après `az ad app create` en section 9 — fail-fast explicite si la création ne retourne pas d'ID (même style que le garde `$flowId` en section 6).
+- **Commentaire `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`** : précise que `knownAuthorities` dans MSAL attend un nom d'hôte brut (sans `https://`).
+- **Backlog** : item ajouté — extraire `Invoke-GraphRequest` dans `graph-utils.ps1` (dot-sourcing) à partir d'un 3ᵉ script Graph.
