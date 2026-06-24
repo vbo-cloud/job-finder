@@ -25,7 +25,10 @@ if not ENTRA_EXTERNAL_CLIENT_ID:
     raise ValueError("ENTRA_EXTERNAL_CLIENT_ID environment variable is not set")
 
 JWKS_URL = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/discovery/v2.0/keys"
-ISSUER = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
+# Entra External ID issues tokens with the tenant GUID as the subdomain regardless
+# of the custom domain used during authentication. The iss claim takes the form
+# https://{tenant_id}.ciamlogin.com/{tenant_id}/v2.0 — not the custom domain.
+ISSUER = f"https://{ENTRA_EXTERNAL_TENANT_ID}.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
 JWKS_TTL_SECONDS = 86400  # 24h — Entra External ID rotates keys infrequently
 
 _jwks_cache: dict[str, Any] = {}
