@@ -2145,3 +2145,31 @@ Lors d'une exécution réelle, le script a **créé un second tenant Entra Exter
 **Backlog :** item de durcissement ajouté (`docs/BACKLOG.md`, section Sécurité) : écrire les secrets sensibles (client secret Entra, secret Google) directement dans Key Vault via `az keyvault secret set` plutôt que de les afficher en console.
 
 **Vérification :** logique vérifiée statiquement (pas d'accès Azure depuis l'environnement) — parsing PowerShell sans erreur ; une ré-exécution détecte le tenant `jobfinderapp.onmicrosoft.com` existant via le listing et **n'entre pas** dans la branche création.
+
+### Correctifs reproductibilité — défauts constatés sur run réel (Défauts 1, 2a, 2b, 3)
+
+Lors du premier run complet après les corrections du tenant, trois catégories de défauts ont empêché le script de terminer proprement :
+
+**Défaut 1 — Faux succès sur les appels Graph (`az rest` ne lève pas d'exception sur erreur)**
+
+`az rest` retourne `$LASTEXITCODE = 0` (ou absorbe les erreurs) même quand un appel Graph échoue avec un 4xx, rendant le diagnostic impossible et masquant les échecs réels sous des messages de succès. Correctif : introduction de la fonction `Invoke-GraphRequest` dans `setup-entra-external-tenant.ps1`. La fonction capture stderr dans un fichier temporaire, contrôle `$LASTEXITCODE`, vérifie la présence de `.error` ou `.@odata.error` dans la réponse JSON, et lève une exception PowerShell avec le message d'erreur complet. Tous les appels Graph des sections 5 à 12 passent désormais par cette fonction ; les appels ARM de la section 1 (management.azure.com) sont inchangés.
+
+**Défaut 2a — Association app ↔ user flow rejetée (`"application id is invalid"`)**
+
+Les POST sur `includeApplications` (sections 7 et 12) échouaient silencieusement. L'API Graph exige `@odata.type = "#microsoft.graph.authenticationConditionApplication"` dans le body — sans ce champ, même avec un `appId` correct, la requête est rejetée. Correctif : ajout du champ dans les sections 7 et 12 ; commentaire explicatif ajouté.
+
+**Défaut 2b — Absence de service principal pour les apps créées**
+
+`az ad app create` (CLI 2.x) ne crée **pas** automatiquement le service principal correspondant. L'association d'une app au user flow nécessite l'existence du SP. Correctif : ajout d'un bloc idempotent `az ad sp list / az ad sp create` après chaque `az ad app create`, dans les sections 2 et 9. Le bloc est **séparé** de la création de l'app (pas dans le `else`) pour garantir l'existence du SP même si l'app existait déjà sans SP lors d'un re-run.
+
+**Défaut 3 — Token Azure CLI sans les permissions Graph nécessaires**
+
+`az login --tenant $externalTenantId` ne procure pas les permissions `IdentityProvider.ReadWrite.All` et `EventListener.ReadWrite.All` dans le token, qui sont absentes du jeu de scopes par défaut du CLI sur un tenant CIAM. Correctif en deux parties :
+
+1. **Nouveau script `JobFinder/powershell/setup-sp-jf-ciam-setup.ps1`** (bootstrap, idempotent) : crée le SP `sp-jf-ciam-setup` dans le tenant CIAM, lui assigne les 3 permissions Graph applicatives (`Application.ReadWrite.All`, `IdentityProvider.ReadWrite.All`, `EventListener.ReadWrite.All`) via `POST /servicePrincipals/{id}/appRoleAssignments` (admin consent programmatique, ou fail-fast avec instructions portail si le token ne dispose pas de `AppRoleAssignment.ReadWrite.All`), génère un client secret et l'écrit dans `kv-jf-dev-frc` (`ciam-setup-sp-client-id` et `ciam-setup-sp-secret`) — jamais affiché en console. Idempotent : re-run détecte l'app, le SP, les assignations existantes et le secret KV, et ne recrée que ce qui manque.
+
+2. **Section 1-bis dans `setup-entra-external-tenant.ps1`** : lit les credentials de `sp-jf-ciam-setup` depuis `kv-jf-dev-frc` (fail-fast si absents avec instructions de bootstrap) et effectue `az login --service-principal` avant les sections 2–12. Le login interactif `az login --tenant` est supprimé.
+
+**Décision architecturale :** le secret du SP de setup n'est jamais affiché en console — il rejoint `kv-jf-dev-frc` dès sa génération, cohérent avec le backlog item "écrire les secrets dans Key Vault" déjà tracé.
+
+**Vérification :** parsing PowerShell sans erreur ; seul un run réel par l'utilisateur (sans aucun faux succès) validera ces corrections.
