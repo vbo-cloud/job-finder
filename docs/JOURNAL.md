@@ -2285,3 +2285,32 @@ ISSUER = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
 # après
 ISSUER = f"https://{ENTRA_EXTERNAL_TENANT_ID}.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
 ```
+
+---
+
+## PR #94 — feat(frontend): profile page — GET/PUT /profile, auth guard, ROME chips
+
+**Date :** 2026-06-24
+**Branche :** `feature/m4-profile-page` → `dev`
+
+### Ce qui a été fait
+
+Implémentation de la page profil (`app/profile/page.tsx`) et mise à jour de la page d'accueil (`app/page.tsx`).
+
+**Page profil (`/profile`) :**
+- Garde d'auth : si non authentifié, message + bouton de connexion (`loginRedirect`).
+- Chargement : `GET /profile` via `apiClient` (Bearer token injecté par l'intercepteur axios). Cas 404 → formulaire vide (le `PUT /profile` est un upsert).
+- Formulaire : `location` (texte libre), `contract_types` (cases à cocher : CDI, CDD, Freelance, Stage, Alternance), `job_categories` (tag input, Entrée ou virgule pour ajouter).
+- `rome_codes` : chips en lecture seule, affichés uniquement si non vides (gérés par l'agent CV).
+- Sauvegarde : `PUT /profile` avec `{ location, contract_types, job_categories }` — `rome_codes` absent intentionnellement.
+- Feedback inline succès / erreur après sauvegarde.
+
+**Page d'accueil :**
+- Lien « Mon profil → » vers `/profile` affiché uniquement quand authentifié.
+
+### Décisions techniques
+
+- `rome_codes` masqué si vide — pas de section vide avant le premier upload de CV.
+- 404 silencieux : formulaire vide est l'état initial attendu pour un nouvel utilisateur.
+- `location.trim() || null` : chaîne vide normalisée en `null` (correspond au type `str | None` du schéma Pydantic).
+- Ce PR a nécessité le fix préalable PR #93 (issuer JWT CIAM).
