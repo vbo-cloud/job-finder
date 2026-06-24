@@ -399,22 +399,25 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ## FastAPI — Dette technique
 
-### [urgent] Pincer les dépendances de la webapp avec pip-compile
+### [urgent] Pincer les dépendances et ajouter un smoke-test de démarrage webapp
 
-`alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement dans `agents/webapp/requirements.txt`, causant des crash-loops en production. Sans lockfile, chaque dépendance implicite doit être découverte à la main par un crash en prod.
+Trois manques successifs dans le Dockerfile/requirements webapp ont causé trois crash-loops en prod sans être détectés en CI :
+- PR #88 : `alembic` absent de `requirements.txt`
+- PR #90 : `python-multipart` absent de `requirements.txt`
+- PR #91 : `migrations/` absent du build context Dockerfile
 
-**Solution :** adopter `pip-tools` pour séparer les dépendances directes (non épinglées, dans `requirements.in`) des dépendances résolues et épinglées (générées dans `requirements.txt` par `pip-compile`). Le Dockerfile installe `requirements.txt` — toujours reproductible.
+**Solution 1 — `pip-compile` (lockfile)** : adopter `pip-tools` pour séparer les dépendances directes (non épinglées, dans `requirements.in`) des dépendances résolues et épinglées (générées dans `requirements.txt`). `pip-compile` résout aussi les dépendances transverses — `python-multipart` serait apparu automatiquement.
 
 ```bash
 pip install pip-tools
 cd JobFinder/python/agents/webapp
-# renommer requirements.txt → requirements.in (dépendances directes uniquement)
+# renommer requirements.txt → requirements.in
 pip-compile requirements.in  # génère requirements.txt épinglé
 ```
 
-`pip-compile` résout aussi les dépendances transverses — `python-multipart` (requis par FastAPI pour `UploadFile`) serait apparu automatiquement.
+**Solution 2 — smoke-test de démarrage** : ajouter un step dans `buildAgents.yml` qui lance l'image webapp avec `docker run --rm -e DATABASE_URL=postgresql://x:x@localhost/x <image> python -c "import main"` (ou équivalent) pour valider que l'import réussit avant le push vers ACR.
 
-**Fichiers :** `agents/webapp/requirements.in` (à créer), `agents/webapp/requirements.txt` (regénéré).
+**Fichiers :** `agents/webapp/requirements.in` (à créer), `agents/webapp/requirements.txt` (regénéré), `.github/workflows/buildAgents.yml`.
 
 ### [optional] Blob orphelin sur échec DB dans POST /cv/upload
 Si le blob est uploadé mais que le `session.commit()` échoue ensuite,

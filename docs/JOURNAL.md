@@ -2192,6 +2192,35 @@ Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP,
 
 ---
 
+## PR #91 — fix(webapp): copy migrations/ into webapp Docker image
+
+**Date :** 2026-06-24
+**Branche :** `fix/webapp-dockerfile-copy-migrations` → `dev`
+
+### Ce qui s'est passé
+
+3e crash-loop consécutif sur `app-jf-dev-frc` après le merge de PR #90 :
+
+```
+alembic.util.exc.CommandError: No 'script_location' key found in configuration.
+```
+
+`shared/db.py` charge `/app/migrations/alembic.ini` au démarrage pour exécuter `alembic upgrade head`. Le fichier était absent de l'image webapp : `agents/webapp/Dockerfile` ne copiait que `agents/webapp/` et `shared/` — pas `migrations/`. Les Dockerfiles des agents batch utilisent `COPY . .` depuis le build context `JobFinder/python/`, ce qui inclut `migrations/` automatiquement ; le Dockerfile webapp était plus sélectif et avait oublié ce répertoire.
+
+### Correctif
+
+Ajout dans `agents/webapp/Dockerfile` :
+
+```dockerfile
+COPY migrations/ ./migrations/
+```
+
+### Audit — 3 manques successifs
+
+`alembic` (requirements.txt, PR #88) → `python-multipart` (requirements.txt, PR #90) → `migrations/` (Dockerfile, PR #91) : le build webapp n'avait jamais été validé par un vrai démarrage. Item backlog renforcé avec deux solutions complémentaires : `pip-compile` pour les dépendances, smoke-test d'import dans `buildAgents.yml` pour détecter les erreurs avant le push vers ACR.
+
+---
+
 ## PR #90 — fix(webapp): add python-multipart to webapp requirements
 
 **Date :** 2026-06-24
