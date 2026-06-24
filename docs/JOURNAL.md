@@ -2182,3 +2182,10 @@ Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP,
 - **Lecture des claims :** `accounts[0]?.idTokenClaims` casté en `Record<string, unknown>`, lecture explicite de `preferred_username` et `name`.
 - **Instrumentation de diagnostic retirée :** `console.log("[MSAL] claims")` (LoginButton), `console.error("[MSAL] auth failure")` (AuthProvider event callback), `LogLevel.Verbose` + `loggerCallback` (msalConfig → remis en `LogLevel.Warning` + no-op).
 - `npm run build` passe (TypeScript + lint) après nettoyage du cache `.next`.
+
+### Retours reviewer non bloquants (suite)
+
+- **Polling break** : boucle de détection du tenant restructurée avec `break` explicite sur ID valide — `Start-Sleep` devient le chemin de fall-through (jamais atteint si le tenant existe déjà), éliminant l'attente inutile de 10s sur tenant existant.
+- **Null guard `$spaAppObjId`** : garde ajouté après `az ad app create` en section 9 — fail-fast explicite si la création ne retourne pas d'ID (même style que le garde `$flowId` en section 6).
+- **Commentaire `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`** : précise que `knownAuthorities` dans MSAL attend un nom d'hôte brut (sans `https://`).
+- **Backlog** : item ajouté — extraire `Invoke-GraphRequest` dans `graph-utils.ps1` (dot-sourcing) à partir d'un 3ᵉ script Graph.
