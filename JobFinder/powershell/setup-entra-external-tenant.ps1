@@ -143,17 +143,17 @@ if ($null -eq $existingTenant) {
 $externalTenantId = $null
 $maxAttempts      = 18  # 3 minutes max
 $attempt          = 0
-while ($attempt -lt $maxAttempts -and $null -eq $externalTenantId) {
+while ($attempt -lt $maxAttempts) {
     $attempt++
     $polledList  = az rest --method GET --url $ciamListUrl 2>$null | ConvertFrom-Json
     $polledMatch = $polledList.value | Where-Object { $_.properties.domainName -eq $ciamDomain } | Select-Object -First 1
     $polledId    = $polledMatch.properties.tenantId
     if (-not [string]::IsNullOrEmpty($polledId) -and $polledId -ne $emptyGuid) {
         $externalTenantId = $polledId
-    } else {
-        Write-Host "Attente de la propagation du tenant ($attempt/$maxAttempts)..."
-        Start-Sleep -Seconds 10
+        break  # ID valide — sortir immédiatement, pas de Start-Sleep inutile sur tenant existant
     }
+    Write-Host "Attente de la propagation du tenant ($attempt/$maxAttempts)..."
+    Start-Sleep -Seconds 10
 }
 if ($null -eq $externalTenantId) {
     Write-Error "Tenant '$ciamDomain' : aucun tenantId valide après $maxAttempts tentatives — relancer le script."
@@ -437,6 +437,10 @@ if ($null -ne $existingSpaApp) {
     if ($LASTEXITCODE -ne 0) { Write-Error "Échec az ad app create '$spaAppName'." ; exit 1 }
     $spaAppObjId = $spaApp.id
     $spaAppId    = $spaApp.appId
+    if ([string]::IsNullOrEmpty($spaAppObjId)) {
+        Write-Error "App Registration '$spaAppName' : création sans ID retourné — relancer le script."
+        exit 1
+    }
     Write-Host "App Registration '$spaAppName' créée."
 }
 
@@ -590,6 +594,7 @@ Write-Host ""
 Write-Host "À coller dans JobFinder/frontend/.env.local (frontend Next.js / MSAL) :"
 Write-Host "  NEXT_PUBLIC_ENTRA_CLIENT_ID      = $spaAppId"
 Write-Host "  NEXT_PUBLIC_ENTRA_AUTHORITY      = https://$domainName.ciamlogin.com/$externalTenantId"
+# hôte seul, sans https:// — knownAuthorities dans MSAL attend un nom d'hôte brut, pas une URL
 Write-Host "  NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY = $domainName.ciamlogin.com"
 Write-Host "  NEXT_PUBLIC_ENTRA_API_SCOPE      = api://$appId/access_as_user"
 # affiche uniquement la 1re URI (localhost dev) — les autres sont enregistrées mais pas reprises dans le hint
