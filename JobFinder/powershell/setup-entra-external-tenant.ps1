@@ -534,6 +534,7 @@ Write-Host "  NEXT_PUBLIC_ENTRA_CLIENT_ID      = $spaAppId"
 Write-Host "  NEXT_PUBLIC_ENTRA_AUTHORITY      = https://$domainName.ciamlogin.com/$externalTenantId"
 Write-Host "  NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY = $domainName.ciamlogin.com"
 Write-Host "  NEXT_PUBLIC_ENTRA_API_SCOPE      = api://$appId/access_as_user"
+# affiche uniquement la 1re URI (localhost dev) — les autres sont enregistrées mais pas reprises dans le hint
 Write-Host "  NEXT_PUBLIC_REDIRECT_URI         = $($spaRedirectUris[0])"
 Write-Host ""
 Write-Host "Exécution (script manuel — un az login interactif sur le tenant CIAM est requis, géré en section 2) :"

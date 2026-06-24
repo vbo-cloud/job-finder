@@ -2123,3 +2123,11 @@ Le scaffold frontend (PR #88) est en place mais le login MSAL ne fonctionnait pa
 - Redirect URIs dans `spa.redirectUris` via PATCH Graph, pas dans `web`.
 - JSON des tableaux (`redirectUris`, `requiredResourceAccess`) construit manuellement : `ConvertTo-Json` désérialise un tableau mono-élément en scalaire sous PowerShell 5.1, ce que Graph rejette.
 - Idempotence : re-run détecte tout l'existant (app, redirect URIs, permission, association) et ne crée que la SPA si absente. Vérifié par parsing PowerShell (aucune erreur de syntaxe). Application manuelle par l'utilisateur, hors CI/CD.
+
+### Raffinements post-revue (non bloquants)
+
+Suite à la revue du reviewer, sur la même PR :
+- **Section 11 — `requiredResourceAccess` additif.** Le PATCH écrasait tout le tableau (il ne posait que l'entrée `fastapi-jobfinder`). Remplacé par un patron lire-fusionner-écrire (même logique additive que les redirect URIs en section 10) : GET de la SPA, fusion du scope `access_as_user` dans l'entrée `fastapi-jobfinder` existante (ou ajout d'une nouvelle entrée), sans supprimer d'autres permissions ni dupliquer. Motivation : ne pas effacer une future 2e permission (ex. microservice de facturation).
+- **Nettoyage `$tmpFile`.** Les blocs de fichier temporaire des sections 10/11/12 sont désormais en `try { … } finally { Remove-Item }` — suppression garantie même si `az rest` échoue.
+- **Commentaires.** Section 12 : explication de l'usage volontaire de `ConvertTo-Json` (objet simple, pas un tableau, contrairement aux sections 10/11). Section 13 : précision que seule la 1re redirect URI (localhost dev) est reprise dans le hint, les autres restant enregistrées.
+- **`$externalTenantId` :** vérifié défini dans tous les chemins de la section 1 avant le résumé (section 13) — aucun correctif nécessaire.
