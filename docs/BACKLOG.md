@@ -315,6 +315,24 @@ Purement cosmétique. `az ad app update --id <app-id> --display-name sp-jf-githu
 
 ---
 
+### [hardening] Écrire les secrets Entra directement dans Key Vault au lieu de la console
+
+`setup-entra-external-tenant.ps1` affiche actuellement les secrets sensibles dans la
+console (section résumé) pour copier-coller manuel dans `kv-jf-dev-frc` :
+le client secret Entra External ID (`entra-external-client-secret`) et le
+secret OAuth Google (`google-oauth-client-secret`). Ces valeurs transitent par
+l'historique du terminal et risquent de fuiter.
+
+**Solution cible :** écrire directement dans Key Vault via
+`az keyvault secret set --vault-name kv-jf-dev-frc --name <secret> --value <valeur>`
+au lieu de les afficher. Ne garder en console que les identifiants non sensibles
+(tenant id, client ids). Conditionner l'écriture KV à la présence d'un secret
+fraîchement généré (le bloc idempotent ne régénère pas un secret encore valide).
+
+**Fichier :** `JobFinder/powershell/setup-entra-external-tenant.ps1`
+
+---
+
 
 ## Azure OpenAI
 

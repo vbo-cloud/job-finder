@@ -2131,3 +2131,17 @@ Suite à la revue du reviewer, sur la même PR :
 - **Nettoyage `$tmpFile`.** Les blocs de fichier temporaire des sections 10/11/12 sont désormais en `try { … } finally { Remove-Item }` — suppression garantie même si `az rest` échoue.
 - **Commentaires.** Section 12 : explication de l'usage volontaire de `ConvertTo-Json` (objet simple, pas un tableau, contrairement aux sections 10/11). Section 13 : précision que seule la 1re redirect URI (localhost dev) est reprise dans le hint, les autres restant enregistrées.
 - **`$externalTenantId` :** vérifié défini dans tous les chemins de la section 1 avant le résumé (section 13) — aucun correctif nécessaire.
+### Correctif — incident tenant Entra en double (détection + polling)
+
+Lors d'une exécution réelle, le script a **créé un second tenant Entra External ID en double**, alors que le tenant correct (`jobfinderapp.onmicrosoft.com`, dans `rg-jf-dev-frc-core`) existait déjà. Deux bugs cumulés en section 1 :
+
+1. **Détection erronée du tenant.** Le nom de ressource ARM était construit depuis `$domainName = "jobfinderapp"` (`GET .../ciamDirectories/jobfinderapp`), alors que le vrai nom est `jobfinderapp.onmicrosoft.com` (Azure ajoute le suffixe du domaine initial) → 404 → le script concluait « le tenant n'existe pas » et entrait dans la branche création, dupliquant le tenant.
+2. **Polling acceptant le GUID vide.** La boucle de polling acceptait `properties.tenantId` même quand il valait `00000000-0000-0000-0000-000000000000` (valeur renvoyée pendant le provisioning), enregistrant un tenantId invalide.
+
+**Corrections :**
+1. **Détection robuste par listing.** On LISTE les `ciamDirectories` du resource group et on retrouve l'existant en matchant sur `properties.domainName == "$domainName.onmicrosoft.com"`. La branche création n'est atteinte que si aucune ressource ne correspond — fini la dépendance à un nom de ressource supposé. `$domainName` reste `"jobfinderapp"` pour l'autorité ciamlogin ; seule la résolution ARM utilise le suffixe `.onmicrosoft.com` (variable `$ciamDomain`).
+2. **Polling rejetant le GUID tout-à-zéro.** Le GUID tout-à-zéro est traité comme « pas prêt » ; le polling (re-list + match) continue jusqu'à un vrai GUID, avec échec explicite (`exit 1`) si `maxAttempts` est atteint. Un tenant déjà prêt est résolu dès la 1re itération.
+
+**Backlog :** item de durcissement ajouté (`docs/BACKLOG.md`, section Sécurité) : écrire les secrets sensibles (client secret Entra, secret Google) directement dans Key Vault via `az keyvault secret set` plutôt que de les afficher en console.
+
+**Vérification :** logique vérifiée statiquement (pas d'accès Azure depuis l'environnement) — parsing PowerShell sans erreur ; une ré-exécution détecte le tenant `jobfinderapp.onmicrosoft.com` existant via le listing et **n'entre pas** dans la branche création.
