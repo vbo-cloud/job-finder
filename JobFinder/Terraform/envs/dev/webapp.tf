@@ -90,5 +90,11 @@ module "webapp" {
       name        = "ENTRA_EXTERNAL_CLIENT_SECRET"
       secret_name = "entra-external-client-secret"
     },
+    # Frontend origins allowed to call the API cross-origin.
+    # Add the Container App frontend URL here when the frontend is deployed.
+    {
+      name  = "CORS_ALLOWED_ORIGINS"
+      value = "http://localhost:3000"
+    },
   ]
 }

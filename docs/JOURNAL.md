@@ -2243,3 +2243,20 @@ Ajout de `python-multipart` dans `agents/webapp/requirements.txt`. Le rebuild de
 ### Audit
 
 `alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement, causant deux crash-loops consécutifs. Pattern identifié : sans lockfile, les dépendances implicites de FastAPI ne sont pas visibles et doivent être découvertes par un crash en prod. Item backlog « pip-compile / lock des dépendances webapp » renforcé en `[urgent]` avec description complète de la solution (`requirements.in` + `pip-compile`).
+
+---
+
+## PR #92 — feat(infra): set CORS_ALLOWED_ORIGINS on webapp Container App
+
+**Date :** 2026-06-24
+**Branche :** `feature/m4-webapp-cors-origins` → `dev`
+
+### Ce qui a été fait
+
+Ajout de la variable d'environnement `CORS_ALLOWED_ORIGINS=http://localhost:3000` sur la webapp Container App dans `envs/dev/webapp.tf`. Le middleware `CORSMiddleware` ajouté en PR #87 lit cette variable pour autoriser les requêtes cross-origin — sans elle, tout appel depuis le frontend local vers l'API déployée était bloqué par le navigateur.
+
+### Décisions techniques
+
+- Valeur plain-text (pas un secret) : les origines CORS sont semi-publiques, visibles dans les headers de réponse HTTP.
+- `http://localhost:3000` uniquement pour l'instant — l'URL du Container App frontend s'ajoutera ici (séparée par une virgule) lors du déploiement du frontend (M4 PR #2).
+- Commentaire en place dans `webapp.tf` pour rappeler l'action à faire lors du déploiement frontend.
