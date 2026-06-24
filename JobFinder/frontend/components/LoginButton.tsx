@@ -23,7 +23,13 @@ export function LoginButton() {
   };
 
   if (isAuthenticated) {
-    const name = accounts[0]?.name ?? accounts[0]?.username ?? "utilisateur";
+    const claims = accounts[0]?.idTokenClaims as Record<string, unknown> | undefined;
+    const preferredUsername = claims?.preferred_username as string | undefined;
+    const displayName = claims?.name as string | undefined;
+    const name =
+      preferredUsername ??
+      (displayName && displayName !== "unknown" ? displayName : undefined) ??
+      "Connecté";
     return (
       <div className="flex flex-col items-center gap-3">
         <p className="text-green-700">Connecté en tant que {name}</p>
