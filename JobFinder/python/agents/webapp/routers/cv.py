@@ -20,6 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import send_message
+from shared.constants import THUMBNAIL_SCALE
 from shared.embedder import embed
 from shared.models import CV, Match, UserProfile
 from auth import get_current_user
@@ -32,7 +33,6 @@ logger = structlog.get_logger()
 CV_ANALYSIS_QUEUE = "cv-analysis"
 CV_BLOB_CONTAINER = "cvs"
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
-THUMBNAIL_SCALE = 0.4  # ~29 DPI — enough for a 176 px wide card
 
 AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
 if not AZURE_STORAGE_ACCOUNT_URL:

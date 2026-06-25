@@ -24,12 +24,12 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from shared.constants import THUMBNAIL_SCALE  # noqa: E402 — path must be set first
 from shared.models import CV  # noqa: E402 — path must be set first
 
 logger = structlog.get_logger()
 
 CV_BLOB_CONTAINER = "cvs"
-THUMBNAIL_SCALE = 0.4
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
@@ -80,12 +80,10 @@ def _blob_name_from_url(blob_url: str) -> str:
 def main() -> None:
     """Iterate CVs without a thumbnail_url, generate, upload, and persist each one."""
     engine = create_engine(DATABASE_URL)
-    blob_service = BlobServiceClient(
+    with BlobServiceClient(
         account_url=AZURE_STORAGE_ACCOUNT_URL,
         credential=DefaultAzureCredential(),
-    )
-
-    with Session(engine) as session:
+    ) as blob_service, Session(engine) as session:
         rows = session.execute(
             select(CV).where(CV.thumbnail_url.is_(None), CV.blob_url.is_not(None))
         ).scalars().all()
