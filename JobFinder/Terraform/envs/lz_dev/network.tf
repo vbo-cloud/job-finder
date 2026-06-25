@@ -36,6 +36,7 @@ module "subnet_cae" {
 
 # Dedicated subnet for management VMs (jumpbox, bastion, etc.)
 # Uses /27 (32 IPs) — more than sufficient for a single management VM.
+# prevent_destroy = true is enforced by the subnet module's lifecycle block.
 module "subnet_mgmt" {
   source               = "../../modules/subnet"
   name                 = "snet-${var.project}-lz-dev-${var.location_short}-mgmt"
