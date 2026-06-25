@@ -24,6 +24,7 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const fileInputRef                    = useRef<HTMLInputElement>(null);
   const pendingFilenameRef              = useRef<string>("");
+  const pendingRevokeRef                = useRef<string | null>(null);
   const { instance }                    = useMsal();
   const isAuthenticated                 = useIsAuthenticated();
   const mousePosRef                     = useRef<{ x: number; y: number } | null>(null);
@@ -39,20 +40,26 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
       }
       pendingFilenameRef.current = file.name;
       const objectUrl = URL.createObjectURL(file);
+      pendingRevokeRef.current = objectUrl; // revoked in handleThumbnailReady after pdfjs reads it
       setThumbnailUrl(objectUrl);
       setAnimState("uploaded");
       const formData = new FormData();
       formData.append("file", file);
-      // Upload runs in background — done state is driven by onThumbnailReady, not the network
+      // Upload runs in background — done state driven by onThumbnailReady, not the network.
+      // No .finally() revoke here: pdfjs must read the URL first (race condition fix).
       apiClient
         .post<void>("/cv/upload", formData)
-        .catch(() => { /* silent — library card shows regardless */ })
-        .finally(() => { URL.revokeObjectURL(objectUrl); });
+        .catch(() => { /* silent — library card shows regardless */ });
     },
     [isAuthenticated, instance],
   );
 
   const handleThumbnailReady = useCallback((dataUrl: string | null) => {
+    // pdfjs has finished reading the objectUrl — safe to revoke now
+    if (pendingRevokeRef.current) {
+      URL.revokeObjectURL(pendingRevokeRef.current);
+      pendingRevokeRef.current = null;
+    }
     setAnimState("done");
     onReadyForLibrary?.(pendingFilenameRef.current, dataUrl);
   }, [onReadyForLibrary]);

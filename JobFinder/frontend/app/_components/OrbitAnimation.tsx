@@ -38,10 +38,12 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
   const canvasRef          = useRef<HTMLCanvasElement>(null);
   const stateRef           = useRef(state);
   const thumbRef           = useRef<HTMLCanvasElement | null>(null);
-  const onDoneCompleteRef  = useRef(onDoneComplete);
+  const onDoneCompleteRef    = useRef(onDoneComplete);
+  const onThumbnailReadyRef  = useRef(onThumbnailReady);
 
   useEffect(() => { stateRef.current = state; }, [state]);
-  useEffect(() => { onDoneCompleteRef.current = onDoneComplete; }, [onDoneComplete]);
+  useEffect(() => { onDoneCompleteRef.current   = onDoneComplete; },   [onDoneComplete]);
+  useEffect(() => { onThumbnailReadyRef.current = onThumbnailReady; }, [onThumbnailReady]);
 
   // Render PDF thumbnail with pdfjs-dist v3
   useEffect(() => {
@@ -51,8 +53,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
       try {
         const pdfjsLib = await import("pdfjs-dist");
         // v3 classic worker — served from /public as a regular JS file
-        (pdfjsLib as unknown as { GlobalWorkerOptions: { workerSrc: string } })
-          .GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
         const pdf      = await pdfjsLib.getDocument(thumbnailUrl!).promise;
         const page     = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 0.2 });
@@ -61,12 +62,12 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         canvas.height  = viewport.height;
         const ctx      = canvas.getContext("2d")!;
         await page.render({ canvasContext: ctx, viewport }).promise;
-        if (!cancelled) {
-          thumbRef.current = canvas;
-          onThumbnailReady?.(canvas.toDataURL("image/jpeg", 0.85));
-        }
+        // pdfjs has finished reading the objectUrl — signal safe to revoke
+        const dataUrl  = cancelled ? null : canvas.toDataURL("image/jpeg", 0.85);
+        if (!cancelled) thumbRef.current = canvas;
+        onThumbnailReadyRef.current?.(dataUrl);
       } catch {
-        if (!cancelled) onThumbnailReady?.(null);
+        onThumbnailReadyRef.current?.(null);
       }
     }
     void renderPdf();
