@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+
 import { cn } from "@/lib/utils";
 import type { CVData } from "@/lib/api/types";
 
@@ -30,12 +32,12 @@ export default function CVCard({ cv }: CVCardProps) {
         )}
       >
         {cv.thumbnail_url && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <Image
             src={cv.thumbnail_url}
             alt=""
+            fill
             className={cn(
-              "absolute inset-0 h-full w-full object-cover",
+              "object-cover",
               isPending && "grayscale opacity-50",
             )}
           />
