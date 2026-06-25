@@ -22,22 +22,21 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   const [error, setError]         = useState(false);
 
   const fetchCvs = useCallback(async (): Promise<void> => {
-    setError(false);
     try {
       const { data } = await apiClient.get<CVData[]>("/cv/");
       setCvs(data);
+      setError(false);
     } catch (err) {
       console.error("[LibrarySection] fetch failed", err);
       setError(true);
     } finally {
-      setLoading(false);
+      setLoading(false); // no-op on subsequent calls (already false)
     }
   }, []);
 
   // Only fetch when the user is authenticated; re-fetch when refreshTrigger changes
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
-    setLoading(true);
     void fetchCvs();
   }, [fetchCvs, isAuthenticated, refreshTrigger]);
 

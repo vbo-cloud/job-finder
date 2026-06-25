@@ -20,8 +20,14 @@ def upgrade() -> None:
         "cvs",
         sa.Column("status", sa.String(), nullable=False, server_default="pending"),
     )
+    op.create_check_constraint(
+        "ck_cvs_status",
+        "cvs",
+        "status IN ('pending', 'processing', 'done', 'error')",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint("ck_cvs_status", "cvs")
     op.drop_column("cvs", "status")
     op.drop_column("cvs", "name")
