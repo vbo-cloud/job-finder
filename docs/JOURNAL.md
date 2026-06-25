@@ -2347,3 +2347,23 @@ Implémentation de la page profil (`app/profile/page.tsx`) et mise à jour de la
 - Les inputs existants (`focus:ring-2 focus:ring-blue-400`) sont exemptés de la migration `focus-visible` — ils ont déjà des styles focus explicites, les changer serait du churn non requis.
 - Smoke-test avec des valeurs fictives (`postgresql://x:x@localhost/x`) : suffisant pour valider que tous les modules s'importent sans `ValueError`. La connexion réelle n'est pas testée — ce n'est pas le but du smoke-test.
 - `annotated-doc==0.0.4` dans le lockfile : dépendance directe de `fastapi==0.138.0` (vérifiée dans les métadonnées du wheel).
+
+---
+
+## PR #97 — fix(lz_dev): add Storage Blob Data Contributor role for UAMI caj
+
+**Date :** 2026-06-25
+**Branche :** `fix/blob-rbac-caj-uami` → `dev`
+
+### Ce qui a été fait
+
+Ajout du role assignment `Storage Blob Data Contributor` sur `rg_data` pour la UAMI `id-jf-dev-frc-caj` dans `lz_dev/rbac.tf`.
+
+### Contexte
+
+`POST /cv/upload` retournait systématiquement 503. Les logs Container App révèlent :
+`ErrorCode: AuthorizationPermissionMismatch` — la webapp utilise `DefaultAzureCredential` (UAMI via `AZURE_CLIENT_ID`) pour écrire dans le blob container `cvs`, mais la UAMI n'avait aucun rôle data-plane sur le Storage Account. L'upload échouait à chaque tentative.
+
+### Décision technique
+
+Scope à `rg_data` (resource group) plutôt qu'au storage account ou container : cohérent avec le pattern existant (`sp-jf-github` a déjà `Storage Blob Data Contributor` sur `rg_data`). Un seul storage account existe dans ce RG en dev.

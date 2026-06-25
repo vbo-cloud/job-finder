@@ -115,6 +115,16 @@ resource "azurerm_role_assignment" "caj_acr_pull" {
 }
 
 # ==============================================================================
+# Role — Storage Blob Data Contributor (CV and offers storage)
+# ==============================================================================
+
+resource "azurerm_role_assignment" "caj_storage_blob_contributor" {
+  scope                = module.rg_data.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
+
+# ==============================================================================
 # Role — Service Bus Data Owner
 # ==============================================================================
 
