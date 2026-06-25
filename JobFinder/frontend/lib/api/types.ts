@@ -6,7 +6,7 @@ export interface CVData {
   status: CVStatus;
   uploaded_at: string;
   match_count: number;
-  thumbnail_url: string | null;
+  has_thumbnail: boolean;
 }
 
 export interface CVUploadResponse {

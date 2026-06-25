@@ -1,8 +1,9 @@
 "use client";
 
-import Image from "next/image";
+import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
+import { apiClient } from "@/lib/api/client";
 import type { CVData } from "@/lib/api/types";
 
 interface CVCardProps {
@@ -19,6 +20,32 @@ export default function CVCard({ cv }: CVCardProps) {
     year: "numeric",
   });
 
+  const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!cv.has_thumbnail) return;
+
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    apiClient
+      .get<Blob>(`/cv/${cv.id}/thumbnail`, { responseType: "blob" })
+      .then((res) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(res.data);
+        setThumbnailSrc(objectUrl);
+      })
+      .catch((error: unknown) => {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        if (status !== 404) console.error("cv thumbnail fetch failed", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [cv.id, cv.has_thumbnail]);
+
   return (
     <div className="flex w-44 flex-shrink-0 flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4">
       <div
@@ -26,24 +53,24 @@ export default function CVCard({ cv }: CVCardProps) {
         aria-label={isPending ? "Analyse en cours" : undefined}
         className={cn(
           "relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg",
-          !cv.thumbnail_url && isPending && "bg-white/[0.05]",
-          !cv.thumbnail_url && !isPending && !isError && "bg-white/[0.08]",
+          !thumbnailSrc && isPending && "bg-white/[0.05]",
+          !thumbnailSrc && !isPending && !isError && "bg-white/[0.08]",
           isError && "bg-red-500/[0.08]",
         )}
       >
-        {cv.thumbnail_url && (
-          <Image
-            src={cv.thumbnail_url}
+        {thumbnailSrc && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={thumbnailSrc}
             alt=""
-            fill
             className={cn(
-              "object-cover",
+              "absolute inset-0 h-full w-full object-cover",
               isPending && "grayscale opacity-50",
             )}
           />
         )}
 
-        {cv.thumbnail_url && isPending && (
+        {thumbnailSrc && isPending && (
           <div className="absolute inset-0 bg-black/40" />
         )}
 
@@ -61,7 +88,7 @@ export default function CVCard({ cv }: CVCardProps) {
         )}
 
         {isError && <span className="text-xs text-red-400/60">Erreur</span>}
-        {!isPending && !isError && !cv.thumbnail_url && (
+        {!isPending && !isError && !thumbnailSrc && (
           <span className="text-xs text-white/20">PDF</span>
         )}
       </div>
