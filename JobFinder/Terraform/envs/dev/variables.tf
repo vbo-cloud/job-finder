@@ -65,3 +65,14 @@ variable "openai_capacity_tpm" {
     error_message = "openai_capacity_tpm must be greater than 0."
   }
 }
+
+variable "jumpbox_ssh_public_key" {
+  description = "SSH public key (authorized_keys format) for the jumpbox VM admin user."
+  type        = string
+  sensitive   = true
+}
+
+variable "jumpbox_allowed_ssh_cidrs" {
+  description = "List of CIDR blocks allowed to SSH into the jumpbox (e.g. [\"203.0.113.0/32\"])."
+  type        = list(string)
+}
