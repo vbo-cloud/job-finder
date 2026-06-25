@@ -2527,20 +2527,20 @@ Correction dans `JobFinder/python/agents/cv_analysis/main.py` : `receive_message
 ### Ce qui a été fait
 
 **Module `modules/jumpbox/` :**
-- `variables.tf` : variables avec descriptions et validations (`allowed_ssh_cidr_blocks` non vide, `auto_shutdown_time` au format HHMM).
-- `main.tf` : Public IP Standard (Static), NSG avec règle SSH restreinte par CIDR, NIC, VM Linux Ubuntu 22.04 LTS Gen2 (`Standard_B1ms`), identité system-assigned, cloud-init, role assignment `Virtual Machine Contributor` pour l'auto-désallocation, schedule d'arrêt quotidien.
-- `outputs.tf` : `public_ip`, `vm_id`, `private_ip`, `ssh_command`.
+- `variables.tf` : variables avec descriptions et validation sur `auto_shutdown_time` (format HHMM).
+- `main.tf` : NIC (IP privée uniquement), VM Linux Ubuntu 22.04 LTS Gen2 (`Standard_B1ms`) avec SSH key auth, cloud-init pour installer `postgresql-client`, schedule d'arrêt quotidien.
+- `outputs.tf` : `vm_id`, `private_ip`.
 
 **env dev (`envs/dev/`) :**
-- `network.tf` : ajout du data source `azurerm_subnet.lz_vnet_mgmt` (cohérent avec le pattern existant `lz_vnet_app`, `lz_vnet_cae`).
+- `network.tf` : ajout du data source `azurerm_subnet.lz_vnet_mgmt`.
 - `jumpbox.tf` : instanciation du module jumpbox.
-- `variables.tf` : ajout de `jumpbox_ssh_public_key` (sensitive) et `jumpbox_allowed_ssh_cidrs`.
-- `outputs.tf` : ajout de `jumpbox_ssh_command` et `jumpbox_public_ip`.
+- `variables.tf` : ajout de `jumpbox_ssh_public_key` (sensitive).
+- `outputs.tf` : ajout de `jumpbox_private_ip`.
 
 ### Décisions techniques
 
-- **IP publique justifiée** : le PostgreSQL est en VNet privé. La jumpbox est l'unique point d'entrée SSH ; Bastion Azure n'est pas justifié pour un projet portfolio (coût ~$100/mois). Le NSG restreint l'accès à des CIDRs explicitement listés — pas d'ouverture `0.0.0.0/0`.
-- **Identité system-assigned** : le script cloud-init appelle l'IMDS pour obtenir un token Bearer et déclencher la désallocation via l'API REST Azure — aucune credential stockée.
-- **Deux mécanismes d'arrêt** : (1) systemd timer toutes les 30 min qui désalloue si aucune session SSH active ; (2) schedule quotidien à 20h UTC en filet de sécurité.
-- **Data source plutôt que `terraform_remote_state`** : la convention du projet utilise `data "azurerm_subnet"` pour lire les subnets de la landing zone. Un `terraform_remote_state` aurait nécessité de hardcoder les coordonnées du backend (RG, SA, container, key) — moins robuste.
-- **`data.azurerm_resource_group.rg_app`** : les resource groups de dev sont des data sources (ownership transféré à lz_dev). Référence correcte : `data.azurerm_resource_group.rg_app.name`.
+- **Bastion Developer SKU** : accès via le portail Azure — gratuit, aucune ressource Bastion à déployer. Pas d'IP publique, pas de NSG, surface d'attaque nulle. Le Developer SKU était déjà utilisé sur le projet.
+- **SSH key auth conservée** : Bastion Developer supporte l'authentification par clé SSH depuis le portail.
+- **Auto-shutdown à 20h UTC** : seul mécanisme d'arrêt — suffisant sans l'auto-désallocation par IMDS (supprimée avec l'IP publique).
+- **Data source plutôt que `terraform_remote_state`** : cohérent avec le pattern existant (`lz_vnet_app`, `lz_vnet_cae`).
+- **`data.azurerm_resource_group.rg_app`** : les resource groups de dev sont des data sources (ownership transféré à lz_dev).
