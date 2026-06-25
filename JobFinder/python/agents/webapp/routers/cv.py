@@ -140,38 +140,22 @@ async def upload_cv(
 
     now = datetime.now(timezone.utc)
     try:
-        # Note: no UNIQUE constraint on cvs.user_id — intentional design decision.
-        # The data model supports multiple CVs per user (e.g. different roles).
-        # A unique constraint would permanently prevent this use case.
-        # The select-then-insert race condition is accepted for sequential uploads.
-        # Mitigating factor: the webapp runs as a single Container App replica
-        # during this phase — horizontal scaling would reintroduce the window.
-        existing_cv = session.execute(
-            select(CV).where(CV.user_id == user_id)
-        ).scalar_one_or_none()
-
-        if existing_cv is not None:
-            existing_cv.raw_text = raw_text
-            existing_cv.blob_url = blob_url
-            existing_cv.embedding = embedding
-            existing_cv.uploaded_at = now
-            existing_cv.name = file.filename
-            existing_cv.status = "pending"
-            cv_id = existing_cv.id
-        else:
-            cv_id = uuid.uuid4()
-            session.add(CV(
-                id=cv_id,
-                user_id=user_id,
-                name=file.filename,
-                status="pending",
-                raw_text=raw_text,
-                blob_url=blob_url,
-                embedding=embedding,
-                uploaded_at=now,
-                created_at=now,
-            ))
-        logger.info("cv_upload_cv_upserted", user_id=user_id, cv_id=str(cv_id))
+        # Each upload creates a new CV row — the data model supports multiple
+        # CVs per user (e.g. different roles). No upsert: every file is a
+        # distinct entry visible in the library.
+        cv_id = uuid.uuid4()
+        session.add(CV(
+            id=cv_id,
+            user_id=user_id,
+            name=file.filename,
+            status="pending",
+            raw_text=raw_text,
+            blob_url=blob_url,
+            embedding=embedding,
+            uploaded_at=now,
+            created_at=now,
+        ))
+        logger.info("cv_upload_cv_inserted", user_id=user_id, cv_id=str(cv_id))
 
         # Insert a default profile only if absent — never overwrite existing preferences.
         session.execute(

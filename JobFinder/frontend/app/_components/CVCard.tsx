@@ -5,11 +5,13 @@ import type { CVData } from "@/lib/api/types";
 
 interface CVCardProps {
   cv: CVData;
+  /** pdfjs-rendered data-URL thumbnail from the upload session (client-side only). */
+  thumbnail?: string | null;
 }
 
-export default function CVCard({ cv }: CVCardProps) {
-  const isPending = cv.status === "pending" || cv.status === "processing";
-  const isError   = cv.status === "error";
+export default function CVCard({ cv, thumbnail }: CVCardProps) {
+  const isPending   = cv.status === "pending" || cv.status === "processing";
+  const isError     = cv.status === "error";
   const displayName = cv.name ?? "CV sans nom";
   const date = new Date(cv.uploaded_at).toLocaleDateString("fr-FR", {
     day: "numeric",
@@ -23,16 +25,29 @@ export default function CVCard({ cv }: CVCardProps) {
         role={isPending ? "status" : undefined}
         aria-label={isPending ? "Analyse en cours" : undefined}
         className={cn(
-          "flex aspect-[3/4] w-full items-center justify-center rounded-lg",
-          isPending && "bg-white/[0.05]",
+          "relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg",
+          isPending && !thumbnail && "bg-white/[0.05]",
           !isPending && !isError && "bg-white/[0.08]",
           isError && "bg-red-500/[0.08]",
         )}
       >
+        {/* Grayed thumbnail from pdfjs — shown while pending */}
+        {isPending && thumbnail && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={thumbnail}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover grayscale opacity-50"
+            />
+            <div className="absolute inset-0 bg-black/40" />
+          </>
+        )}
+
         {isPending && (
           <svg
             aria-hidden="true"
-            className="h-5 w-5 animate-spin text-white/35"
+            className="relative h-5 w-5 animate-spin text-white/35"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -41,20 +56,14 @@ export default function CVCard({ cv }: CVCardProps) {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
         )}
-        {isError && (
-          <span className="text-xs text-red-400/60">Erreur</span>
-        )}
-        {!isPending && !isError && (
-          <span className="text-xs text-white/20">PDF</span>
-        )}
+        {isError && <span className="text-xs text-red-400/60">Erreur</span>}
+        {!isPending && !isError && <span className="text-xs text-white/20">PDF</span>}
       </div>
 
       <p className="truncate text-[11px] text-white/55" title={displayName}>{displayName}</p>
       <p className="text-[10px] text-white/25">{date}</p>
 
-      {isPending && (
-        <p className="text-[10px] text-white/25">Analyse en cours…</p>
-      )}
+      {isPending && <p className="text-[10px] text-white/25">Analyse en cours…</p>}
       {!isPending && !isError && (
         <p className="text-[10px] text-white/35">
           {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}

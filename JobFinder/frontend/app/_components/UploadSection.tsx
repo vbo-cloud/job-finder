@@ -15,7 +15,7 @@ type AnimState = "idle" | "uploaded" | "done";
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 interface Props {
-  onReadyForLibrary?: (filename: string, thumbnailDataUrl: string | null) => void;
+  onReadyForLibrary?: (dataUrl?: string | null) => void;
 }
 
 export default function UploadSection({ onReadyForLibrary }: Props) {
@@ -61,7 +61,7 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
       pendingRevokeRef.current = null;
     }
     setAnimState("done");
-    onReadyForLibrary?.(pendingFilenameRef.current, dataUrl);
+    onReadyForLibrary?.(dataUrl);
   }, [onReadyForLibrary]);
 
   const handleDoneComplete = useCallback(() => {

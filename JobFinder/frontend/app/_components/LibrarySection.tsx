@@ -11,11 +11,14 @@ import CVCard from "./CVCard";
 const POLL_INTERVAL_MS = 3000;
 
 interface Props {
-  /** Increment to trigger a manual re-fetch (e.g. right after an upload). */
   refreshTrigger?: number;
+  /** Data-URL thumbnail from the most recent upload (client-side, not persisted). */
+  pendingThumbnail?: string | null;
+  /** Called when all CVs have finished analysis — allows HomeClient to free the data-URL. */
+  onClearThumbnail?: () => void;
 }
 
-export default function LibrarySection({ refreshTrigger = 0 }: Props) {
+export default function LibrarySection({ refreshTrigger = 0, pendingThumbnail, onClearThumbnail }: Props) {
   const isAuthenticated           = useIsAuthenticated();
   const [cvs, setCvs]             = useState<CVData[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -30,38 +33,34 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       console.error("[LibrarySection] fetch failed", err);
       setError(true);
     } finally {
-      setLoading(false); // no-op on subsequent calls (already false)
+      setLoading(false);
     }
   }, []);
 
-  // Only fetch when the user is authenticated; re-fetch when refreshTrigger changes
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
     void fetchCvs();
   }, [fetchCvs, isAuthenticated, refreshTrigger]);
 
-  // Poll only while at least one CV is still being analysed
   useEffect(() => {
     if (!isAuthenticated) return;
     const hasPending = cvs.some(
       (cv) => cv.status === "pending" || cv.status === "processing",
     );
-    if (!hasPending) return;
+    if (!hasPending) {
+      onClearThumbnail?.();
+      return;
+    }
 
     const id = setInterval(() => void fetchCvs(), POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [cvs, fetchCvs, isAuthenticated]);
+  }, [cvs, fetchCvs, isAuthenticated, onClearThumbnail]);
 
   return (
-    <section
-      id="library"
-      className="h-dvh snap-start bg-[#0a0a0f] px-6 py-8"
-    >
+    <section id="library" className="h-dvh snap-start bg-[#0a0a0f] px-6 py-8">
       <p className="mb-6 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
 
-      {loading && (
-        <p className="text-xs text-white/20">Chargement…</p>
-      )}
+      {loading && <p className="text-xs text-white/20">Chargement…</p>}
 
       {!loading && cvs.length === 0 && !error && (
         <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
@@ -69,8 +68,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {cvs.length > 0 && (
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {cvs.map((cv) => (
-            <CVCard key={cv.id} cv={cv} />
+          {cvs.map((cv, i) => (
+            // Inject the pdfjs thumbnail only for the most recent CV (first in desc order)
+            <CVCard key={cv.id} cv={cv} thumbnail={i === 0 ? pendingThumbnail : null} />
           ))}
         </div>
       )}
