@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useIsAuthenticated } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
 import type { CVData } from "@/lib/api/types";
@@ -9,9 +10,15 @@ import CVCard from "./CVCard";
 
 const POLL_INTERVAL_MS = 3000;
 
-export default function LibrarySection() {
-  const [cvs, setCvs]       = useState<CVData[]>([]);
-  const [loading, setLoading] = useState(true);
+interface Props {
+  /** Increment to trigger a manual re-fetch (e.g. right after an upload). */
+  refreshTrigger?: number;
+}
+
+export default function LibrarySection({ refreshTrigger = 0 }: Props) {
+  const isAuthenticated          = useIsAuthenticated();
+  const [cvs, setCvs]            = useState<CVData[]>([]);
+  const [loading, setLoading]    = useState(true);
 
   const fetchCvs = useCallback(async (): Promise<void> => {
     try {
@@ -24,12 +31,16 @@ export default function LibrarySection() {
     }
   }, []);
 
+  // Only fetch when the user is authenticated; re-fetch when refreshTrigger changes
   useEffect(() => {
+    if (!isAuthenticated) { setLoading(false); return; }
+    setLoading(true);
     void fetchCvs();
-  }, [fetchCvs]);
+  }, [fetchCvs, isAuthenticated, refreshTrigger]);
 
   // Poll only while at least one CV is still being analysed
   useEffect(() => {
+    if (!isAuthenticated) return;
     const hasPending = cvs.some(
       (cv) => cv.status === "pending" || cv.status === "processing",
     );
@@ -37,7 +48,7 @@ export default function LibrarySection() {
 
     const id = setInterval(() => void fetchCvs(), POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [cvs, fetchCvs]);
+  }, [cvs, fetchCvs, isAuthenticated]);
 
   return (
     <section
