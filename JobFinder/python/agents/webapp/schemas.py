@@ -1,6 +1,7 @@
 """Pydantic request and response schemas for the webapp API."""
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -66,3 +67,15 @@ class MatchesOut(BaseModel):
 
     rome_codes: list[str]
     matches: list[MatchOut]
+
+
+class CVListItemOut(BaseModel):
+    """One CV entry in the user's library."""
+
+    id: uuid.UUID
+    name: str | None
+    status: str
+    uploaded_at: datetime
+    match_count: int
+
+    model_config = ConfigDict(from_attributes=True)

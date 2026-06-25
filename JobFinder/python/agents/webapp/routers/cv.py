@@ -13,17 +13,17 @@ from azure.servicebus.exceptions import ServiceBusError
 from azure.storage.blob import BlobServiceClient
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pdfminer.pdfparser import PDFSyntaxError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import send_message
 from shared.embedder import embed
-from shared.models import CV, UserProfile
+from shared.models import CV, Match, UserProfile
 from auth import get_current_user
 from dependencies import get_db
-from schemas import CVUploadOut
+from schemas import CVListItemOut, CVUploadOut
 
 router = APIRouter(prefix="/cv", tags=["cv"])
 logger = structlog.get_logger()
@@ -155,12 +155,16 @@ async def upload_cv(
             existing_cv.blob_url = blob_url
             existing_cv.embedding = embedding
             existing_cv.uploaded_at = now
+            existing_cv.name = file.filename
+            existing_cv.status = "pending"
             cv_id = existing_cv.id
         else:
             cv_id = uuid.uuid4()
             session.add(CV(
                 id=cv_id,
                 user_id=user_id,
+                name=file.filename,
+                status="pending",
                 raw_text=raw_text,
                 blob_url=blob_url,
                 embedding=embedding,
@@ -204,3 +208,48 @@ async def upload_cv(
         logger.error("cv_upload_analysis_trigger_failed", user_id=user_id, exc_info=True)
 
     return CVUploadOut(cv_id=cv_id, blob_url=blob_url, message="CV uploaded and analysis triggered")
+
+
+@router.get("/", response_model=list[CVListItemOut])
+def list_cvs(
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[CVListItemOut]:
+    """Return all CVs belonging to the authenticated user.
+
+    Args:
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Returns:
+        List of CVListItemOut ordered by uploaded_at descending.
+    """
+    logger.info("cv_list_started", user_id=user_id)
+    try:
+        match_count_sq = (
+            select(Match.cv_id, func.count(Match.id).label("match_count"))
+            .group_by(Match.cv_id)
+            .subquery()
+        )
+        rows = session.execute(
+            select(CV, func.coalesce(match_count_sq.c.match_count, 0).label("match_count"))
+            .outerjoin(match_count_sq, CV.id == match_count_sq.c.cv_id)
+            .where(CV.user_id == user_id)
+            .order_by(CV.uploaded_at.desc())
+        ).all()
+    except SQLAlchemyError:
+        logger.error("cv_list_failed", user_id=user_id, exc_info=True)
+        raise
+
+    result = [
+        CVListItemOut(
+            id=cv.id,
+            name=cv.name,
+            status=cv.status,
+            uploaded_at=cv.uploaded_at,
+            match_count=match_count,
+        )
+        for cv, match_count in rows
+    ]
+    logger.info("cv_list_done", user_id=user_id, count=len(result))
+    return result
