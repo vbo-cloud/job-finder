@@ -62,12 +62,12 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         canvas.height  = viewport.height;
         const ctx      = canvas.getContext("2d")!;
         await page.render({ canvasContext: ctx, viewport }).promise;
-        // pdfjs has finished reading the objectUrl — signal safe to revoke
-        const dataUrl  = cancelled ? null : canvas.toDataURL("image/jpeg", 0.85);
-        if (!cancelled) thumbRef.current = canvas;
-        onThumbnailReadyRef.current?.(dataUrl);
+        if (!cancelled) {
+          thumbRef.current = canvas;
+          onThumbnailReadyRef.current?.(canvas.toDataURL("image/jpeg", 0.85));
+        }
       } catch {
-        onThumbnailReadyRef.current?.(null);
+        if (!cancelled) onThumbnailReadyRef.current?.(null);
       }
     }
     void renderPdf();
