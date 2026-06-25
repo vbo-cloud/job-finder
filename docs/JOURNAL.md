@@ -2583,3 +2583,23 @@ L'apply dev échouait avec `LinkedAuthorizationFailed` : le SP `dev` pouvait éc
 ### Décision technique
 
 Même scope et même rôle que `subnet_cae_network_contributor` — cohérence avec le pattern existant. Séparé en PR dédiée car c'est un changement `lz_*` (plateforme) qui ne peut pas être mélangé avec la PR jumpbox (`dev`).
+
+---
+
+## PR #105 — fix(jumpbox): replace Standard_B1ms with Standard_B2s
+
+**Date :** 2026-06-25
+**Branche :** `fix/jumpbox-vm-size` → `dev`
+
+### Ce qui s'est passé
+
+L'apply dev échouait avec `SkuNotAvailable` :
+
+```
+The requested VM size Standard_B1ms is currently not available in location FranceCentral.
+Capacity Restrictions.
+```
+
+### Correctif
+
+Remplacement du default `vm_size` dans `modules/jumpbox/variables.tf` : `Standard_B1ms` → `Standard_B2s` (2 vCPU, 4 GB RAM). `Standard_B2s` est disponible en France Central et reste dans la gamme économique pour un jumpbox de dev.
