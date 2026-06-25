@@ -14,9 +14,11 @@ interface Props {
   refreshTrigger?: number;
   /** Data-URL thumbnail from the most recent upload (client-side, not persisted). */
   pendingThumbnail?: string | null;
+  /** Called when all CVs have finished analysis — allows HomeClient to free the data-URL. */
+  onClearThumbnail?: () => void;
 }
 
-export default function LibrarySection({ refreshTrigger = 0, pendingThumbnail }: Props) {
+export default function LibrarySection({ refreshTrigger = 0, pendingThumbnail, onClearThumbnail }: Props) {
   const isAuthenticated           = useIsAuthenticated();
   const [cvs, setCvs]             = useState<CVData[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -45,11 +47,14 @@ export default function LibrarySection({ refreshTrigger = 0, pendingThumbnail }:
     const hasPending = cvs.some(
       (cv) => cv.status === "pending" || cv.status === "processing",
     );
-    if (!hasPending) return;
+    if (!hasPending) {
+      onClearThumbnail?.();
+      return;
+    }
 
     const id = setInterval(() => void fetchCvs(), POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [cvs, fetchCvs, isAuthenticated]);
+  }, [cvs, fetchCvs, isAuthenticated, onClearThumbnail]);
 
   return (
     <section id="library" className="h-dvh snap-start bg-[#0a0a0f] px-6 py-8">

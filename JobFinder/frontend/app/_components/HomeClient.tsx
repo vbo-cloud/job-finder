@@ -12,12 +12,16 @@ export default function HomeClient() {
   return (
     <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
       <UploadSection
-        onReadyForLibrary={(_name, dataUrl) => {
+        onReadyForLibrary={(dataUrl) => {
           setPendingThumbnail(dataUrl ?? null);
           setUploadCount((n) => n + 1);
         }}
       />
-      <LibrarySection refreshTrigger={uploadCount} pendingThumbnail={pendingThumbnail} />
+      <LibrarySection
+        refreshTrigger={uploadCount}
+        pendingThumbnail={pendingThumbnail}
+        onClearThumbnail={() => setPendingThumbnail(null)}
+      />
     </main>
   );
 }
