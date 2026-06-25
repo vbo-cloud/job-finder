@@ -4,6 +4,8 @@ import io
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from urllib.parse import quote, urlparse
 
 import pdfplumber
 import pypdfium2 as pdfium
@@ -146,8 +148,8 @@ def _download_blob(blob_url: str, container: str) -> bytes:
     Raises:
         AzureError: If the download fails for any storage-level reason.
     """
-    # Extract blob name: everything after "{account_url}/{container}/"
-    blob_name = blob_url.split(f"/{container}/", 1)[1]
+    parts = PurePosixPath(urlparse(blob_url).path).parts
+    blob_name = str(PurePosixPath(*parts[2:]))  # drop leading '/' and container
     blob_client = _blob_service_client.get_blob_client(
         container=container, blob=blob_name
     )
@@ -423,9 +425,10 @@ def get_cv_pdf(
         ) from e
 
     filename = cv.name or "cv.pdf"
+    encoded_filename = quote(filename, safe="")
     logger.info("cv_pdf_fetch_done", user_id=user_id, cv_id=str(cv_id))
     return Response(
         content=data,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"},
     )

@@ -26,10 +26,12 @@ export default function CVCard({ cv }: CVCardProps) {
     if (!cv.has_thumbnail) return;
 
     let objectUrl: string | null = null;
+    let cancelled = false;
 
     apiClient
       .get<Blob>(`/cv/${cv.id}/thumbnail`, { responseType: "blob" })
       .then((res) => {
+        if (cancelled) return;
         objectUrl = URL.createObjectURL(res.data);
         setThumbnailSrc(objectUrl);
       })
@@ -38,6 +40,7 @@ export default function CVCard({ cv }: CVCardProps) {
       });
 
     return () => {
+      cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [cv.id, cv.has_thumbnail]);
