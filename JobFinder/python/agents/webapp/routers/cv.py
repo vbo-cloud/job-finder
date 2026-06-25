@@ -56,15 +56,18 @@ def _generate_cv_thumbnail(contents: bytes) -> bytes | None:
         JPEG image bytes, or None if rendering failed.
     """
     try:
-        pdf = pdfium.PdfDocument(io.BytesIO(contents))
-        page = pdf[0]
-        bitmap = page.render(scale=THUMBNAIL_SCALE)
-        image = bitmap.to_pil()
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        buf = io.BytesIO()
-        image.save(buf, format="JPEG", quality=85)
-        return buf.getvalue()
+        pdf = pdfium.PdfDocument(contents)
+        try:
+            page = pdf[0]
+            bitmap = page.render(scale=THUMBNAIL_SCALE)
+            image = bitmap.to_pil()
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+        finally:
+            pdf.close()
     except pdfium.PdfiumError:
         logger.error("cv_thumbnail_generation_failed", exc_info=True)
         return None

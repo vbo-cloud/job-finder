@@ -52,15 +52,18 @@ def _generate_thumbnail(pdf_bytes: bytes) -> bytes:
     Raises:
         pdfium.PdfiumError: If the PDF cannot be rendered.
     """
-    pdf = pdfium.PdfDocument(io.BytesIO(pdf_bytes))
-    page = pdf[0]
-    bitmap = page.render(scale=THUMBNAIL_SCALE)
-    image = bitmap.to_pil()
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=85)
-    return buf.getvalue()
+    pdf = pdfium.PdfDocument(pdf_bytes)
+    try:
+        page = pdf[0]
+        bitmap = page.render(scale=THUMBNAIL_SCALE)
+        image = bitmap.to_pil()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    finally:
+        pdf.close()
 
 
 def _blob_name_from_url(blob_url: str) -> str:

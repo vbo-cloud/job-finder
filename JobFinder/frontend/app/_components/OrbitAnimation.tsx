@@ -7,7 +7,7 @@ type AnimState = "idle" | "uploaded" | "done";
 interface Props {
   state:             AnimState;
   thumbnailUrl?:     string | null;
-  onThumbnailReady?: (dataUrl: string | null) => void;
+  onThumbnailReady?: () => void;
   onDoneComplete?:   () => void;
   mousePosRef:       React.MutableRefObject<{ x: number; y: number } | null>;
   clickFlashRef:     React.MutableRefObject<number>;
@@ -64,10 +64,10 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         await page.render({ canvasContext: ctx, viewport }).promise;
         if (!cancelled) {
           thumbRef.current = canvas;
-          onThumbnailReadyRef.current?.(canvas.toDataURL("image/jpeg", 0.85));
+          onThumbnailReadyRef.current?.();
         }
       } catch {
-        if (!cancelled) onThumbnailReadyRef.current?.(null);
+        if (!cancelled) onThumbnailReadyRef.current?.();
       }
     }
     void renderPdf();

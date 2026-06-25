@@ -53,7 +53,7 @@ export default function UploadSection({ onUploadComplete }: Props) {
     [isAuthenticated, instance, onUploadComplete],
   );
 
-  const handleThumbnailReady = useCallback((_dataUrl: string | null) => {
+  const handleThumbnailReady = useCallback(() => {
     // pdfjs has finished reading the objectUrl — safe to revoke now
     if (pendingRevokeRef.current) {
       URL.revokeObjectURL(pendingRevokeRef.current);
