@@ -40,6 +40,8 @@ AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
 if not AZURE_STORAGE_ACCOUNT_URL:
     raise ValueError("AZURE_STORAGE_ACCOUNT_URL environment variable is not set")
 
+# Module-level singleton — connection pool is intentionally shared across requests
+# and never explicitly closed (correct for a long-lived server process).
 _blob_service_client = BlobServiceClient(
     account_url=AZURE_STORAGE_ACCOUNT_URL,
     credential=DefaultAzureCredential(),
@@ -148,6 +150,8 @@ def _download_blob(blob_url: str, container: str) -> bytes:
     Raises:
         AzureError: If the download fails for any storage-level reason.
     """
+    # Expected format: https://<account>.blob.core.windows.net/<container>/<blob_path>
+    # path.parts = ('/', '<container>', '<blob_path_segment>', ...)
     parts = PurePosixPath(urlparse(blob_url).path).parts
     blob_name = str(PurePosixPath(*parts[2:]))  # drop leading '/' and container
     blob_client = _blob_service_client.get_blob_client(

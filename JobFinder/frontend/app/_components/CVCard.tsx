@@ -35,8 +35,9 @@ export default function CVCard({ cv }: CVCardProps) {
         objectUrl = URL.createObjectURL(res.data);
         setThumbnailSrc(objectUrl);
       })
-      .catch(() => {
-        // Thumbnail unavailable — render without image.
+      .catch((error: unknown) => {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        if (status !== 404) console.error("cv thumbnail fetch failed", error);
       });
 
     return () => {
