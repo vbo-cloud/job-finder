@@ -36,7 +36,7 @@ export function LoginButton() {
         <button
           type="button"
           onClick={handleLogout}
-          className="rounded bg-gray-800 px-4 py-2 text-white hover:bg-gray-700"
+          className="rounded bg-gray-800 px-4 py-2 text-white hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           Se déconnecter
         </button>
@@ -50,7 +50,7 @@ export function LoginButton() {
       <button
         type="button"
         onClick={handleLogin}
-        className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
+        className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
       >
         Se connecter
       </button>
