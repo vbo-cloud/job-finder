@@ -16,16 +16,19 @@ interface Props {
 }
 
 export default function LibrarySection({ refreshTrigger = 0 }: Props) {
-  const isAuthenticated          = useIsAuthenticated();
-  const [cvs, setCvs]            = useState<CVData[]>([]);
-  const [loading, setLoading]    = useState(true);
+  const isAuthenticated           = useIsAuthenticated();
+  const [cvs, setCvs]             = useState<CVData[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(false);
 
   const fetchCvs = useCallback(async (): Promise<void> => {
+    setError(false);
     try {
       const { data } = await apiClient.get<CVData[]>("/cv/");
       setCvs(data);
-    } catch {
-      // Silent — previous state stays displayed
+    } catch (err) {
+      console.error("[LibrarySection] fetch failed", err);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -61,7 +64,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
         <p className="text-xs text-white/20">Chargement…</p>
       )}
 
-      {!loading && cvs.length === 0 && (
+      {!loading && cvs.length === 0 && !error && (
         <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
       )}
 
@@ -71,6 +74,10 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
             <CVCard key={cv.id} cv={cv} />
           ))}
         </div>
+      )}
+
+      {error && (
+        <p className="mt-4 text-xs text-red-400/50">Impossible de charger les CVs.</p>
       )}
     </section>
   );

@@ -19,12 +19,16 @@ export default function CVCard({ cv }: CVCardProps) {
 
   return (
     <div className="flex w-44 flex-shrink-0 flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4">
-      <div className={cn(
-        "flex aspect-[3/4] w-full items-center justify-center rounded-lg",
-        isPending && "bg-white/[0.05]",
-        !isPending && !isError && "bg-white/[0.08]",
-        isError && "bg-red-500/[0.08]",
-      )}>
+      <div
+        role={isPending ? "status" : undefined}
+        aria-label={isPending ? "Analyse en cours" : undefined}
+        className={cn(
+          "flex aspect-[3/4] w-full items-center justify-center rounded-lg",
+          isPending && "bg-white/[0.05]",
+          !isPending && !isError && "bg-white/[0.08]",
+          isError && "bg-red-500/[0.08]",
+        )}
+      >
         {isPending && (
           <svg className="h-5 w-5 animate-spin text-white/35" fill="none" viewBox="0 0 24 24" aria-hidden="true">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />

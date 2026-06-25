@@ -2,8 +2,11 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+CVStatus = Literal["pending", "processing", "done", "error"]
 
 
 class ProfileUpdate(BaseModel):
@@ -74,7 +77,7 @@ class CVListItemOut(BaseModel):
 
     id: uuid.UUID
     name: str | None
-    status: str
+    status: CVStatus
     uploaded_at: datetime
     match_count: int
 

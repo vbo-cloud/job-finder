@@ -237,6 +237,8 @@ def main() -> None:
         rome_codes = _extract_rome_codes(raw_text)
         _update_rome_codes(user_id, rome_codes)
     except Exception:
+        # Catch-all: any failure in extraction or ROME update must mark the CV
+        # as errored before re-raising, regardless of which step failed.
         _set_cv_status(cv_id, "error")
         raise
 
