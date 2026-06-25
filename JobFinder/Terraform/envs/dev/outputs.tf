@@ -12,3 +12,8 @@ output "webapp_url" {
   description = "Public URL of the FastAPI webapp Container App."
   value       = module.webapp.fqdn
 }
+
+output "jumpbox_private_ip" {
+  description = "Private IP of the jumpbox VM (connect via Azure Bastion)."
+  value       = module.jumpbox.private_ip
+}

@@ -65,3 +65,4 @@ variable "openai_capacity_tpm" {
     error_message = "openai_capacity_tpm must be greater than 0."
   }
 }
+
