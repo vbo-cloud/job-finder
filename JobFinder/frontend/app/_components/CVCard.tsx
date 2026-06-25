@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { apiClient } from "@/lib/api/client";
+import apiClient from "@/lib/api/client";
 import type { CVData } from "@/lib/api/types";
 
 interface CVCardProps {
