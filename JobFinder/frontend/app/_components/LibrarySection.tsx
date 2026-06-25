@@ -1,0 +1,66 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+
+import apiClient from "@/lib/api/client";
+import type { CVData } from "@/lib/api/types";
+
+import CVCard from "./CVCard";
+
+const POLL_INTERVAL_MS = 3000;
+
+export default function LibrarySection() {
+  const [cvs, setCvs]       = useState<CVData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchCvs = useCallback(async (): Promise<void> => {
+    try {
+      const { data } = await apiClient.get<CVData[]>("/cv/");
+      setCvs(data);
+    } catch {
+      // Silent — previous state stays displayed
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchCvs();
+  }, [fetchCvs]);
+
+  // Poll only while at least one CV is still being analysed
+  useEffect(() => {
+    const hasPending = cvs.some(
+      (cv) => cv.status === "pending" || cv.status === "processing",
+    );
+    if (!hasPending) return;
+
+    const id = setInterval(() => void fetchCvs(), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [cvs, fetchCvs]);
+
+  return (
+    <section
+      id="library"
+      className="h-dvh snap-start bg-[#0a0a0f] px-6 py-8"
+    >
+      <p className="mb-6 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
+
+      {loading && (
+        <p className="text-xs text-white/20">Chargement…</p>
+      )}
+
+      {!loading && cvs.length === 0 && (
+        <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
+      )}
+
+      {cvs.length > 0 && (
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {cvs.map((cv) => (
+            <CVCard key={cv.id} cv={cv} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
