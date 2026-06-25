@@ -2432,3 +2432,87 @@ Suivi du statut d'analyse de bout en bout (backend → agent → frontend) et pa
 - Polling côté frontend (3 s) plutôt que WebSocket : cohérent avec l'architecture Container App Jobs existante, implémentation simple, charge minimale.
 - `LibrarySection` owns its data — `onReadyForLibrary` prop supprimée de `HomeClient`, pas de prop drilling.
 - `h-dvh snap-start` sur `LibrarySection` : maintient le scroll-snap avec la section upload.
+
+---
+
+## PR #102 — feat: add management subnet to lz_dev for jumpbox VM
+
+**Date :** 2026-06-25
+**Branche :** `feature/lz-mgmt-subnet` → `dev`
+
+### Ce qui a été fait
+
+Ajout d'un subnet de management (`snet-jf-lz-dev-frc-mgmt`, `10.0.2.0/27`) dans le VNet de la landing zone dev, et exposition de son ID en output `subnet_mgmt_id`.
+
+### Contexte
+
+Prérequis au déploiement d'une VM jumpbox pour accéder à PostgreSQL en VNet privé. Le subnet de management est séparé des autres subnets (app, cae, postgresql) pour isoler les ressources d'administration.
+
+### Décisions techniques
+
+- `/27` (32 IPs) : largement suffisant pour une seule VM de management, avec de la marge pour d'éventuels futurs outils d'administration.
+- Aucune délégation sur ce subnet : contrairement à CAE et PostgreSQL, les VMs Azure standard n'en nécessitent pas.
+- PR séparée de la VM elle-même (PR B) : le subnet est une ressource `lz_*` (plateforme) — mélanger `lz_dev` et `dev` dans un même PR viole les règles Git du projet.
+
+---
+
+## PR #99 — fix: gate onThumbnailReady behind !cancelled to prevent double animation
+
+**Date :** 2026-06-25
+**Branche :** `fix/double-animation-strict-mode` → `dev`
+
+### Ce qui a été fait
+
+Correction dans `OrbitAnimation.tsx` : le callback `onThumbnailReadyRef.current?.()` est désormais conditionnel à `!cancelled`, aussi bien dans le chemin succès que dans le chemin `catch`.
+
+### Contexte
+
+React StrictMode monte, démonte et remonte les composants en développement. L'`useEffect` pdfjs s'exécutait donc deux fois :
+- Premier passage : le cleanup posait `cancelled = true` → `onThumbnailReady(null)` → `setAnimState('done')` → animation slide.
+- Second passage : pdfjs rendait le PDF avec succès → `onThumbnailReady(dataUrl)` → `setAnimState('done')` → animation se rejouait.
+
+### Décision technique
+
+Déplacer `onThumbnailReadyRef.current?.()` à l'intérieur du bloc `if (!cancelled)`. Solution minimale — aucun autre changement.
+
+---
+
+## PR #101 — fix: use receive_message as context manager in cv-analysis
+
+**Date :** 2026-06-25
+**Branche :** `fix/cv-analysis-receive-message` → `dev`
+
+### Ce qui a été fait
+
+Correction dans `JobFinder/python/agents/cv_analysis/main.py` : `receive_message` est désormais appelé comme context manager (`with receive_message(...) as payload:`). Le cas file d'attente vide est traité par `except RuntimeError`.
+
+### Contexte
+
+`receive_message` est un `@contextmanager` qui yield le payload décodé et appelle `complete_message` / `abandon_message` à la sortie. L'agent l'appelait comme une fonction ordinaire — `msg` recevait un objet `_GeneratorContextManager`, et `msg.body` levait `AttributeError`, crashant toutes les exécutions.
+
+### Décision technique
+
+`with receive_message(...) as payload:` — le generator ne yield pas quand la file est vide, ce qui lève `RuntimeError` : attrapée explicitement pour logger `cv_analysis_no_message` et sortir proprement.
+
+---
+
+## PR #100 — fix: always INSERT on CV upload + thumbnail + memory cleanup
+
+**Date :** 2026-06-25
+**Branche :** `fix/cv-upload-always-insert` → `dev`
+
+### Ce qui a été fait
+
+**Backend (`routers/cv.py`) :**
+- Remplacement de la logique select-then-upsert par un simple `INSERT`. Chaque upload crée une nouvelle ligne CV distincte, visible comme une carte séparée dans la bibliothèque.
+
+**Frontend — thumbnail grisé :**
+- `CVCard.tsx` : accepte un prop optionnel `thumbnail` — quand le CV est en cours d'analyse et qu'un thumbnail est disponible, affiche l'image pdfjs en `grayscale opacity-50` avec un overlay `bg-black/40` derrière le spinner.
+- `LibrarySection.tsx` : accepte `pendingThumbnail` et `onClearThumbnail`. Injecte le thumbnail uniquement dans la première carte (CV le plus récent). Appelle `onClearThumbnail` quand aucun CV n'est plus en cours d'analyse.
+- `HomeClient.tsx` : capture le `dataUrl` retourné par `onReadyForLibrary`, le passe à `LibrarySection` via `pendingThumbnail`.
+- `UploadSection.tsx` : simplification de la signature `onReadyForLibrary` — suppression du paramètre `filename` devenu inutile.
+
+### Décisions techniques
+
+- Abandon du select-then-upsert : le commentaire dans le code indiquait explicitement que le modèle supporte plusieurs CVs par utilisateur — le comportement upsert contredisait ce design.
+- `onClearThumbnail` : libère le data-URL de la mémoire React dès que l'analyse est terminée — évite de conserver un blob encodé en base64 indéfiniment.
