@@ -1,8 +1,12 @@
 """Pydantic request and response schemas for the webapp API."""
 
 import uuid
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+CVStatus = Literal["pending", "processing", "done", "error"]
 
 
 class ProfileUpdate(BaseModel):
@@ -66,3 +70,15 @@ class MatchesOut(BaseModel):
 
     rome_codes: list[str]
     matches: list[MatchOut]
+
+
+class CVListItemOut(BaseModel):
+    """One CV entry in the user's library."""
+
+    id: uuid.UUID
+    name: str | None
+    status: CVStatus
+    uploaded_at: datetime
+    match_count: int
+
+    model_config = ConfigDict(from_attributes=True)

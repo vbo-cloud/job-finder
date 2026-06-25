@@ -2396,3 +2396,39 @@ Ajout du role assignment `Storage Blob Data Contributor` sur `rg_data` pour la U
 ### Décision technique
 
 Scope à `rg_data` (resource group) plutôt qu'au storage account ou container : cohérent avec le pattern existant (`sp-jf-github` a déjà `Storage Blob Data Contributor` sur `rg_data`). Un seul storage account existe dans ce RG en dev.
+
+---
+
+## PR #98 — feat: library section with CV status tracking
+
+**Date :** 2026-06-25
+**Branche :** `feature/library` → `dev`
+
+### Ce qui a été fait
+
+Suivi du statut d'analyse de bout en bout (backend → agent → frontend) et page bibliothèque réelle.
+
+**Backend — modèle et migration :**
+- `shared/models.py` : deux nouveaux champs sur `CV` — `name` (String, nullable) et `status` (String, non-null, default `"pending"`).
+- Migration `005` : `ADD COLUMN name`, `ADD COLUMN status` avec `server_default='pending'` pour les lignes existantes.
+
+**Backend — endpoints :**
+- `POST /cv/upload` : stocke `file.filename` dans `CV.name` et réinitialise `status='pending'` à chaque upload.
+- `GET /cv/` : nouveau endpoint — liste tous les CVs de l'utilisateur authentifié avec le nombre de matches (LEFT JOIN subquery), ordonnés par `uploaded_at` desc.
+- `schemas.py` : ajout de `CVListItemOut`.
+
+**Agent cv-analysis :**
+- Nouvelle fonction `_set_cv_status(cv_id, status)` (update SQL, catch `SQLAlchemyError`).
+- `main()` : `"processing"` à la réception, `"error"` en cas d'exception, `"done"` avant l'envoi du message `offer-ready`.
+
+**Frontend :**
+- `lib/api/types.ts` : `CVStatus` (union type) + `CVData` interface.
+- `CVCard.tsx` : carte CV avec trois états visuels (pending/processing → spinner, done → match count, error → badge rouge).
+- `LibrarySection.tsx` : fetche `GET /cv/` au mount, poll toutes les 3 s si des CVs sont en cours. `fetchCvs` stabilisé avec `useCallback`, `clearInterval` dans le return du `useEffect`.
+- `HomeClient.tsx` : simplifié — remplace le placeholder inline par `<LibrarySection />` qui gère ses propres données.
+
+### Décisions techniques
+
+- Polling côté frontend (3 s) plutôt que WebSocket : cohérent avec l'architecture Container App Jobs existante, implémentation simple, charge minimale.
+- `LibrarySection` owns its data — `onReadyForLibrary` prop supprimée de `HomeClient`, pas de prop drilling.
+- `h-dvh snap-start` sur `LibrarySection` : maintient le scroll-snap avec la section upload.
