@@ -19,9 +19,9 @@ variable "subnet_id" {
 }
 
 variable "vm_size" {
-  description = "Azure VM SKU. Defaults to Standard_B2s (2 vCPU, 4 GB RAM) — Standard_B1ms is unavailable in France Central."
+  description = "Azure VM SKU. Defaults to Standard_D2s_v3 (2 vCPU, 8 GB RAM)."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2s_v3"
 }
 
 variable "admin_username" {
