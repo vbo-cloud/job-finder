@@ -1,23 +1,10 @@
-"use client";
+import dynamic from "next/dynamic";
 
-import { useIsAuthenticated } from "@azure/msal-react";
-import Link from "next/link";
+const HomeClient = dynamic(
+  () => import("./_components/HomeClient"),
+  { ssr: false, loading: () => <div className="h-screen bg-[#0a0a0f]" /> },
+);
 
-import { LoginButton } from "@/components/LoginButton";
-
-export default function Home() {
-  const isAuthenticated = useIsAuthenticated();
-
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8 p-8">
-      <h1 className="text-3xl font-bold">job-finder</h1>
-      <p className="text-gray-600">Walking skeleton — authentification Entra External ID</p>
-      <LoginButton />
-      {isAuthenticated && (
-        <Link href="/profile" className="text-sm text-blue-600 hover:underline">
-          Mon profil →
-        </Link>
-      )}
-    </main>
-  );
+export default function HomePage() {
+  return <HomeClient />;
 }

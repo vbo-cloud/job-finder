@@ -2350,6 +2350,35 @@ Implémentation de la page profil (`app/profile/page.tsx`) et mise à jour de la
 
 ---
 
+## PR #96 — feat(frontend): upload page with 2D canvas orbit animation
+
+**Date :** 2026-06-25
+**Branche :** `feature/m4-upload-page` → `dev`
+
+### Ce qui a été fait
+
+Remplacement du walking skeleton (`app/page.tsx`) par la page d'upload CV finale.
+
+**Composants créés :**
+- `app/_components/OrbitAnimation.tsx` : canvas 2D plein écran. 220 particules ambiantes (mouvement brownien), 60 particules orbitales (ellipses indépendantes avec simulation de profondeur). Machine à états `idle | uploaded | done` : convergence des orbites vers le centre sur `uploaded`, glissement du document avec bump-up + chute accélérée sur `done`. Thumbnail PDF rendu via pdfjs-dist v3 (`OffscreenCanvas` → data URL) à la sélection du fichier. Particules avec `birthDelay` aléatoire (1–2 s, ease-out quadratique). Hover/click interactif (glow, scale, ripple) via refs partagées — aucun re-render.
+- `app/_components/UploadSection.tsx` : drag-and-drop + clic restreint à la zone icône. Upload HTTP fire-and-forget ; animation découplée du réseau (déclenchée par `onThumbnailReady`). `onDoneComplete` auto-reset vers `idle` après l'animation. AuthButton en haut à droite.
+- `app/_components/HomeClient.tsx` : wrapper client partagé UploadSection + bibliothèque. Scroll-snap mandatory `h-dvh` entre les deux sections.
+- `app/_components/AuthButton.tsx` : bouton "Se connecter" (non authentifié) ou pill prénom + initiales avec dropdown profil / déconnexion (lucide-react, fermeture au clic extérieur).
+- `app/page.tsx` : Server Component, `dynamic(ssr:false)` sur `HomeClient`.
+- `public/logos/france-travail.svg` + `public/pdf.worker.min.js` : texture FT et worker pdfjs.
+
+### Décisions techniques
+
+- **Canvas 2D** (pas Three.js) : plus léger, SSR-safe sans `ssr: false` sur le canvas, meilleur contrôle fin des animations 2D type "particules orbitales".
+- **State machine `idle | uploaded | done`** : `uploaded` apparaît immédiatement à la sélection du fichier (thumbnail visible) ; `done` déclenché par la fin du rendu PDF.js (pas par le réseau) — zéro indicateur de chargement sur la page d'accueil.
+- **pdfjs-dist v3** : v4/v6 échouent silencieusement dans Next.js (worker ESM). v3 utilise un worker `.js` classique servi depuis `/public`.
+- **Click restreint à ±28×34px autour du centre** : le div overlay couvre tout l'écran pour le drag-and-drop, mais le click ne s'active qu'au-dessus de l'icône (vérification des coordonnées dans le handler).
+- **Scroll-snap mandatory** : `<main>` avec `h-dvh snap-y snap-mandatory` — une section = un "snap point", transition instantanée entre accueil et bibliothèque.
+- **Bibliothèque** : miniature PDF grisée visible immédiatement après l'animation (data URL issu de pdfjs + `grayscale` CSS), spinner superposé pendant l'analyse backend.
+- **`/library` route** : non encore implémentée (backlog M4-PR5) — la bibliothèque est une section dans la même page via scroll-snap.
+
+---
+
 ## PR #97 — fix(lz_dev): add Storage Blob Data Contributor role for UAMI caj
 
 **Date :** 2026-06-25
