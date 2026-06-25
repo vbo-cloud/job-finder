@@ -2603,3 +2603,28 @@ Capacity Restrictions.
 ### Correctif
 
 Remplacement du default `vm_size` dans `modules/jumpbox/variables.tf` : `Standard_B1ms` → `Standard_B2s` (2 vCPU, 4 GB RAM). `Standard_B2s` est disponible en France Central et reste dans la gamme économique pour un jumpbox de dev.
+
+---
+
+## PR #108 — feat(cv): proxy endpoints for CV thumbnail and PDF
+
+**Date :** 2026-06-26
+**Branche :** `feature/cv-thumbnail-proxy` → `dev`
+
+### Ce qui a été fait
+
+Les blobs Azure sont dans un conteneur privé — le navigateur ne peut pas les atteindre directement (erreur 409). `next/image` ne résout pas le problème car le serveur Next.js n'a pas non plus les credentials.
+
+**Backend :**
+- `schemas.py` : remplacement de `thumbnail_url: str | None` par `has_thumbnail: bool` dans `CVListItemOut` — les URLs brutes Azure ne sont plus exposées au frontend.
+- `cv.py` : ajout du helper `_download_blob`, deux nouveaux endpoints proxy (`GET /cv/{cv_id}/thumbnail` → JPEG, `GET /cv/{cv_id}/pdf` → PDF), tous deux protégés par JWT et requêtant le blob via `BlobServiceClient` (DefaultAzureCredential / managed identity). Mise à jour de `list_cvs` pour calculer `has_thumbnail=cv.thumbnail_url is not None`.
+
+**Frontend :**
+- `lib/api/types.ts` : `thumbnail_url: string | null` → `has_thumbnail: boolean` dans `CVData`.
+- `CVCard.tsx` : réécriture complète — `useEffect` fetche `GET /cv/{id}/thumbnail` via `apiClient` (responseType blob), crée un object URL local, révoque au démontage. `<img>` brut à la place de `next/image` (incompatible avec les `blob:` URLs).
+
+### Décisions techniques
+
+- **`has_thumbnail` au lieu d'une URL** : ne jamais exposer au frontend une URL Azure privée qu'il ne peut pas utiliser — le booléen suffit pour piloter le fetch conditionnel.
+- **Object URL** : `URL.createObjectURL` sur la réponse blob est la seule façon d'afficher un blob protégé dans un `<img>` — révocation au démontage pour éviter les fuites mémoire.
+- **`<img>` brut avec `eslint-disable`** : `next/image` ne supporte pas le schéma `blob:` — l'exception est documentée et intentionnelle.
