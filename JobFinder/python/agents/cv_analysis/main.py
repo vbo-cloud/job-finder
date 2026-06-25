@@ -220,47 +220,49 @@ def main() -> None:
         logger.error("migrations_failed", exc_info=True)
         raise
 
-    msg = receive_message(CV_ANALYSIS_QUEUE)
-    if msg is None:
+    # receive_message is a @contextmanager that yields the decoded payload dict
+    # and handles complete/abandon on exit. RuntimeError means no messages available.
+    try:
+        with receive_message(CV_ANALYSIS_QUEUE) as payload:
+            cv_id = payload["cv_id"]
+
+            logger.info("cv_analysis_started", cv_id=cv_id)
+
+            _set_cv_status(cv_id, "processing")
+
+            try:
+                raw_text, user_id = _get_cv_text(cv_id)
+                rome_codes = _extract_rome_codes(raw_text)
+                _update_rome_codes(user_id, rome_codes)
+            except Exception:
+                # Catch-all: any failure in extraction or ROME update must mark the CV
+                # as errored before re-raising, regardless of which step failed.
+                _set_cv_status(cv_id, "error")
+                raise
+
+            _set_cv_status(cv_id, "done")
+
+            try:
+                send_message(
+                    OFFER_READY_QUEUE,
+                    {
+                        "run_date": datetime.now(timezone.utc).date().isoformat(),
+                        "rome_codes": rome_codes,
+                        "new_offers_count": 0,
+                        "embedded_count": 0,
+                        "trigger": "cv_analysis",
+                    },
+                )
+                logger.info("cv_analysis_offer_ready_sent", cv_id=cv_id, user_id=user_id)
+            except ServiceBusError:
+                logger.error("cv_analysis_offer_ready_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
+                raise
+
+            logger.info("cv_analysis_completed", cv_id=cv_id, user_id=user_id, rome_codes=rome_codes)
+
+    except RuntimeError:
+        # receive_message returns without yielding when the queue is empty.
         logger.info("cv_analysis_no_message")
-        return
-
-    payload = json.loads(b"".join(msg.body))
-    cv_id = payload["cv_id"]
-
-    logger.info("cv_analysis_started", cv_id=cv_id)
-
-    _set_cv_status(cv_id, "processing")
-
-    try:
-        raw_text, user_id = _get_cv_text(cv_id)
-        rome_codes = _extract_rome_codes(raw_text)
-        _update_rome_codes(user_id, rome_codes)
-    except Exception:
-        # Catch-all: any failure in extraction or ROME update must mark the CV
-        # as errored before re-raising, regardless of which step failed.
-        _set_cv_status(cv_id, "error")
-        raise
-
-    _set_cv_status(cv_id, "done")
-
-    try:
-        send_message(
-            OFFER_READY_QUEUE,
-            {
-                "run_date": datetime.now(timezone.utc).date().isoformat(),
-                "rome_codes": rome_codes,
-                "new_offers_count": 0,
-                "embedded_count": 0,
-                "trigger": "cv_analysis",
-            },
-        )
-        logger.info("cv_analysis_offer_ready_sent", cv_id=cv_id, user_id=user_id)
-    except ServiceBusError:
-        logger.error("cv_analysis_offer_ready_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
-        raise
-
-    logger.info("cv_analysis_completed", cv_id=cv_id, user_id=user_id, rome_codes=rome_codes)
 
 
 if __name__ == "__main__":
