@@ -15,15 +15,14 @@ type AnimState = "idle" | "uploaded" | "done";
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 interface Props {
-  onReadyForLibrary?: (dataUrl?: string | null) => void;
+  onUploadComplete?: () => void;
 }
 
-export default function UploadSection({ onReadyForLibrary }: Props) {
+export default function UploadSection({ onUploadComplete }: Props) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const fileInputRef                    = useRef<HTMLInputElement>(null);
-  const pendingFilenameRef              = useRef<string>("");
   const pendingRevokeRef                = useRef<string | null>(null);
   const { instance }                    = useMsal();
   const isAuthenticated                 = useIsAuthenticated();
@@ -38,7 +37,6 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
         void instance.loginRedirect(loginRequest);
         return;
       }
-      pendingFilenameRef.current = file.name;
       const objectUrl = URL.createObjectURL(file);
       pendingRevokeRef.current = objectUrl; // revoked in handleThumbnailReady after pdfjs reads it
       setThumbnailUrl(objectUrl);
@@ -49,20 +47,20 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
       // No .finally() revoke here: pdfjs must read the URL first (race condition fix).
       apiClient
         .post<void>("/cv/upload", formData)
+        .then(() => { onUploadComplete?.(); })
         .catch(() => { /* silent — library card shows regardless */ });
     },
-    [isAuthenticated, instance],
+    [isAuthenticated, instance, onUploadComplete],
   );
 
-  const handleThumbnailReady = useCallback((dataUrl: string | null) => {
+  const handleThumbnailReady = useCallback(() => {
     // pdfjs has finished reading the objectUrl — safe to revoke now
     if (pendingRevokeRef.current) {
       URL.revokeObjectURL(pendingRevokeRef.current);
       pendingRevokeRef.current = null;
     }
     setAnimState("done");
-    onReadyForLibrary?.(dataUrl);
-  }, [onReadyForLibrary]);
+  }, []);
 
   const handleDoneComplete = useCallback(() => {
     setAnimState("idle");

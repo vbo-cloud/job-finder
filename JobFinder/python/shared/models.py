@@ -49,6 +49,7 @@ class CV(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     blob_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

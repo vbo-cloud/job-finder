@@ -80,5 +80,6 @@ class CVListItemOut(BaseModel):
     status: CVStatus
     uploaded_at: datetime
     match_count: int
+    thumbnail_url: str | None
 
     model_config = ConfigDict(from_attributes=True)

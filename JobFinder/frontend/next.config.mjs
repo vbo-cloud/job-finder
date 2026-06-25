@@ -3,7 +3,12 @@ const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
   images: {
-    remotePatterns: [], // à compléter lors du déploiement
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "*.blob.core.windows.net",
+      },
+    ],
   },
   webpack: (config) => {
     // pdfjs-dist v3 references the 'canvas' npm package for Node.js environments.

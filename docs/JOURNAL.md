@@ -2192,6 +2192,31 @@ Après investigation du `server_error` AADSTS40015 (erreur Entra ↔ Google IDP,
 
 ---
 
+## PR #90 — fix(webapp): add python-multipart to webapp requirements
+
+**Date :** 2026-06-24
+**Branche :** `fix/webapp-python-multipart` → `dev`
+
+### Ce qui s'est passé
+
+Crash-loop confirmé sur `app-jf-dev-frc` après le merge de PR #89 :
+
+```
+RuntimeError: Form data requires "python-multipart" to be installed.
+```
+
+FastAPI exige `python-multipart` pour parser les corps `multipart/form-data` (`UploadFile` dans `POST /cv/upload`). La dépendance manquait dans `agents/webapp/requirements.txt` → crash à l'import, uvicorn ne démarre pas (exit code 1).
+
+### Correctif
+
+Ajout de `python-multipart` dans `agents/webapp/requirements.txt`. Le rebuild de l'image via `buildAgents.yml` et le redéploiement via `az containerapp update` restaurent le démarrage normal d'uvicorn.
+
+### Audit
+
+`alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement, causant deux crash-loops consécutifs. Pattern identifié : sans lockfile, les dépendances implicites de FastAPI ne sont pas visibles et doivent être découvertes par un crash en prod. Item backlog « pip-compile / lock des dépendances webapp » renforcé en `[urgent]` avec description complète de la solution (`requirements.in` + `pip-compile`).
+
+---
+
 ## PR #91 — fix(webapp): copy migrations/ into webapp Docker image
 
 **Date :** 2026-06-24
@@ -2218,31 +2243,6 @@ COPY migrations/ ./migrations/
 ### Audit — 3 manques successifs
 
 `alembic` (requirements.txt, PR #88) → `python-multipart` (requirements.txt, PR #90) → `migrations/` (Dockerfile, PR #91) : le build webapp n'avait jamais été validé par un vrai démarrage. Item backlog renforcé avec deux solutions complémentaires : `pip-compile` pour les dépendances, smoke-test d'import dans `buildAgents.yml` pour détecter les erreurs avant le push vers ACR.
-
----
-
-## PR #90 — fix(webapp): add python-multipart to webapp requirements
-
-**Date :** 2026-06-24
-**Branche :** `fix/webapp-python-multipart` → `dev`
-
-### Ce qui s'est passé
-
-Crash-loop confirmé sur `app-jf-dev-frc` après le merge de PR #89 :
-
-```
-RuntimeError: Form data requires "python-multipart" to be installed.
-```
-
-FastAPI exige `python-multipart` pour parser les corps `multipart/form-data` (`UploadFile` dans `POST /cv/upload`). La dépendance manquait dans `agents/webapp/requirements.txt` → crash à l'import, uvicorn ne démarre pas (exit code 1).
-
-### Correctif
-
-Ajout de `python-multipart` dans `agents/webapp/requirements.txt`. Le rebuild de l'image via `buildAgents.yml` et le redéploiement via `az containerapp update` restaurent le démarrage normal d'uvicorn.
-
-### Audit
-
-`alembic` (PR #88) puis `python-multipart` (PR #90) ont manqué successivement, causant deux crash-loops consécutifs. Pattern identifié : sans lockfile, les dépendances implicites de FastAPI ne sont pas visibles et doivent être découvertes par un crash en prod. Item backlog « pip-compile / lock des dépendances webapp » renforcé en `[urgent]` avec description complète de la solution (`requirements.in` + `pip-compile`).
 
 ---
 
@@ -2435,27 +2435,6 @@ Suivi du statut d'analyse de bout en bout (backend → agent → frontend) et pa
 
 ---
 
-## PR #102 — feat: add management subnet to lz_dev for jumpbox VM
-
-**Date :** 2026-06-25
-**Branche :** `feature/lz-mgmt-subnet` → `dev`
-
-### Ce qui a été fait
-
-Ajout d'un subnet de management (`snet-jf-lz-dev-frc-mgmt`, `10.0.2.0/27`) dans le VNet de la landing zone dev, et exposition de son ID en output `subnet_mgmt_id`.
-
-### Contexte
-
-Prérequis au déploiement d'une VM jumpbox pour accéder à PostgreSQL en VNet privé. Le subnet de management est séparé des autres subnets (app, cae, postgresql) pour isoler les ressources d'administration.
-
-### Décisions techniques
-
-- `/27` (32 IPs) : largement suffisant pour une seule VM de management, avec de la marge pour d'éventuels futurs outils d'administration.
-- Aucune délégation sur ce subnet : contrairement à CAE et PostgreSQL, les VMs Azure standard n'en nécessitent pas.
-- PR séparée de la VM elle-même (PR B) : le subnet est une ressource `lz_*` (plateforme) — mélanger `lz_dev` et `dev` dans un même PR viole les règles Git du projet.
-
----
-
 ## PR #99 — fix: gate onThumbnailReady behind !cancelled to prevent double animation
 
 **Date :** 2026-06-25
@@ -2474,6 +2453,22 @@ React StrictMode monte, démonte et remonte les composants en développement. L'
 ### Décision technique
 
 Déplacer `onThumbnailReadyRef.current?.()` à l'intérieur du bloc `if (!cancelled)`. Solution minimale — aucun autre changement.
+
+---
+
+## PR #100 — fix(webapp): always INSERT on CV upload — support multiple CVs per user
+
+**Date :** 2026-06-25
+**Branche :** `fix/cv-upload-always-insert` → `dev`
+
+### Ce qui a été fait
+
+**Backend (`routers/cv.py`) :**
+- Remplacement de la logique select-then-upsert par un simple `INSERT`. Chaque upload crée une nouvelle ligne CV distincte, visible comme une carte séparée dans la bibliothèque.
+
+### Décisions techniques
+
+- Abandon du select-then-upsert : le commentaire dans le code indiquait explicitement que le modèle supporte plusieurs CVs par utilisateur — le comportement upsert contredisait ce design.
 
 ---
 
@@ -2496,26 +2491,24 @@ Correction dans `JobFinder/python/agents/cv_analysis/main.py` : `receive_message
 
 ---
 
-## PR #100 — fix: always INSERT on CV upload + thumbnail + memory cleanup
+## PR #102 — feat: add management subnet to lz_dev for jumpbox VM
 
 **Date :** 2026-06-25
-**Branche :** `fix/cv-upload-always-insert` → `dev`
+**Branche :** `feature/lz-mgmt-subnet` → `dev`
 
 ### Ce qui a été fait
 
-**Backend (`routers/cv.py`) :**
-- Remplacement de la logique select-then-upsert par un simple `INSERT`. Chaque upload crée une nouvelle ligne CV distincte, visible comme une carte séparée dans la bibliothèque.
+Ajout d'un subnet de management (`snet-jf-lz-dev-frc-mgmt`, `10.0.2.0/27`) dans le VNet de la landing zone dev, et exposition de son ID en output `subnet_mgmt_id`.
 
-**Frontend — thumbnail grisé :**
-- `CVCard.tsx` : accepte un prop optionnel `thumbnail` — quand le CV est en cours d'analyse et qu'un thumbnail est disponible, affiche l'image pdfjs en `grayscale opacity-50` avec un overlay `bg-black/40` derrière le spinner.
-- `LibrarySection.tsx` : accepte `pendingThumbnail` et `onClearThumbnail`. Injecte le thumbnail uniquement dans la première carte (CV le plus récent). Appelle `onClearThumbnail` quand aucun CV n'est plus en cours d'analyse.
-- `HomeClient.tsx` : capture le `dataUrl` retourné par `onReadyForLibrary`, le passe à `LibrarySection` via `pendingThumbnail`.
-- `UploadSection.tsx` : simplification de la signature `onReadyForLibrary` — suppression du paramètre `filename` devenu inutile.
+### Contexte
+
+Prérequis au déploiement d'une VM jumpbox pour accéder à PostgreSQL en VNet privé. Le subnet de management est séparé des autres subnets (app, cae, postgresql) pour isoler les ressources d'administration.
 
 ### Décisions techniques
 
-- Abandon du select-then-upsert : le commentaire dans le code indiquait explicitement que le modèle supporte plusieurs CVs par utilisateur — le comportement upsert contredisait ce design.
-- `onClearThumbnail` : libère le data-URL de la mémoire React dès que l'analyse est terminée — évite de conserver un blob encodé en base64 indéfiniment.
+- `/27` (32 IPs) : largement suffisant pour une seule VM de management, avec de la marge pour d'éventuels futurs outils d'administration.
+- Aucune délégation sur ce subnet : contrairement à CAE et PostgreSQL, les VMs Azure standard n'en nécessitent pas.
+- PR séparée de la VM elle-même (PR B) : le subnet est une ressource `lz_*` (plateforme) — mélanger `lz_dev` et `dev` dans un même PR viole les règles Git du projet.
 
 ---
 
@@ -2543,3 +2536,31 @@ Correction dans `JobFinder/python/agents/cv_analysis/main.py` : `receive_message
 - **Auto-shutdown à 20h UTC** : seul mécanisme d'arrêt nécessaire avec Bastion (pas d'auto-désallocation IMDS).
 - **Data source plutôt que `terraform_remote_state`** : cohérent avec le pattern existant (`lz_vnet_app`, `lz_vnet_cae`).
 - **`data.azurerm_resource_group.rg_app`** : les resource groups de dev sont des data sources (ownership transféré à lz_dev).
+
+---
+
+## PR #104 — feat(cv): store thumbnails in blob storage, expose thumbnail_url via API
+
+**Date :** 2026-06-25
+**Branche :** `fix/cv-upload-always-insert` → `dev`
+
+### Ce qui a été fait
+
+Stockage des miniatures PDF côté serveur (Azure Blob Storage) et exposition via l'API, en remplacement de l'approche client-side fragile (objectURL pdfjs passé comme prop).
+
+**Backend :**
+- `shared/models.py` : colonne `thumbnail_url` (String, nullable) ajoutée sur le modèle `CV`.
+- Migration Alembic `006_add_cv_thumbnail_url.py` : `ADD COLUMN thumbnail_url VARCHAR NULL` sur la table `cvs`.
+- `schemas.py` : `thumbnail_url: str | None` ajouté dans `CVListItemOut`.
+- `cv.py` : génération de miniature via `pypdfium2` (THUMBNAIL_SCALE=0.4) et upload blob non-bloquant ; `thumbnail_url` persisté dans la ligne `cvs` et retourné dans `GET /cv/`.
+- `scripts/backfill_thumbnails.py` : script standalone pour les CVs existants sans miniature.
+
+**Frontend :**
+- `types.ts` : `thumbnail_url: string | null` dans `CVData`.
+- `CVCard.tsx` : lit `cv.thumbnail_url` depuis l'API — grisé + spinner si pending, pleine couleur si done.
+- `LibrarySection.tsx`, `UploadSection.tsx`, `HomeClient.tsx` : suppression de la machinerie `pendingThumbnail` / `onClearThumbnail` / `seenPendingRef`.
+
+### Décisions techniques
+
+- **pypdfium2** : dépendance transitive de pdfplumber déjà présente — pas de nouvelle dépendance externe.
+- **Non-critique** : un échec de génération de miniature ne remonte pas en 500 — le CV est visible avec un fallback "PDF".
