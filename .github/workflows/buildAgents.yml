@@ -82,17 +82,39 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetching:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetching:cache,mode=max
 
-      - name: Build and push webapp image
+      - name: Build webapp image
         uses: docker/build-push-action@v6
         with:
           context: JobFinder/python
           file: JobFinder/python/agents/webapp/Dockerfile
-          push: true
-          tags: |
-            ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:latest
-            ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:${{ github.sha }}
+          push: false
+          load: true
+          tags: webapp-local:${{ github.sha }}
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/webapp:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/webapp:cache,mode=max
+
+      - name: Smoke-test webapp image
+        run: |
+          # shared/embedder.py reads AZURE_OPENAI_API_KEY at module level and raises
+          # ValueError if absent. Required until OpenAI managed identity migration
+          # (see backlog: "Passer local_auth_enabled=false + Managed Identity sur OpenAI").
+          docker run --rm \
+            -e DATABASE_URL=postgresql://x:x@localhost/x \
+            -e ENTRA_EXTERNAL_TENANT_ID=x \
+            -e ENTRA_EXTERNAL_CLIENT_ID=x \
+            -e AZURE_STORAGE_ACCOUNT_URL=https://x.blob.core.windows.net \
+            -e AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE=x.servicebus.windows.net \
+            -e AZURE_OPENAI_ENDPOINT=https://x.openai.azure.com \
+            -e AZURE_OPENAI_API_KEY=x \
+            webapp-local:${{ github.sha }} \
+            python -c "import main; print('smoke-test OK')"
+
+      - name: Push webapp image to ACR
+        run: |
+          docker tag webapp-local:${{ github.sha }} ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:latest
+          docker tag webapp-local:${{ github.sha }} ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:${{ github.sha }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:latest
+          docker push ${{ env.ACR_LOGIN_SERVER }}/agents/webapp:${{ github.sha }}
 
       - name: Build and push cv-analysis image
         uses: docker/build-push-action@v6

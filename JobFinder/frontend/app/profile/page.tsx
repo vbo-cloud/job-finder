@@ -5,17 +5,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import apiClient from "@/lib/api/client";
+import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
+import { cn } from "@/lib/utils";
 
 const CONTRACT_TYPES = ["CDI", "CDD", "Freelance", "Stage", "Alternance"] as const;
-
-interface ProfileData {
-  user_id: string;
-  rome_codes: string[];
-  job_categories: string[];
-  location: string | null;
-  contract_types: string[];
-}
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
@@ -98,7 +92,7 @@ export default function ProfilePage() {
         <button
           type="button"
           onClick={() => void instance.loginRedirect(loginRequest)}
-          className="rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700"
+          className="rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           Se connecter
         </button>
@@ -181,7 +175,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={addJobCategory}
-              className="rounded bg-gray-100 px-3 py-2 text-sm hover:bg-gray-200"
+              className="rounded bg-gray-100 px-3 py-2 text-sm hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             >
               Ajouter
             </button>
@@ -197,7 +191,7 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     onClick={() => removeJobCategory(cat)}
-                    className="ml-0.5 text-blue-500 hover:text-blue-700"
+                    className="ml-0.5 text-blue-500 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                     aria-label={`Supprimer ${cat}`}
                   >
                     ×
@@ -228,7 +222,7 @@ export default function ProfilePage() {
         )}
 
         {feedback && (
-          <p className={feedback.type === "success" ? "text-sm text-green-600" : "text-sm text-red-600"}>
+          <p className={cn("text-sm", feedback.type === "success" ? "text-green-600" : "text-red-600")}>
             {feedback.message}
           </p>
         )}
@@ -237,7 +231,7 @@ export default function ProfilePage() {
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="self-start rounded bg-blue-600 px-6 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+          className="self-start rounded bg-blue-600 px-6 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           {saving ? "Enregistrement…" : "Enregistrer"}
         </button>
