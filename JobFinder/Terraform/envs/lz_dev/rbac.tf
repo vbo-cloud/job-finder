@@ -64,6 +64,11 @@ locals {
       scope                = module.subnet_cae.id
       role_definition_name = "Network Contributor"
     }
+    # Same permission required for the jumpbox NIC (dev) joining the mgmt subnet (lz_dev).
+    subnet_mgmt_network_contributor = {
+      scope                = module.subnet_mgmt.id
+      role_definition_name = "Network Contributor"
+    }
   }
 }
 

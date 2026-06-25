@@ -2564,3 +2564,22 @@ Stockage des miniatures PDF côté serveur (Azure Blob Storage) et exposition vi
 
 - **pypdfium2** : dépendance transitive de pdfplumber déjà présente — pas de nouvelle dépendance externe.
 - **Non-critique** : un échec de génération de miniature ne remonte pas en 500 — le CV est visible avec un fallback "PDF".
+
+---
+
+## PR #105 — fix: Network Contributor on subnet_mgmt for jumpbox NIC
+
+**Date :** 2026-06-25
+**Branche :** `fix/jumpbox-subnet-rbac` → `dev`
+
+### Ce qui a été fait
+
+Ajout de `subnet_mgmt_network_contributor` dans la map `sp_role_assignments` de `lz_dev/rbac.tf` : `Network Contributor` sur `module.subnet_mgmt.id` pour le SP `sp-jf-github`.
+
+### Contexte
+
+L'apply dev échouait avec `LinkedAuthorizationFailed` : le SP `dev` pouvait écrire la NIC dans `rg-jf-dev-frc-app` mais n'avait pas `Microsoft.Network/virtualNetworks/subnets/join/action` sur `snet-jf-lz-dev-frc-mgmt` (dans `rg-jf-lz-dev-frc`). Ce pattern est identique à `subnet_cae_network_contributor`, ajouté pour la même raison lors du déploiement de la Container App Environment.
+
+### Décision technique
+
+Même scope et même rôle que `subnet_cae_network_contributor` — cohérence avec le pattern existant. Séparé en PR dédiée car c'est un changement `lz_*` (plateforme) qui ne peut pas être mélangé avec la PR jumpbox (`dev`).
