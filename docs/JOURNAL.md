@@ -2528,19 +2528,18 @@ Correction dans `JobFinder/python/agents/cv_analysis/main.py` : `receive_message
 
 **Module `modules/jumpbox/` :**
 - `variables.tf` : variables avec descriptions et validation sur `auto_shutdown_time` (format HHMM).
-- `main.tf` : NIC (IP privée uniquement), VM Linux Ubuntu 22.04 LTS Gen2 (`Standard_B1ms`) avec SSH key auth, cloud-init pour installer `postgresql-client`, schedule d'arrêt quotidien.
+- `main.tf` : NIC (IP privée uniquement), VM Linux Ubuntu 22.04 LTS Gen2 (`Standard_B1ms`) avec authentification par mot de passe, cloud-init pour installer `postgresql-client`, schedule d'arrêt quotidien à 20h UTC.
 - `outputs.tf` : `vm_id`, `private_ip`.
 
 **env dev (`envs/dev/`) :**
 - `network.tf` : ajout du data source `azurerm_subnet.lz_vnet_mgmt`.
-- `jumpbox.tf` : instanciation du module jumpbox.
-- `variables.tf` : ajout de `jumpbox_ssh_public_key` (sensitive).
+- `jumpbox.tf` : génération du mot de passe admin (`random_password`, 32 chars), stockage dans Key Vault (`jumpbox-admin-password`), instanciation du module jumpbox.
 - `outputs.tf` : ajout de `jumpbox_private_ip`.
 
 ### Décisions techniques
 
-- **Bastion Developer SKU** : accès via le portail Azure — gratuit, aucune ressource Bastion à déployer. Pas d'IP publique, pas de NSG, surface d'attaque nulle. Le Developer SKU était déjà utilisé sur le projet.
-- **SSH key auth conservée** : Bastion Developer supporte l'authentification par clé SSH depuis le portail.
-- **Auto-shutdown à 20h UTC** : seul mécanisme d'arrêt — suffisant sans l'auto-désallocation par IMDS (supprimée avec l'IP publique).
+- **Bastion Developer SKU** : accès via le portail Azure — gratuit, aucune ressource Bastion à déployer. Pas d'IP publique, pas de NSG, surface d'attaque nulle.
+- **Mot de passe généré par Terraform** : `random_password` (32 chars, caractères spéciaux) stocké en Key Vault. Aucune variable à injecter en CI, aucun GitHub Secret. Pour se connecter : portail → VM → Bastion → `azureuser` + mot de passe récupéré dans le KV.
+- **Auto-shutdown à 20h UTC** : seul mécanisme d'arrêt nécessaire avec Bastion (pas d'auto-désallocation IMDS).
 - **Data source plutôt que `terraform_remote_state`** : cohérent avec le pattern existant (`lz_vnet_app`, `lz_vnet_cae`).
 - **`data.azurerm_resource_group.rg_app`** : les resource groups de dev sont des data sources (ownership transféré à lz_dev).
