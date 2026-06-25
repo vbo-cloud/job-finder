@@ -41,6 +41,7 @@ resource "azurerm_linux_virtual_machine" "this" {
   admin_username      = var.admin_username
   custom_data         = base64encode(local.cloud_init)
 
+  zone                            = "2"
   network_interface_ids           = [azurerm_network_interface.this.id]
   disable_password_authentication = false
   admin_password                  = var.admin_password
