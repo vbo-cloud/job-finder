@@ -12,7 +12,7 @@ from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from azure.servicebus.exceptions import ServiceBusError
 from azure.storage.blob import BlobServiceClient
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from pdfminer.pdfparser import PDFSyntaxError
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -131,6 +131,31 @@ def _upload_cv_blob(contents: bytes, user_id: str) -> str:
         raise
     logger.info("cv_blob_upload_done", user_id=user_id, blob_name=blob_name)
     return blob_client.url
+
+
+def _download_blob(blob_url: str, container: str) -> bytes:
+    """Download a blob by its full URL and return its raw bytes.
+
+    Args:
+        blob_url: Full Azure Blob Storage URL of the blob.
+        container: The container name the blob lives in.
+
+    Returns:
+        Raw blob content as bytes.
+
+    Raises:
+        AzureError: If the download fails for any storage-level reason.
+    """
+    # Extract blob name: everything after "{account_url}/{container}/"
+    blob_name = blob_url.split(f"/{container}/", 1)[1]
+    blob_client = _blob_service_client.get_blob_client(
+        container=container, blob=blob_name
+    )
+    try:
+        return blob_client.download_blob().readall()
+    except AzureError:
+        logger.error("blob_download_failed", blob_url=blob_url, exc_info=True)
+        raise
 
 
 @router.post("/upload", response_model=CVUploadOut)
@@ -304,9 +329,103 @@ def list_cvs(
             status=cv.status,
             uploaded_at=cv.uploaded_at,
             match_count=match_count,
-            thumbnail_url=cv.thumbnail_url,
+            has_thumbnail=cv.thumbnail_url is not None,
         )
         for cv, match_count in rows
     ]
     logger.info("cv_list_done", user_id=user_id, count=len(result))
     return result
+
+
+@router.get("/{cv_id}/thumbnail", response_class=Response)
+def get_cv_thumbnail(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Return the JPEG thumbnail for a CV owned by the authenticated user.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Returns:
+        JPEG image bytes with media type image/jpeg.
+
+    Raises:
+        HTTPException 404: If the CV does not exist, is not owned by the user,
+            or has no thumbnail.
+        HTTPException 503: If Azure Blob Storage is unavailable.
+    """
+    logger.info("cv_thumbnail_fetch_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.error("cv_thumbnail_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    if cv is None or cv.thumbnail_url is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
+
+    try:
+        data = _download_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
+    except AzureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage unavailable",
+        ) from e
+
+    logger.info("cv_thumbnail_fetch_done", user_id=user_id, cv_id=str(cv_id))
+    return Response(content=data, media_type="image/jpeg")
+
+
+@router.get("/{cv_id}/pdf", response_class=Response)
+def get_cv_pdf(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Return the raw PDF for a CV owned by the authenticated user.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Returns:
+        PDF bytes with media type application/pdf, displayed inline.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+        HTTPException 503: If Azure Blob Storage is unavailable.
+    """
+    logger.info("cv_pdf_fetch_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.error("cv_pdf_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    if cv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+    try:
+        data = _download_blob(cv.blob_url, CV_BLOB_CONTAINER)
+    except AzureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage unavailable",
+        ) from e
+
+    filename = cv.name or "cv.pdf"
+    logger.info("cv_pdf_fetch_done", user_id=user_id, cv_id=str(cv_id))
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
