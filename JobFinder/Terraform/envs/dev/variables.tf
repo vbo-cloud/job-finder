@@ -66,9 +66,3 @@ variable "openai_capacity_tpm" {
   }
 }
 
-variable "jumpbox_ssh_public_key" {
-  description = "SSH public key (authorized_keys format) for the jumpbox VM admin user."
-  type        = string
-  sensitive   = true
-}
-

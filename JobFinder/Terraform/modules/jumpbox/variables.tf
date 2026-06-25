@@ -30,8 +30,8 @@ variable "admin_username" {
   default     = "azureuser"
 }
 
-variable "admin_ssh_public_key" {
-  description = "SSH public key content (authorized_keys format) for the admin user."
+variable "admin_password" {
+  description = "Password for the admin user. Use a randomly generated value stored in Key Vault."
   type        = string
   sensitive   = true
 }

@@ -41,12 +41,9 @@ resource "azurerm_linux_virtual_machine" "this" {
   admin_username      = var.admin_username
   custom_data         = base64encode(local.cloud_init)
 
-  network_interface_ids = [azurerm_network_interface.this.id]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_ssh_public_key
-  }
+  network_interface_ids           = [azurerm_network_interface.this.id]
+  disable_password_authentication = false
+  admin_password                  = var.admin_password
 
   os_disk {
     caching              = "ReadWrite"
