@@ -2432,3 +2432,24 @@ Suivi du statut d'analyse de bout en bout (backend → agent → frontend) et pa
 - Polling côté frontend (3 s) plutôt que WebSocket : cohérent avec l'architecture Container App Jobs existante, implémentation simple, charge minimale.
 - `LibrarySection` owns its data — `onReadyForLibrary` prop supprimée de `HomeClient`, pas de prop drilling.
 - `h-dvh snap-start` sur `LibrarySection` : maintient le scroll-snap avec la section upload.
+
+---
+
+## PR #TBD — feat: add management subnet to lz_dev for jumpbox VM
+
+**Date :** 2026-06-25
+**Branche :** `feature/lz-mgmt-subnet` → `dev`
+
+### Ce qui a été fait
+
+Ajout d'un subnet de management (`snet-jf-lz-dev-frc-mgmt`, `10.0.2.0/27`) dans le VNet de la landing zone dev, et exposition de son ID en output `subnet_mgmt_id`.
+
+### Contexte
+
+Prérequis au déploiement d'une VM jumpbox pour accéder à PostgreSQL en VNet privé. Le subnet de management est séparé des autres subnets (app, cae, postgresql) pour isoler les ressources d'administration.
+
+### Décisions techniques
+
+- `/27` (32 IPs) : largement suffisant pour une seule VM de management, avec de la marge pour d'éventuels futurs outils d'administration.
+- Aucune délégation sur ce subnet : contrairement à CAE et PostgreSQL, les VMs Azure standard n'en nécessitent pas.
+- PR séparée de la VM elle-même (PR B) : le subnet est une ressource `lz_*` (plateforme) — mélanger `lz_dev` et `dev` dans un même PR viole les règles Git du projet.

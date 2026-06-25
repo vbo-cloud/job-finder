@@ -33,3 +33,13 @@ module "subnet_cae" {
   delegation_service   = "Microsoft.App/environments"
   delegation_actions   = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
 }
+
+# Dedicated subnet for management VMs (jumpbox, bastion, etc.)
+# Uses /27 (32 IPs) — more than sufficient for a single management VM.
+module "subnet_mgmt" {
+  source               = "../../modules/subnet"
+  name                 = "snet-${var.project}-lz-dev-${var.location_short}-mgmt"
+  resource_group_name  = module.rg.name
+  virtual_network_name = module.vnet.name
+  address_prefixes     = ["10.0.2.0/27"]
+}
