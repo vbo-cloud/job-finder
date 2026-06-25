@@ -13,12 +13,7 @@ output "webapp_url" {
   value       = module.webapp.fqdn
 }
 
-output "jumpbox_ssh_command" {
-  description = "SSH command to connect to the jumpbox VM."
-  value       = module.jumpbox.ssh_command
-}
-
-output "jumpbox_public_ip" {
-  description = "Public IP of the jumpbox VM."
-  value       = module.jumpbox.public_ip
+output "jumpbox_private_ip" {
+  description = "Private IP of the jumpbox VM (connect via Azure Bastion)."
+  value       = module.jumpbox.private_ip
 }

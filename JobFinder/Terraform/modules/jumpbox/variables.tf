@@ -25,7 +25,7 @@ variable "vm_size" {
 }
 
 variable "admin_username" {
-  description = "Linux admin username for SSH access."
+  description = "Linux admin username for SSH access via Bastion."
   type        = string
   default     = "azureuser"
 }
@@ -34,16 +34,6 @@ variable "admin_ssh_public_key" {
   description = "SSH public key content (authorized_keys format) for the admin user."
   type        = string
   sensitive   = true
-}
-
-variable "allowed_ssh_cidr_blocks" {
-  description = "List of CIDR blocks allowed to connect via SSH (port 22). Restrict to known IPs."
-  type        = list(string)
-
-  validation {
-    condition     = length(var.allowed_ssh_cidr_blocks) > 0
-    error_message = "At least one CIDR block must be provided for SSH access."
-  }
 }
 
 variable "auto_shutdown_time" {

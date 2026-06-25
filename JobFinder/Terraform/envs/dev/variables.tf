@@ -72,7 +72,3 @@ variable "jumpbox_ssh_public_key" {
   sensitive   = true
 }
 
-variable "jumpbox_allowed_ssh_cidrs" {
-  description = "List of CIDR blocks allowed to SSH into the jumpbox (e.g. [\"203.0.113.0/32\"])."
-  type        = list(string)
-}
