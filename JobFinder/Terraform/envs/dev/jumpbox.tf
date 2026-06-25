@@ -26,7 +26,7 @@ module "jumpbox" {
   resource_group_name = data.azurerm_resource_group.rg_app.name
 
   subnet_id      = data.azurerm_subnet.lz_vnet_mgmt.id
-  admin_password = random_password.jumpbox_admin.result
+  admin_password = module.jumpbox_admin_password.value
 
   environment = var.env
   project     = var.project

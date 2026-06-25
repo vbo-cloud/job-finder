@@ -12,3 +12,9 @@ output "version" {
   description = "Current version of the Key Vault secret"
   value       = azurerm_key_vault_secret.this.version
 }
+
+output "value" {
+  description = "Plaintext value of the Key Vault secret"
+  value       = azurerm_key_vault_secret.this.value
+  sensitive   = true
+}
