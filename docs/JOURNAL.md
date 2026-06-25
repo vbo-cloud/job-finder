@@ -2314,3 +2314,36 @@ Implémentation de la page profil (`app/profile/page.tsx`) et mise à jour de la
 - 404 silencieux : formulaire vide est l'état initial attendu pour un nouvel utilisateur.
 - `location.trim() || null` : chaîne vide normalisée en `null` (correspond au type `str | None` du schéma Pydantic).
 - Ce PR a nécessité le fix préalable PR #93 (issuer JWT CIAM).
+
+---
+
+## PR #95 — chore: conventions Next.js + lockfile pip-compile webapp
+
+**Date :** 2026-06-25
+**Branche :** `chore/frontend-conventions-and-pip-compile` → `dev`
+
+### Ce qui a été fait
+
+**Frontend — application des conventions Next.js (CLAUDE.md) :**
+- `lib/utils.ts` : utilitaire `cn()` (clsx + tailwind-merge) pour les classes Tailwind conditionnelles.
+- `lib/api/types.ts` : source unique des types API — `ProfileData` extrait de `profile/page.tsx`.
+- `app/layout.tsx` : police Inter via `next/font/google` (supprime tout chargement externe de font).
+- `next.config.mjs` : `output: "standalone"` (requis pour le déploiement Container App) + `images.remotePatterns: []` (à compléter au déploiement).
+- `app/profile/page.tsx` : import `ProfileData` depuis `lib/api/types`, usage de `cn()` sur la classe feedback, `focus-visible` sur les 4 boutons interactifs.
+- `components/LoginButton.tsx` : `focus-visible` sur les boutons login/logout.
+- `package.json` : ajout des dépendances `clsx` et `tailwind-merge`.
+
+**Python webapp — lockfile pip-compile :**
+- `agents/webapp/requirements.in` : fichier source (dépendances directes, non épinglées).
+- `agents/webapp/requirements.txt` : lockfile généré par `pip-compile`, toutes les dépendances transitives épinglées — inclut `alembic==1.18.4` et `python-multipart==0.0.32`, causes des 3 crashs prod antérieurs.
+
+**CI — smoke-test avant push ACR :**
+- `buildAgents.yml` : le step "Build and push webapp image" est découpé en 3 : build local (load), smoke-test d'import (`python -c "import main"`), puis push ACR. Interrompt le workflow avant tout push si une dépendance manque ou lève une exception à l'import.
+
+### Décisions techniques
+
+- `output: "standalone"` dans `next.config.mjs` : requis pour l'image Docker Next.js multi-stage (backlog infra frontend).
+- Focus sur `focus-visible:` (non `focus:`) : styles focus uniquement au clavier, pas au clic souris — meilleure UX + conformité WCAG.
+- Les inputs existants (`focus:ring-2 focus:ring-blue-400`) sont exemptés de la migration `focus-visible` — ils ont déjà des styles focus explicites, les changer serait du churn non requis.
+- Smoke-test avec des valeurs fictives (`postgresql://x:x@localhost/x`) : suffisant pour valider que tous les modules s'importent sans `ValueError`. La connexion réelle n'est pas testée — ce n'est pas le but du smoke-test.
+- `annotated-doc==0.0.4` dans le lockfile : dépendance directe de `fastapi==0.138.0` (vérifiée dans les métadonnées du wheel).
