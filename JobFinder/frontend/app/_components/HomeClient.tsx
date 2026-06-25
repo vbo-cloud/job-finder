@@ -6,15 +6,18 @@ import LibrarySection from "./LibrarySection";
 import UploadSection from "./UploadSection";
 
 export default function HomeClient() {
-  // Incremented after each upload to trigger a LibrarySection re-fetch
-  const [uploadCount, setUploadCount] = useState(0);
+  const [uploadCount, setUploadCount]           = useState(0);
+  const [pendingThumbnail, setPendingThumbnail] = useState<string | null>(null);
 
   return (
     <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
       <UploadSection
-        onReadyForLibrary={() => setUploadCount((n) => n + 1)}
+        onReadyForLibrary={(_name, dataUrl) => {
+          setPendingThumbnail(dataUrl ?? null);
+          setUploadCount((n) => n + 1);
+        }}
       />
-      <LibrarySection refreshTrigger={uploadCount} />
+      <LibrarySection refreshTrigger={uploadCount} pendingThumbnail={pendingThumbnail} />
     </main>
   );
 }
