@@ -83,6 +83,33 @@ def _get_cv_text(cv_id: str) -> tuple[str, str]:
 
 
 # ==============================================================================
+# Status update
+# ==============================================================================
+
+
+def _set_cv_status(cv_id: str, status: str) -> None:
+    """Update the processing status of a CV record.
+
+    Args:
+        cv_id: UUID of the CV record.
+        status: New status value — one of 'processing', 'done', 'error'.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("cv_status_update", cv_id=cv_id, status=status)
+    try:
+        with get_session() as session:
+            session.execute(
+                update(CV).where(CV.id == cv_id).values(status=status)
+            )
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("cv_status_update_failed", cv_id=cv_id, status=status, exc_info=True)
+        raise
+
+
+# ==============================================================================
 # ROME extraction
 # ==============================================================================
 
@@ -203,9 +230,17 @@ def main() -> None:
 
     logger.info("cv_analysis_started", cv_id=cv_id)
 
-    raw_text, user_id = _get_cv_text(cv_id)
-    rome_codes = _extract_rome_codes(raw_text)
-    _update_rome_codes(user_id, rome_codes)
+    _set_cv_status(cv_id, "processing")
+
+    try:
+        raw_text, user_id = _get_cv_text(cv_id)
+        rome_codes = _extract_rome_codes(raw_text)
+        _update_rome_codes(user_id, rome_codes)
+    except Exception:
+        _set_cv_status(cv_id, "error")
+        raise
+
+    _set_cv_status(cv_id, "done")
 
     try:
         send_message(
