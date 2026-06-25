@@ -12,6 +12,8 @@ import OrbitAnimation from "./OrbitAnimation";
 
 type AnimState = "idle" | "uploaded" | "done";
 
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+
 interface Props {
   onReadyForLibrary?: (filename: string, thumbnailDataUrl: string | null) => void;
 }
@@ -27,32 +29,34 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
   const mousePosRef                     = useRef<{ x: number; y: number } | null>(null);
   const clickFlashRef                   = useRef<number>(0);
 
-  function handleFile(file: File): void {
-    if (file.type !== "application/pdf") return;
-    if (!isAuthenticated) {
-      void instance.loginRedirect(loginRequest);
-      return;
-    }
-    pendingFilenameRef.current = file.name;
-    const objectUrl = URL.createObjectURL(file);
-    setThumbnailUrl(objectUrl);
-    setAnimState("uploaded");
+  const handleFile = useCallback(
+    (file: File): void => {
+      if (file.type !== "application/pdf") return;
+      if (file.size > MAX_PDF_BYTES) return;
+      if (!isAuthenticated) {
+        void instance.loginRedirect(loginRequest);
+        return;
+      }
+      pendingFilenameRef.current = file.name;
+      const objectUrl = URL.createObjectURL(file);
+      setThumbnailUrl(objectUrl);
+      setAnimState("uploaded");
+      const formData = new FormData();
+      formData.append("file", file);
+      // Upload runs in background — done state is driven by onThumbnailReady, not the network
+      apiClient
+        .post<void>("/cv/upload", formData)
+        .catch(() => { /* silent — library card shows regardless */ })
+        .finally(() => { URL.revokeObjectURL(objectUrl); });
+    },
+    [isAuthenticated, instance],
+  );
 
-    const formData = new FormData();
-    formData.append("file", file);
-    apiClient
-      .post<void>("/cv/upload", formData)
-      .catch(() => { /* silent — library already shown */ })
-      .finally(() => { URL.revokeObjectURL(objectUrl); });
-  }
-
-  // Called by OrbitAnimation when PDF.js finishes rendering — triggers done + library card
   const handleThumbnailReady = useCallback((dataUrl: string | null) => {
     setAnimState("done");
     onReadyForLibrary?.(pendingFilenameRef.current, dataUrl);
   }, [onReadyForLibrary]);
 
-  // Called by OrbitAnimation when done animation finishes — auto-reset, particles re-appear
   const handleDoneComplete = useCallback(() => {
     setAnimState("idle");
     setThumbnailUrl(null);
@@ -65,7 +69,6 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
     const cx = rect.width / 2;
     const cy = rect.height / 2;
     if (Math.abs(x - cx) > 28 || Math.abs(y - cy) > 34) return;
-
     if (animState === "idle") {
       clickFlashRef.current = 1.0;
       fileInputRef.current?.click();
@@ -77,7 +80,7 @@ export default function UploadSection({ onReadyForLibrary }: Props) {
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
-  }, [animState, isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handleFile]);
 
   return (
     <section className="relative h-dvh snap-start overflow-hidden bg-[#0a0a0f]">

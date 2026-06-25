@@ -35,11 +35,13 @@ function easeOut(t: number): number {
 }
 
 export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, onDoneComplete, mousePosRef, clickFlashRef }: Props) {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const stateRef   = useRef(state);
-  const thumbRef   = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef          = useRef<HTMLCanvasElement>(null);
+  const stateRef           = useRef(state);
+  const thumbRef           = useRef<HTMLCanvasElement | null>(null);
+  const onDoneCompleteRef  = useRef(onDoneComplete);
 
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { onDoneCompleteRef.current = onDoneComplete; }, [onDoneComplete]);
 
   // Render PDF thumbnail with pdfjs-dist v3
   useEffect(() => {
@@ -232,7 +234,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         // Auto-reset after animation completes — particles re-appear without user click
         if (dp >= 1 && !doneCompleteFired) {
           doneCompleteFired = true;
-          setTimeout(() => onDoneComplete?.(), 200);
+          setTimeout(() => onDoneCompleteRef.current?.(), 200);
         }
       }
       if (s === "idle") { cp = 0; dp = 0; }
