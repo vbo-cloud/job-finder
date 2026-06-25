@@ -95,6 +95,9 @@ jobs:
 
       - name: Smoke-test webapp image
         run: |
+          # shared/embedder.py reads AZURE_OPENAI_API_KEY at module level and raises
+          # ValueError if absent. Required until OpenAI managed identity migration
+          # (see backlog: "Passer local_auth_enabled=false + Managed Identity sur OpenAI").
           docker run --rm \
             -e DATABASE_URL=postgresql://x:x@localhost/x \
             -e ENTRA_EXTERNAL_TENANT_ID=x \
@@ -102,9 +105,6 @@ jobs:
             -e AZURE_STORAGE_ACCOUNT_URL=https://x.blob.core.windows.net \
             -e AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE=x.servicebus.windows.net \
             -e AZURE_OPENAI_ENDPOINT=https://x.openai.azure.com \
-            # shared/embedder.py reads AZURE_OPENAI_API_KEY at module level and raises
-            # ValueError if absent. Required until OpenAI managed identity migration
-            # (see backlog: "Passer local_auth_enabled=false + Managed Identity sur OpenAI").
             -e AZURE_OPENAI_API_KEY=x \
             webapp-local:${{ github.sha }} \
             python -c "import main; print('smoke-test OK')"
