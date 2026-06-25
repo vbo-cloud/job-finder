@@ -55,6 +55,7 @@ job-jf-dev-frc-cv-analysis (queue: cv-analysis)  ← NOUVEAU
 - `outputs.tf` : exposer `frontend_url` (FQDN public du Container App frontend)
 - **Dockerfile frontend en build multi-stage** : passer du build mono-stage actuel (PR #88) à `builder` → `runner` (sortie `.next/standalone`, dépendances dev élaguées) pour réduire fortement la taille de l'image. Nécessite `output: "standalone"` dans `next.config.mjs`. La taille d'image ne compte qu'au déploiement Container Apps, d'où le report dans cette PR d'infra.
 - `docs/JOURNAL.md` mis à jour
+- **[M4 — PR 2, au déploiement]** Configurer `images.remotePatterns` dans `next.config.mjs` avec les domaines des images externes utilisées (avatars utilisateur, logos d'entreprises dans les offres, etc.). Actuellement `remotePatterns: []` — toute image distante via `next/image` sera bloquée jusqu'à ce que ce champ soit renseigné.
 
 ---
 
