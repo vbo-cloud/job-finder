@@ -1,27 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import LibrarySection from "./LibrarySection";
 import UploadSection from "./UploadSection";
 
 export default function HomeClient() {
-  const [uploadCount, setUploadCount]           = useState(0);
-  const [pendingThumbnail, setPendingThumbnail] = useState<string | null>(null);
+  // Incremented after each upload to trigger a LibrarySection re-fetch
+  const [uploadCount, setUploadCount] = useState(0);
+
+  const handleUploadComplete = useCallback(() => {
+    setUploadCount((n) => n + 1);
+  }, []);
 
   return (
     <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
-      <UploadSection
-        onReadyForLibrary={(dataUrl) => {
-          setPendingThumbnail(dataUrl ?? null);
-          setUploadCount((n) => n + 1);
-        }}
-      />
-      <LibrarySection
-        refreshTrigger={uploadCount}
-        pendingThumbnail={pendingThumbnail}
-        onClearThumbnail={() => setPendingThumbnail(null)}
-      />
+      <UploadSection onUploadComplete={handleUploadComplete} />
+      <LibrarySection refreshTrigger={uploadCount} />
     </main>
   );
 }

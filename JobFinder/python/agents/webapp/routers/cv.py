@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pdfplumber
+import pypdfium2 as pdfium
 import structlog
 from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
@@ -31,6 +32,7 @@ logger = structlog.get_logger()
 CV_ANALYSIS_QUEUE = "cv-analysis"
 CV_BLOB_CONTAINER = "cvs"
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+THUMBNAIL_SCALE = 0.4  # ~29 DPI — enough for a 176 px wide card
 
 AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
 if not AZURE_STORAGE_ACCOUNT_URL:
@@ -40,6 +42,61 @@ _blob_service_client = BlobServiceClient(
     account_url=AZURE_STORAGE_ACCOUNT_URL,
     credential=DefaultAzureCredential(),
 )
+
+
+def _generate_cv_thumbnail(contents: bytes) -> bytes | None:
+    """Render the first PDF page as a JPEG thumbnail. Returns None on failure.
+
+    Non-critical — a failed thumbnail must not abort the upload.
+
+    Args:
+        contents: Raw PDF bytes.
+
+    Returns:
+        JPEG image bytes, or None if rendering failed.
+    """
+    try:
+        pdf = pdfium.PdfDocument(io.BytesIO(contents))
+        page = pdf[0]
+        bitmap = page.render(scale=THUMBNAIL_SCALE)
+        image = bitmap.to_pil()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except pdfium.PdfiumError:
+        logger.error("cv_thumbnail_generation_failed", exc_info=True)
+        return None
+
+
+def _upload_thumbnail_blob(contents: bytes, user_id: str, cv_id: uuid.UUID) -> str:
+    """Upload a JPEG thumbnail to blob storage and return its URL.
+
+    Blob name is ``{user_id}/{cv_id}_thumb.jpg``.
+
+    Args:
+        contents: JPEG thumbnail bytes.
+        user_id: Authenticated user ID, used as the blob path prefix.
+        cv_id: CV UUID, used to build a deterministic blob name.
+
+    Returns:
+        The full URL of the uploaded thumbnail blob.
+
+    Raises:
+        AzureError: If the upload fails for any storage-level reason.
+    """
+    blob_name = f"{user_id}/{cv_id}_thumb.jpg"
+    blob_client = _blob_service_client.get_blob_client(
+        container=CV_BLOB_CONTAINER,
+        blob=blob_name,
+    )
+    try:
+        blob_client.upload_blob(contents, overwrite=True)
+    except AzureError:
+        logger.error("cv_thumbnail_upload_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+    return blob_client.url
 
 
 def _upload_cv_blob(contents: bytes, user_id: str) -> str:
@@ -81,9 +138,9 @@ async def upload_cv(
 ) -> CVUploadOut:
     """Upload a PDF CV, generate an embedding, and trigger ROME code analysis.
 
-    Upserts the CV and a default user profile (if absent), then sends a message
-    to the cv-analysis queue. The cv-analysis agent extracts ROME codes from the
-    raw text and dispatches the offer-ready trigger once codes are populated.
+    Inserts a new CV row and a default user profile (if absent), then sends a
+    message to the cv-analysis queue. The cv-analysis agent extracts ROME codes
+    from the raw text and dispatches the offer-ready trigger once codes are populated.
 
     Args:
         file: The uploaded PDF file.
@@ -138,12 +195,23 @@ async def upload_cv(
     embedding = embed([raw_text])[0]
     logger.info("cv_upload_embedding_done", user_id=user_id)
 
+    # Each upload creates a new CV row — the data model supports multiple
+    # CVs per user (e.g. different roles). No upsert: every file is a
+    # distinct entry visible in the library.
+    cv_id = uuid.uuid4()
+
+    # Generate and upload thumbnail (non-critical — failure does not abort the upload).
+    thumbnail_url: str | None = None
+    thumb_bytes = _generate_cv_thumbnail(contents)
+    if thumb_bytes:
+        try:
+            thumbnail_url = _upload_thumbnail_blob(thumb_bytes, user_id, cv_id)
+            logger.info("cv_thumbnail_uploaded", user_id=user_id, cv_id=str(cv_id))
+        except AzureError:
+            pass  # already logged in _upload_thumbnail_blob
+
     now = datetime.now(timezone.utc)
     try:
-        # Each upload creates a new CV row — the data model supports multiple
-        # CVs per user (e.g. different roles). No upsert: every file is a
-        # distinct entry visible in the library.
-        cv_id = uuid.uuid4()
         session.add(CV(
             id=cv_id,
             user_id=user_id,
@@ -151,6 +219,7 @@ async def upload_cv(
             status="pending",
             raw_text=raw_text,
             blob_url=blob_url,
+            thumbnail_url=thumbnail_url,
             embedding=embedding,
             uploaded_at=now,
             created_at=now,
@@ -232,6 +301,7 @@ def list_cvs(
             status=cv.status,
             uploaded_at=cv.uploaded_at,
             match_count=match_count,
+            thumbnail_url=cv.thumbnail_url,
         )
         for cv, match_count in rows
     ]
