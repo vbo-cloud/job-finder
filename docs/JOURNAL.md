@@ -2435,7 +2435,7 @@ Suivi du statut d'analyse de bout en bout (backend → agent → frontend) et pa
 
 ---
 
-## PR #TBD — feat: add management subnet to lz_dev for jumpbox VM
+## PR #102 — feat: add management subnet to lz_dev for jumpbox VM
 
 **Date :** 2026-06-25
 **Branche :** `feature/lz-mgmt-subnet` → `dev`
