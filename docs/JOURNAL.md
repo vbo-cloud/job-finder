@@ -2631,7 +2631,7 @@ Les blobs Azure sont dans un conteneur privé — le navigateur ne peut pas les 
 
 ---
 
-## PR #109 — feat(cv): delete CV with scale animation
+## PR #111 — feat(cv): delete CV with scale animation
 
 **Date :** 2026-06-26
 **Branche :** `feature/cv-delete` → `dev`

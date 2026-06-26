@@ -216,9 +216,11 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           {/* Trash button */}
           <button
             aria-label="Supprimer ce CV"
+            disabled={deleteState === "confirm"}
+            aria-disabled={deleteState === "confirm"}
             onClick={() => setDeleteState("confirm")}
             className={cn(
-              "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
+              "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-60",
               deleteState === "confirm" && "border-transparent bg-red-800",
             )}
           >
