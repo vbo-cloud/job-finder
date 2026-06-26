@@ -10,13 +10,13 @@ from urllib.parse import quote, urlparse
 import pdfplumber
 import pypdfium2 as pdfium
 import structlog
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.servicebus.exceptions import ServiceBusError
 from azure.storage.blob import BlobServiceClient
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from pdfminer.pdfparser import PDFSyntaxError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -161,6 +161,28 @@ def _download_blob(blob_url: str, container: str) -> bytes:
         return blob_client.download_blob().readall()
     except AzureError:
         logger.error("blob_download_failed", blob_url=blob_url, exc_info=True)
+        raise
+
+
+def _delete_blob(blob_url: str, container: str) -> None:
+    """Delete a blob by its full URL. No-op if the blob does not exist.
+
+    Args:
+        blob_url: Full Azure Blob Storage URL of the blob.
+        container: Container name the blob lives in.
+
+    Raises:
+        AzureError: If the deletion fails for a reason other than the blob being absent.
+    """
+    parts = PurePosixPath(urlparse(blob_url).path).parts
+    blob_name = str(PurePosixPath(*parts[2:]))  # drop leading '/' and container
+    blob_client = _blob_service_client.get_blob_client(container=container, blob=blob_name)
+    try:
+        blob_client.delete_blob()
+    except ResourceNotFoundError:
+        pass
+    except AzureError:
+        logger.error("blob_delete_failed", blob_url=blob_url, exc_info=True)
         raise
 
 
@@ -436,3 +458,57 @@ def get_cv_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"},
     )
+
+
+@router.delete("/{cv_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_cv(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Delete a CV and its associated blobs for the authenticated user.
+
+    Matches linked to the CV are removed first to satisfy the FK constraint on
+    matches.cv_id (no CASCADE DELETE is defined on that relationship).
+
+    Args:
+        cv_id: UUID of the CV to delete.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+        HTTPException 503: If Azure Blob Storage is unavailable.
+    """
+    logger.info("cv_delete_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.error("cv_delete_db_fetch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    if cv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+    try:
+        _delete_blob(cv.blob_url, CV_BLOB_CONTAINER)
+        if cv.thumbnail_url:
+            _delete_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
+    except AzureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage unavailable — CV deletion failed",
+        ) from e
+
+    try:
+        # Delete matches first — FK constraint on matches.cv_id has no CASCADE.
+        session.execute(delete(Match).where(Match.cv_id == cv_id))
+        session.delete(cv)
+        session.commit()
+    except SQLAlchemyError:
+        logger.error("cv_delete_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    logger.info("cv_delete_done", user_id=user_id, cv_id=str(cv_id))
