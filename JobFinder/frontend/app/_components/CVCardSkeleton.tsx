@@ -1,3 +1,4 @@
+/** Animated placeholder card displayed while CVs are loading. */
 export default function CVCardSkeleton() {
   return (
     <div className="flex w-44 flex-shrink-0 flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4">

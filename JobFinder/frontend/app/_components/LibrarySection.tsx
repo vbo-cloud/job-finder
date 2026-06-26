@@ -100,7 +100,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       )}
 
       {/* Erreur */}
-      {error && (
+      {isAuthenticated && error && (
         <p className="mt-4 text-xs text-red-400/50">Impossible de charger les CVs.</p>
       )}
     </section>
