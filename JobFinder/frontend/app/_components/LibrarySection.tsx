@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useIsAuthenticated } from "@azure/msal-react";
+import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
+import { loginRequest } from "@/lib/auth/msalConfig";
 import type { CVData } from "@/lib/api/types";
 
 import CVCard from "./CVCard";
+import CVCardSkeleton from "./CVCardSkeleton";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -17,6 +19,7 @@ interface Props {
 
 export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   const isAuthenticated           = useIsAuthenticated();
+  const { instance }              = useMsal();
   const [cvs, setCvs]             = useState<CVData[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(false);
@@ -30,7 +33,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       console.error("[LibrarySection] fetch failed", err);
       setError(true);
     } finally {
-      setLoading(false); // no-op on subsequent calls (already false)
+      setLoading(false);
     }
   }, []);
 
@@ -59,14 +62,35 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
     >
       <p className="mb-6 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
 
-      {loading && (
-        <p className="text-xs text-white/20">Chargement…</p>
+      {/* État non connecté */}
+      {!isAuthenticated && (
+        <div className="flex flex-col items-center justify-center gap-6 pt-32">
+          <p className="text-center text-sm text-white/35">
+            Connectez-vous afin de pouvoir consulter<br />et charger des CV dans votre bibliothèque.
+          </p>
+          <button
+            type="button"
+            onClick={() => void instance.loginRedirect(loginRequest)}
+            className="rounded-full border border-white/25 px-5 py-2 text-xs text-white/65 transition-colors hover:border-white/40 hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+          >
+            Se connecter
+          </button>
+        </div>
       )}
 
-      {!loading && cvs.length === 0 && !error && (
+      {/* Skeleton pendant le chargement initial */}
+      {loading && isAuthenticated && (
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {[0, 1, 2].map((i) => <CVCardSkeleton key={i} />)}
+        </div>
+      )}
+
+      {/* Aucun CV */}
+      {!loading && isAuthenticated && cvs.length === 0 && !error && (
         <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
       )}
 
+      {/* Liste des CVs */}
       {cvs.length > 0 && (
         <div className="flex gap-4 overflow-x-auto pb-4">
           {cvs.map((cv) => (
@@ -75,7 +99,8 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
         </div>
       )}
 
-      {error && (
+      {/* Erreur */}
+      {isAuthenticated && error && (
         <p className="mt-4 text-xs text-red-400/50">Impossible de charger les CVs.</p>
       )}
     </section>
