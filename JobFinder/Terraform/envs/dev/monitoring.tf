@@ -56,23 +56,30 @@ resource "azurerm_monitor_action_group" "owner" {
 resource "azurerm_monitor_metric_alert" "job_execution_failed" {
   name                = "alert-${var.project}-${var.env}-job-execution-failed"
   resource_group_name = data.azurerm_resource_group.rg_app.name
-  scopes              = [module.container_app_environment.id]
-  description         = "A Container App Job execution failed."
-  severity            = 1
-  frequency           = "PT5M"
-  window_size         = "PT15M"
+  # Metric alerts on Microsoft.App/jobs must target the job resources directly;
+  # the CAE (managedEnvironments) does not expose job execution metrics.
+  scopes = [
+    module.job_matching.id,
+    module.job_cleanup.id,
+    module.job_offer_fetching.id,
+    module.job_cv_analysis.id,
+  ]
+  description = "A Container App Job execution failed."
+  severity    = 1
+  frequency   = "PT5M"
+  window_size = "PT15M"
 
   criteria {
-    metric_namespace = "Microsoft.App/managedEnvironments"
-    metric_name      = "JobExecutionRunningCount"
-    aggregation      = "Count"
+    metric_namespace = "Microsoft.App/jobs"
+    metric_name      = "Executions"
+    aggregation      = "Total"
     operator         = "GreaterThan"
     threshold        = 0
 
     dimension {
-      name     = "ExecutionStatus"
+      name     = "state"
       operator = "Include"
-      values   = ["Failed"]
+      values   = ["failed"]
     }
   }
 
