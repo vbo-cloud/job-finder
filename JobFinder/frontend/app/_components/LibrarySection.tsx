@@ -8,6 +8,7 @@ import { loginRequest } from "@/lib/auth/msalConfig";
 import type { CVData } from "@/lib/api/types";
 
 import CVCard from "./CVCard";
+import CVCardSkeleton from "./CVCardSkeleton";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -80,16 +81,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       {/* Skeleton pendant le chargement initial */}
       {loading && isAuthenticated && (
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="flex w-44 flex-shrink-0 flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4"
-            >
-              <div className="aspect-[3/4] w-full animate-pulse rounded-lg bg-white/[0.06]" />
-              <div className="h-2 w-3/4 animate-pulse rounded bg-white/[0.06]" />
-              <div className="h-2 w-1/2 animate-pulse rounded bg-white/[0.04]" />
-            </div>
-          ))}
+          {[0, 1, 2].map((i) => <CVCardSkeleton key={i} />)}
         </div>
       )}
 
