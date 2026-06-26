@@ -2631,6 +2631,39 @@ Les blobs Azure sont dans un conteneur privé — le navigateur ne peut pas les 
 
 ---
 
+## PR #111 — feat(cv): delete CV with scale animation
+
+**Date :** 2026-06-26
+**Branche :** `feature/cv-delete` → `dev`
+
+### Ce qui a été fait
+
+Permet à l'utilisateur de supprimer un CV depuis la bibliothèque.
+
+**Backend — `cv.py` :**
+- Ajout de `_delete_blob` (helper utilisant `PurePosixPath`, cohérent avec `_download_blob`). No-op si le blob est absent (`ResourceNotFoundError`).
+- Endpoint `DELETE /cv/{id}` (HTTP 204) : vérifie la propriété, supprime les blobs PDF et thumbnail, supprime les matches en cascade (FK sans `ON DELETE CASCADE`), puis supprime la ligne CV.
+
+**Agent cv-analysis — `main.py` :**
+- Si le CV est supprimé pendant que son message est en queue, `_get_cv_text` lève `ValueError`. Ce cas est maintenant intercepté séparément avant le `except Exception` général : le message est complété proprement, sans retry ni dead-letter.
+
+**Frontend — `CVCard.tsx` / `LibrarySection.tsx` :**
+- `CVCard` gère un état `DeleteState = "idle" | "confirm" | "absorbing"` et un état `isHovered`.
+- Survol : fil vertical + bouton poubelle apparaissent (opacity 150ms). La poubelle a le même fond et contour que la carte au repos, et devient rouge au hover.
+- Clic poubelle → `"confirm"` : sous-icônes croix (gauche) et check (vert, droite) apparaissent sur les côtés, reliées par des fils horizontaux `h-px`.
+- Clic croix → retour `"idle"`. Clic en dehors de la rangée poubelle → `"idle"`.
+- Clic check → `"absorbing"` : `scale(0)` + fade en 400ms via `useRef`, puis API call, puis `onDeleted`.
+- `LibrarySection` : `handleCvDeleted` filtre le CV de la liste locale sans refetch.
+
+### Décisions techniques
+
+- **`_delete_blob` utilise `PurePosixPath`** : même parsing robuste que `_download_blob`, cohérence interne.
+- **Animation impérative via `useRef`** : `scale(0)` + `opacity 0` directement sur le style DOM — évite la complexité des classes Tailwind conditionnelles pour une animation one-shot.
+- **Sous-icônes sur les côtés** : optimise l'espace vertical ; la rangée `[✕] ─ [🗑️] ─ [✓]` reste dans l'empreinte horizontale de la carte.
+- **`onDeleted` appelé même si l'API échoue** : la carte est retirée côté client dans tous les cas, l'erreur est loggée en console.
+
+---
+
 ## PR #110 — feat(frontend): library unauthenticated state and skeleton loading
 
 **Date :** 2026-06-26
