@@ -29,8 +29,9 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
   const [isHovered, setIsHovered]       = useState(false);
   const [deleteState, setDeleteState]   = useState<DeleteState>("idle");
 
-  const cardRef = useRef<HTMLDivElement>(null);
-  const holeRef = useRef<HTMLDivElement>(null);
+  const wrapperRef   = useRef<HTMLDivElement>(null);
+  const subIconsRef  = useRef<HTMLDivElement>(null);
+  const cardRef      = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!cv.has_thumbnail) return;
@@ -56,30 +57,41 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
     };
   }, [cv.id, cv.has_thumbnail]);
 
+  // Close confirm state on click outside
+  useEffect(() => {
+    if (deleteState !== "confirm") return;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+
+      if (!wrapperRef.current?.contains(target)) {
+        setDeleteState("idle");
+        return;
+      }
+
+      // Inside card but outside sub-icons (and not the trash button itself)
+      if (
+        !subIconsRef.current?.contains(target) &&
+        !(e.target as Element).closest("[data-trash]")
+      ) {
+        setDeleteState("idle");
+      }
+    };
+
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [deleteState]);
+
   const handleConfirmDelete = async () => {
     setDeleteState("absorbing");
 
-    if (!holeRef.current || !cardRef.current) return;
+    if (!cardRef.current) return;
 
-    // 1. Black hole grows at the centre of the card
-    holeRef.current.style.transition = "width 0.3s ease-out, height 0.3s ease-out, opacity 0.3s";
-    holeRef.current.style.width      = "120px";
-    holeRef.current.style.height     = "120px";
-    holeRef.current.style.opacity    = "1";
-
-    // 2. Card contracts toward the centre
-    await delay(300);
-    cardRef.current.style.transition = "transform 0.4s cubic-bezier(0.55,0,1,1), opacity 0.3s 0.1s";
+    cardRef.current.style.transition = "transform 0.35s cubic-bezier(0.55,0,1,1), opacity 0.3s";
     cardRef.current.style.transform  = "scale(0)";
     cardRef.current.style.opacity    = "0";
 
-    // 3. Black hole fades out
-    await delay(350);
-    holeRef.current.style.transition = "opacity 0.2s";
-    holeRef.current.style.opacity    = "0";
-
-    // 4. API call then remove card from the list
-    await delay(200);
+    await delay(400);
     try {
       await apiClient.delete(`/cv/${cv.id}`);
     } catch (err) {
@@ -92,6 +104,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
 
   return (
     <div
+      ref={wrapperRef}
       className="flex w-44 flex-shrink-0 flex-col"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -99,7 +112,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
       {/* Card */}
       <div
         ref={cardRef}
-        className="relative flex flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4"
+        className="flex flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4"
       >
         <div
           role={isPending ? "status" : undefined}
@@ -157,14 +170,6 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
             {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
           </p>
         )}
-
-        {/* Black hole overlay — animated imperatively in handleConfirmDelete */}
-        <div
-          ref={holeRef}
-          aria-hidden="true"
-          style={{ width: 0, height: 0, opacity: 0 }}
-          className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black"
-        />
       </div>
 
       {/* Delete controls — wire + trash button + sub-icons */}
@@ -179,20 +184,23 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
 
         {/* Trash button */}
         <button
+          data-trash="true"
           aria-label="Supprimer ce CV"
           onClick={() => setDeleteState("confirm")}
           className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-full bg-red-600 transition-colors hover:bg-red-400 active:bg-red-800",
+            "flex h-7 w-7 items-center justify-center rounded-full bg-red-600 transition-colors hover:bg-red-400 active:bg-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
             deleteState === "confirm" && "bg-red-800",
           )}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
+            viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="1.5"
-            className="h-3.5 w-3.5 text-white"
+            width="14"
+            height="14"
+            className="text-white"
           >
             <path
               strokeLinecap="round"
@@ -202,50 +210,67 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           </svg>
         </button>
 
-        {/* Sub-icons — cancel (X) and confirm (check) */}
+        {/* Sub-icons — cancel (X) and confirm (check), with SVG T-connector */}
         {deleteState === "confirm" && (
-          <div className="flex gap-8 animate-[fadeSlideDown_200ms_ease-out_both]">
+          <div
+            ref={subIconsRef}
+            className="relative flex w-20 justify-between animate-[fadeSlideDown_200ms_ease-out_both]"
+          >
+            {/* T-shaped SVG connector from trash to sub-icons */}
+            <svg
+              aria-hidden="true"
+              className="absolute top-0 left-1/2 -translate-x-1/2"
+              width="80"
+              height="28"
+              style={{ overflow: "visible" }}
+            >
+              <line x1="40" y1="0" x2="40" y2="14" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+              <path d="M40,14 Q40,24 16,24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+              <path d="M40,14 Q40,24 64,24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+            </svg>
+
+            {/* Spacer for SVG height */}
+            <div className="h-7 w-full" />
+
             {/* Cancel */}
-            <div className="flex flex-col items-center gap-0">
-              <div className="h-2.5 w-px bg-white/20" />
-              <button
-                aria-label="Annuler la suppression"
-                onClick={() => setDeleteState("idle")}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 transition-colors hover:bg-white/20 active:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            <button
+              aria-label="Annuler la suppression"
+              onClick={() => setDeleteState("idle")}
+              className="absolute bottom-0 left-0 flex items-center justify-center rounded-md bg-white/10 px-3 py-1.5 transition-colors hover:bg-white/20 active:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                width="14"
+                height="14"
+                className="text-white/70"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  className="h-3 w-3 text-white/70"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
 
             {/* Confirm */}
-            <div className="flex flex-col items-center gap-0">
-              <div className="h-2.5 w-px bg-white/20" />
-              <button
-                aria-label="Confirmer la suppression"
-                onClick={() => void handleConfirmDelete()}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-green-800 transition-colors hover:bg-green-600 active:bg-green-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+            <button
+              aria-label="Confirmer la suppression"
+              onClick={() => void handleConfirmDelete()}
+              className="absolute bottom-0 right-0 flex items-center justify-center rounded-md bg-green-800 px-3 py-1.5 transition-colors hover:bg-green-600 active:bg-green-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                width="14"
+                height="14"
+                className="text-white"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  className="h-3 w-3 text-white"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                </svg>
-              </button>
-            </div>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </button>
           </div>
         )}
       </div>
