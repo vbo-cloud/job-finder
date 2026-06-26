@@ -95,6 +95,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       )}
 
       {/* Liste des CVs */}
+      {/* pb-20: reserves vertical space for CVCard's delete controls (wire + trash row)
+          that appear below each card on hover. overflow-x:auto forces overflow-y:auto,
+          so without this padding the controls would be clipped by the scroll container. */}
       {cvs.length > 0 && (
         <div className="flex gap-4 overflow-x-auto pb-20">
           {cvs.map((cv) => (

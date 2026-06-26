@@ -90,6 +90,14 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
       await apiClient.delete(`/cv/${cv.id}`);
     } catch (err) {
       console.error("cv delete failed", err);
+      // Restore the card so the user can retry rather than silently losing it.
+      if (cardRef.current) {
+        cardRef.current.style.transition = "transform 0.3s ease-out, opacity 0.3s";
+        cardRef.current.style.transform  = "";
+        cardRef.current.style.opacity    = "";
+      }
+      setDeleteState("idle");
+      return;
     }
     onDeleted(cv.id);
   };

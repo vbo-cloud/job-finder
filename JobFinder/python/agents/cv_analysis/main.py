@@ -244,9 +244,13 @@ def main() -> None:
             try:
                 rome_codes = _extract_rome_codes(raw_text)
                 _update_rome_codes(user_id, rome_codes)
-            except Exception:
-                # Catch-all: any failure in extraction or ROME update must mark the CV
-                # as errored before re-raising, regardless of which step failed.
+            except (OpenAIError, SQLAlchemyError, ValueError):
+                # OpenAIError  — API failure or all ROME extraction retries exhausted.
+                # SQLAlchemyError — DB failure in _update_rome_codes.
+                # ValueError — _extract_rome_codes found no valid codes after MAX_ATTEMPTS,
+                #              or _update_rome_codes found no matching UserProfile.
+                # All three must mark the CV as errored before re-raising so the UI
+                # reflects the failure instead of staying stuck in "processing".
                 _set_cv_status(cv_id, "error")
                 raise
 

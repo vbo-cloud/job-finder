@@ -492,6 +492,11 @@ def delete_cv(
     if cv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
 
+    # Blobs are deleted before the DB commit. If commit() fails after this point
+    # the CV row survives but its storage objects are permanently gone — a known
+    # inconsistency accepted as a trade-off (no compensating-transaction / saga).
+    # The inverse order (commit first, then delete blobs) is equally lossy: a blob
+    # leak is harder to detect than a row whose blob is missing.
     try:
         _delete_blob(cv.blob_url, CV_BLOB_CONTAINER)
         if cv.thumbnail_url:
