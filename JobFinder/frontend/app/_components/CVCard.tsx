@@ -29,9 +29,9 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
   const [isHovered, setIsHovered]       = useState(false);
   const [deleteState, setDeleteState]   = useState<DeleteState>("idle");
 
-  const wrapperRef   = useRef<HTMLDivElement>(null);
-  const subIconsRef  = useRef<HTMLDivElement>(null);
-  const cardRef      = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const rowRef     = useRef<HTMLDivElement>(null);
+  const cardRef    = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!cv.has_thumbnail) return;
@@ -47,8 +47,8 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
         setThumbnailSrc(objectUrl);
       })
       .catch((error: unknown) => {
-        const status = (error as { response?: { status?: number } })?.response?.status;
-        if (status !== 404) console.error("cv thumbnail fetch failed", error);
+        const httpStatus = (error as { response?: { status?: number } })?.response?.status;
+        if (httpStatus !== 404) console.error("cv thumbnail fetch failed", error);
       });
 
     return () => {
@@ -57,23 +57,17 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
     };
   }, [cv.id, cv.has_thumbnail]);
 
-  // Close confirm state on click outside
+  // Close confirm state on click outside the trash row
   useEffect(() => {
     if (deleteState !== "confirm") return;
 
     const handleMouseDown = (e: MouseEvent) => {
       const target = e.target as Node;
-
       if (!wrapperRef.current?.contains(target)) {
         setDeleteState("idle");
         return;
       }
-
-      // Inside card but outside sub-icons (and not the trash button itself)
-      if (
-        !subIconsRef.current?.contains(target) &&
-        !(e.target as Element).closest("[data-trash]")
-      ) {
+      if (!rowRef.current?.contains(target)) {
         setDeleteState("idle");
       }
     };
@@ -172,111 +166,102 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
         )}
       </div>
 
-      {/* Delete controls — wire + trash button + sub-icons */}
+      {/* Delete controls */}
       <div
         className={cn(
           "flex flex-col items-center transition-opacity duration-150",
           showControls ? "opacity-100" : "opacity-0 pointer-events-none",
         )}
       >
-        {/* Vertical wire from card to trash */}
-        <div className="mx-auto h-3.5 w-px bg-white/20" />
+        {/* Vertical wire from card bottom to trash row */}
+        <div className="h-3.5 w-px bg-white/20" />
 
-        {/* Trash button */}
-        <button
-          data-trash="true"
-          aria-label="Supprimer ce CV"
-          onClick={() => setDeleteState("confirm")}
-          className={cn(
-            "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
-            deleteState === "confirm" && "border-transparent bg-red-800",
+        {/* Horizontal row: [cancel] ─ [trash] ─ [confirm] */}
+        <div ref={rowRef} className="flex items-center">
+
+          {/* Cancel button + wire to trash (left side) */}
+          {deleteState === "confirm" && (
+            <>
+              <button
+                aria-label="Annuler la suppression"
+                onClick={() => setDeleteState("idle")}
+                className="flex items-center justify-center rounded-md bg-white/10 px-3 py-1.5 transition-colors hover:bg-white/20 active:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  width="14"
+                  height="14"
+                  className="text-white/70"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              {/* Wire: right of cancel → left of trash */}
+              <div className="h-px w-2 bg-white/20" />
+            </>
           )}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            width="14"
-            height="14"
+
+          {/* Trash button */}
+          <button
+            aria-label="Supprimer ce CV"
+            onClick={() => setDeleteState("confirm")}
             className={cn(
-              "transition-colors",
-              deleteState === "confirm" ? "text-white" : "text-white/40 group-hover:text-white",
+              "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
+              deleteState === "confirm" && "border-transparent bg-red-800",
             )}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-            />
-          </svg>
-        </button>
-
-        {/* Sub-icons — cancel (X) and confirm (check) */}
-        {deleteState === "confirm" && (
-          <div
-            ref={subIconsRef}
-            className="relative flex w-20 justify-between animate-[fadeSlideDown_200ms_ease-out_both]"
-          >
-            {/* Spacer that reserves height for button area */}
-            <div className="h-7 w-full" />
-
-            {/* Cancel */}
-            <button
-              aria-label="Annuler la suppression"
-              onClick={() => setDeleteState("idle")}
-              className="absolute bottom-0 left-0 flex items-center justify-center rounded-md bg-white/10 px-3 py-1.5 transition-colors hover:bg-white/20 active:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                width="14"
-                height="14"
-                className="text-white/70"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-
-            {/* Confirm */}
-            <button
-              aria-label="Confirmer la suppression"
-              onClick={() => void handleConfirmDelete()}
-              className="absolute bottom-0 right-0 flex items-center justify-center rounded-md bg-green-800 px-3 py-1.5 transition-colors hover:bg-green-600 active:bg-green-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                width="14"
-                height="14"
-                className="text-white"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-            </button>
-
-            {/* Wires rendered last → paint above buttons.
-                Paths start at each button's top-centre (y=2) and curve up
-                to the trash button's left/right side (y=-14 in this coord system). */}
             <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 top-0"
-              width="80"
-              height="28"
-              style={{ overflow: "visible" }}
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              width="14"
+              height="14"
+              className={cn(
+                "transition-colors",
+                deleteState === "confirm" ? "text-white" : "text-white/40 group-hover:text-white",
+              )}
             >
-              <path d="M19,2 Q19,-8 26,-14" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
-              <path d="M61,2 Q61,-8 54,-14" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
+              />
             </svg>
-          </div>
-        )}
+          </button>
+
+          {/* Wire + confirm button (right side) */}
+          {deleteState === "confirm" && (
+            <>
+              {/* Wire: right of trash → left of confirm */}
+              <div className="h-px w-2 bg-white/20" />
+              <button
+                aria-label="Confirmer la suppression"
+                onClick={() => void handleConfirmDelete()}
+                className="flex items-center justify-center rounded-md bg-green-800 px-3 py-1.5 transition-colors hover:bg-green-600 active:bg-green-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  width="14"
+                  height="14"
+                  className="text-white"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              </button>
+            </>
+          )}
+
+        </div>
       </div>
     </div>
   );
