@@ -69,6 +69,7 @@ module "job_matching" {
   queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
   uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
+  uami_tenant_id       = data.azurerm_user_assigned_identity.caj.tenant_id
   image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
   project              = var.project
@@ -264,6 +265,7 @@ module "job_cv_analysis" {
   queue_name           = "cv-analysis"
   servicebus_namespace = module.servicebus.name
   uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
+  uami_tenant_id       = data.azurerm_user_assigned_identity.caj.tenant_id
   image                = "${module.container_registry.login_server}/agents/cv-analysis:latest"
   environment          = var.env
   project              = var.project

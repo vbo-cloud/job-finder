@@ -58,6 +58,18 @@ variable "uami_client_id" {
   }
 }
 
+variable "uami_tenant_id" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Tenant ID of the Azure AD tenant where the UAMI is registered. Required alongside uami_client_id for KEDA 2.18+ workload identity auth on the azure-servicebus scaler."
+
+  validation {
+    condition     = var.uami_tenant_id == null || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.uami_tenant_id))
+    error_message = "uami_tenant_id must be a valid UUID (e.g. '00000000-0000-0000-0000-000000000000')."
+  }
+}
+
 variable "image" {
   type        = string
   description = "Docker image to run. Use placeholder in M1."

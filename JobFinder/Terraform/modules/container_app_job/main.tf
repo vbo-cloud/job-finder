@@ -43,7 +43,7 @@ resource "azurerm_container_app_job" "this" {
               namespace    = var.servicebus_namespace
               messageCount = "1"
             },
-            var.uami_client_id != null ? { clientId = var.uami_client_id } : {}
+            var.uami_client_id != null ? { clientId = var.uami_client_id, tenantId = var.uami_tenant_id } : {}
           )
 
           dynamic "authentication" {
