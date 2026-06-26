@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import cv, matches, profile
 from shared.db import run_migrations
+from shared.telemetry import configure_telemetry
 
 CORS_ALLOWED_ORIGINS: list[str] = [
     origin.strip()
@@ -31,7 +32,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Yields:
         None: Control is yielded to FastAPI after startup completes.
     """
-    from shared.telemetry import configure_telemetry
     configure_telemetry("webapp")
 
     try:

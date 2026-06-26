@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.models import Match, Offer
+from shared.telemetry import configure_telemetry
 
 logger = structlog.get_logger()
 
@@ -65,7 +66,6 @@ def _cleanup(session: Session) -> tuple[int, int]:
 
 def main() -> None:
     """Purge stale offers and orphaned matches."""
-    from shared.telemetry import configure_telemetry
     configure_telemetry("cleanup")
 
     try:

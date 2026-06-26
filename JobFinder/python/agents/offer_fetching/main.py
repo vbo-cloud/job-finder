@@ -25,6 +25,7 @@ from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.embedder import embed
 from shared.models import Offer, UserProfile
+from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
 OFFER_READY_QUEUE = "offer-ready"
@@ -203,7 +204,6 @@ def _embed_pending_offers() -> int:
 
 def main() -> None:
     """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
-    from shared.telemetry import configure_telemetry
     configure_telemetry("offer-fetching")
 
     try:
