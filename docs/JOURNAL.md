@@ -2723,3 +2723,26 @@ Suite à l'incident du 25 juin (KEDA arrêté 24h sans détection), deux lacunes
 - `configure_telemetry` est un import différé (`from shared.telemetry import ...` dans `main()`) — évite d'initialiser OpenTelemetry au chargement du module, ce qui pourrait interférer avec les tests unitaires.
 - L'alerte `stale-messages` utilise `Minimum` comme agrégation : si le minimum sur 30 min est > 0, des messages sont restés en queue tout au long de la fenêtre — distingue les pics normaux (message consommé en < 30 min) des blocages réels (KEDA mort).
 - `alert_email` sans `default` : force une valeur explicite dans `terraform.tfvars` (gitignored) — pas de risque d'envoyer des alertes à une adresse placeholder.
+
+---
+
+## PR #113 — fix: correct metric name for Container App Job failure alert
+
+**Date :** 2026-06-26
+
+### Contexte
+
+L'apply de la PR #112 a échoué avec une erreur 400 : `Couldn't find a metric named JobExecutionRunningCount`. La métrique `JobExecutionRunningCount` n'existe pas sur `Microsoft.App/managedEnvironments`.
+
+### Ce qui a été fait
+
+- `envs/dev/monitoring.tf` : correction de l'alerte `job_execution_failed`.
+  - Scope : `module.container_app_environment.id` → les 4 IDs des jobs (`module.job_matching.id`, `module.job_cleanup.id`, `module.job_offer_fetching.id`, `module.job_cv_analysis.id`).
+  - `metric_namespace` : `Microsoft.App/managedEnvironments` → `Microsoft.App/jobs`.
+  - `metric_name` : `JobExecutionRunningCount` → `Executions`.
+  - `aggregation` : `Count` → `Total`.
+  - `dimension.name` : `ExecutionStatus` → `state` ; `dimension.values` : `["Failed"]` → `["failed"]`.
+
+### Décision technique
+
+Les métriques d'exécution des Container App Jobs ne sont pas exposées sur la ressource `managedEnvironments` — elles sont publiées sur chaque ressource `Microsoft.App/jobs` individuellement. L'alerte doit donc lister les 4 jobs comme scopes et cibler le namespace `Microsoft.App/jobs`. La dimension `state` avec la valeur `"failed"` est confirmée via l'API Azure (`az monitor metrics list-definitions`).
