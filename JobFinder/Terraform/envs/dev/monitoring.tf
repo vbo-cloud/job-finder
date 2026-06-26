@@ -33,6 +33,21 @@ module "secret_appinsights_connection_string" {
 }
 
 # ==============================================================================
+# Locals
+# ==============================================================================
+# Single maintenance point for job IDs — add new jobs here so metric alerts
+# automatically pick them up without a separate scopes update.
+
+locals {
+  all_job_ids = [
+    module.job_matching.id,
+    module.job_cleanup.id,
+    module.job_offer_fetching.id,
+    module.job_cv_analysis.id,
+  ]
+}
+
+# ==============================================================================
 # Alerting
 # ==============================================================================
 
@@ -58,12 +73,7 @@ resource "azurerm_monitor_metric_alert" "job_execution_failed" {
   resource_group_name = data.azurerm_resource_group.rg_app.name
   # Metric alerts on Microsoft.App/jobs must target the job resources directly;
   # the CAE (managedEnvironments) does not expose job execution metrics.
-  scopes = [
-    module.job_matching.id,
-    module.job_cleanup.id,
-    module.job_offer_fetching.id,
-    module.job_cv_analysis.id,
-  ]
+  scopes = local.all_job_ids
   description = "A Container App Job execution failed."
   severity    = 1
   frequency   = "PT5M"
