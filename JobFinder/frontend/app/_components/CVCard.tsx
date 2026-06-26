@@ -188,8 +188,8 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           aria-label="Supprimer ce CV"
           onClick={() => setDeleteState("confirm")}
           className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-full bg-red-600 transition-colors hover:bg-red-400 active:bg-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
-            deleteState === "confirm" && "bg-red-800",
+            "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400",
+            deleteState === "confirm" && "border-transparent bg-red-800",
           )}
         >
           <svg
@@ -200,7 +200,10 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
             strokeWidth="1.5"
             width="14"
             height="14"
-            className="text-white"
+            className={cn(
+              "transition-colors",
+              deleteState === "confirm" ? "text-white" : "text-white/40 group-hover:text-white",
+            )}
           >
             <path
               strokeLinecap="round"
@@ -210,26 +213,13 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           </svg>
         </button>
 
-        {/* Sub-icons — cancel (X) and confirm (check), with SVG T-connector */}
+        {/* Sub-icons — cancel (X) and confirm (check) */}
         {deleteState === "confirm" && (
           <div
             ref={subIconsRef}
             className="relative flex w-20 justify-between animate-[fadeSlideDown_200ms_ease-out_both]"
           >
-            {/* T-shaped SVG connector from trash to sub-icons */}
-            <svg
-              aria-hidden="true"
-              className="absolute top-0 left-1/2 -translate-x-1/2"
-              width="80"
-              height="28"
-              style={{ overflow: "visible" }}
-            >
-              <line x1="40" y1="0" x2="40" y2="14" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
-              <path d="M40,14 Q40,24 16,24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
-              <path d="M40,14 Q40,24 64,24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
-            </svg>
-
-            {/* Spacer for SVG height */}
+            {/* Spacer that reserves height for button area */}
             <div className="h-7 w-full" />
 
             {/* Cancel */}
@@ -271,6 +261,20 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
               </svg>
             </button>
+
+            {/* Wires rendered last → paint above buttons.
+                Paths start at each button's top-centre (y=2) and curve up
+                to the trash button's left/right side (y=-14 in this coord system). */}
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none absolute left-0 top-0"
+              width="80"
+              height="28"
+              style={{ overflow: "visible" }}
+            >
+              <path d="M19,2 Q19,-8 26,-14" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+              <path d="M61,2 Q61,-8 54,-14" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeLinecap="round" />
+            </svg>
           </div>
         )}
       </div>
