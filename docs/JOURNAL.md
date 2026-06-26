@@ -2628,3 +2628,28 @@ Les blobs Azure sont dans un conteneur privé — le navigateur ne peut pas les 
 - **`has_thumbnail` au lieu d'une URL** : ne jamais exposer au frontend une URL Azure privée qu'il ne peut pas utiliser — le booléen suffit pour piloter le fetch conditionnel.
 - **Object URL** : `URL.createObjectURL` sur la réponse blob est la seule façon d'afficher un blob protégé dans un `<img>` — révocation au démontage pour éviter les fuites mémoire.
 - **`<img>` brut avec `eslint-disable`** : `next/image` ne supporte pas le schéma `blob:` — l'exception est documentée et intentionnelle.
+
+---
+
+## PR #109 — feat(frontend): library unauthenticated state and skeleton loading
+
+**Date :** 2026-06-26
+**Branche :** `feature/library-unauthenticated-state` → `dev`
+
+### Ce qui a été fait
+
+Deux corrections dans `LibrarySection.tsx` :
+
+1. **État non connecté** : quand l'utilisateur n'est pas authentifié, la section bibliothèque affichait "Aucun CV importé" (bug : `loading` passait à `false` et `cvs=[]` déclenchait la condition vide sans guard `isAuthenticated`). Désormais, un message centré avec un bouton "Se connecter" est affiché à la place.
+
+2. **Skeleton de chargement** : le texte "Chargement…" est remplacé par 3 skeleton cards animées (`animate-pulse`) qui imitent la forme d'un `CVCard`, rendant la transition visuelle immédiate lors de la connexion.
+
+### Changements
+
+- `LibrarySection.tsx` : import de `useMsal` et `loginRequest` ; ajout du guard `isAuthenticated` sur la condition "Aucun CV" ; remplacement du texte de chargement par 3 skeleton cards ; ajout du bloc état non connecté avec bouton `loginRedirect`.
+
+### Décisions techniques
+
+- La condition `{!loading && cvs.length === 0 && !error}` manquait un guard `isAuthenticated` — quand non connecté, `loading` passe à `false` immédiatement dans le `useEffect` et `cvs` reste vide, ce qui déclenchait faussement "Aucun CV importé".
+- Le skeleton est conditionné à `loading && isAuthenticated` pour ne s'afficher que pendant le vrai chargement post-connexion, pas lors de la navigation en état déconnecté.
+- Le bouton "Se connecter" dans la bibliothèque appelle `instance.loginRedirect(loginRequest)` — même flow MSAL que le bouton du header, cohérence UX.
