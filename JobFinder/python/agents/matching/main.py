@@ -105,6 +105,9 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
 
 def main() -> None:
     """Consume one offer-ready message and run matching for all CVs."""
+    from shared.telemetry import configure_telemetry
+    configure_telemetry("matching")
+
     try:
         run_migrations()
     except Exception:  # intentional: any migration error must halt the agent

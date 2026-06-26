@@ -214,6 +214,9 @@ def _update_rome_codes(user_id: str, rome_codes: list[str]) -> None:
 
 def main() -> None:
     """Consume one cv-analysis message, extract ROME codes, and dispatch offer-ready."""
+    from shared.telemetry import configure_telemetry
+    configure_telemetry("cv-analysis")
+
     try:
         run_migrations()
     except Exception:  # intentional: Alembic can raise varied errors; any migration failure must halt the agent

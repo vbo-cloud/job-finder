@@ -203,6 +203,9 @@ def _embed_pending_offers() -> int:
 
 def main() -> None:
     """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
+    from shared.telemetry import configure_telemetry
+    configure_telemetry("offer-fetching")
+
     try:
         run_migrations()
     except Exception:  # intentional: any migration error must halt the agent

@@ -31,6 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Yields:
         None: Control is yielded to FastAPI after startup completes.
     """
+    from shared.telemetry import configure_telemetry
+    configure_telemetry("webapp")
+
     try:
         run_migrations()
     except Exception:  # intentional: any migration error must halt startup

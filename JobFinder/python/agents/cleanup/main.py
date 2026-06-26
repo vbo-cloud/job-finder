@@ -65,6 +65,9 @@ def _cleanup(session: Session) -> tuple[int, int]:
 
 def main() -> None:
     """Purge stale offers and orphaned matches."""
+    from shared.telemetry import configure_telemetry
+    configure_telemetry("cleanup")
+
     try:
         run_migrations()
     except Exception:  # intentional: any migration error must halt the agent
