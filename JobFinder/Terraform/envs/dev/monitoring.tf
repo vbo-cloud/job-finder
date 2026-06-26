@@ -73,7 +73,7 @@ resource "azurerm_monitor_metric_alert" "job_execution_failed" {
   resource_group_name = data.azurerm_resource_group.rg_app.name
   # Metric alerts on Microsoft.App/jobs must target the job resources directly;
   # the CAE (managedEnvironments) does not expose job execution metrics.
-  scopes = local.all_job_ids
+  scopes      = local.all_job_ids
   description = "A Container App Job execution failed."
   severity    = 1
   frequency   = "PT5M"
