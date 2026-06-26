@@ -235,6 +235,13 @@ def main() -> None:
 
             try:
                 raw_text, user_id = _get_cv_text(cv_id)
+            except ValueError:
+                # CV was deleted between message enqueue and processing.
+                # Complete the message cleanly — no retry, no dead-letter.
+                logger.info("cv_analysis_cv_deleted_skipping", cv_id=cv_id)
+                return
+
+            try:
                 rome_codes = _extract_rome_codes(raw_text)
                 _update_rome_codes(user_id, rome_codes)
             except Exception:
