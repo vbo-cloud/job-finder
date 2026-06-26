@@ -2631,7 +2631,7 @@ Les blobs Azure sont dans un conteneur privé — le navigateur ne peut pas les 
 
 ---
 
-## PR #109 — feat(frontend): library unauthenticated state and skeleton loading
+## PR #110 — feat(frontend): library unauthenticated state and skeleton loading
 
 **Date :** 2026-06-26
 **Branche :** `feature/library-unauthenticated-state` → `dev`
