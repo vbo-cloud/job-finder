@@ -24,6 +24,10 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(false);
 
+  const handleCvDeleted = useCallback((id: string) => {
+    setCvs((prev) => prev.filter((cv) => cv.id !== id));
+  }, []);
+
   const fetchCvs = useCallback(async (): Promise<void> => {
     try {
       const { data } = await apiClient.get<CVData[]>("/cv/");
@@ -92,9 +96,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {/* Liste des CVs */}
       {cvs.length > 0 && (
-        <div className="flex gap-4 overflow-x-auto pb-4">
+        <div className="flex gap-4 overflow-x-auto pb-20">
           {cvs.map((cv) => (
-            <CVCard key={cv.id} cv={cv} />
+            <CVCard key={cv.id} cv={cv} onDeleted={handleCvDeleted} />
           ))}
         </div>
       )}
