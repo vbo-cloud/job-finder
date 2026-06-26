@@ -2653,3 +2653,40 @@ Deux corrections dans `LibrarySection.tsx` :
 - La condition `{!loading && cvs.length === 0 && !error}` manquait un guard `isAuthenticated` — quand non connecté, `loading` passe à `false` immédiatement dans le `useEffect` et `cvs` reste vide, ce qui déclenchait faussement "Aucun CV importé".
 - Le skeleton est conditionné à `loading && isAuthenticated` pour ne s'afficher que pendant le vrai chargement post-connexion, pas lors de la navigation en état déconnecté.
 - Le bouton "Se connecter" dans la bibliothèque appelle `instance.loginRedirect(loginRequest)` — même flow MSAL que le bouton du header, cohérence UX.
+
+---
+
+## PR #111 — feat: Application Insights telemetry + monitoring alerts
+
+**Date :** 2026-06-26
+**Branche :** `feature/monitoring-alerts` → `dev`
+
+### Contexte
+
+Suite à l'incident du 25 juin (KEDA arrêté 24h sans détection), deux lacunes identifiées : les agents n'envoient aucune trace à Application Insights, et aucune alerte Azure Monitor n'existe pour détecter les jobs en échec ou les messages stagnants.
+
+### Ce qui a été fait
+
+**Commit 1 — Injection Application Insights dans les agents**
+
+- `shared/telemetry.py` (nouveau) : module bootstrap OpenTelemetry — appelle `configure_azure_monitor` si `APPLICATIONINSIGHTS_CONNECTION_STRING` est présent ; no-op silencieux en dev local.
+- `requirements.txt` : ajout de `azure-monitor-opentelemetry`, `pdfplumber`, `pypdfium2`.
+- `webapp/requirements.txt` : ajout de `azure-monitor-opentelemetry`.
+- `agents/*/main.py` (5 fichiers) : `configure_telemetry("<nom-agent>")` appelé en tête de `main()` / `lifespan()` dans chacun des agents (`cv-analysis`, `matching`, `offer-fetching`, `cleanup`, `webapp`).
+- `envs/dev/container_apps.tf` : secret `appinsights-connection-string` et env var `APPLICATIONINSIGHTS_CONNECTION_STRING` ajoutés aux 4 Container App Jobs (`job_matching`, `job_cleanup`, `job_offer_fetching`, `job_cv_analysis`).
+
+**Commit 2 — Alertes Azure Monitor**
+
+- `envs/dev/monitoring.tf` : 3 alertes ajoutées :
+  - `job_execution_failed` — sévérité 1, fenêtre 15 min, déclenche dès qu'une exécution de job passe en `Failed` (détecte les crashs agents)
+  - `servicebus_deadletter` — sévérité 1, fenêtre 5 min, déclenche si `DeadletteredMessages > 0` (détecte les messages épuisés)
+  - `servicebus_active_messages_stale` — sévérité 2, fenêtre 30 min, déclenche si `ActiveMessages > 0` en minimum sur 30 min (détecte KEDA mort — l'incident du 25 juin aurait déclenché cette alerte)
+  - `azurerm_monitor_action_group` : action group email (`jf-owner`) branché sur `var.alert_email`
+- `envs/dev/variables.tf` : variable `alert_email` avec validation regex email.
+- `envs/dev/outputs.tf` : output `action_group_id`.
+
+### Décisions techniques
+
+- `configure_telemetry` est un import différé (`from shared.telemetry import ...` dans `main()`) — évite d'initialiser OpenTelemetry au chargement du module, ce qui pourrait interférer avec les tests unitaires.
+- L'alerte `stale-messages` utilise `Minimum` comme agrégation : si le minimum sur 30 min est > 0, des messages sont restés en queue tout au long de la fenêtre — distingue les pics normaux (message consommé en < 30 min) des blocages réels (KEDA mort).
+- `alert_email` sans `default` : force une valeur explicite dans `terraform.tfvars` (gitignored) — pas de risque d'envoyer des alertes à une adresse placeholder.

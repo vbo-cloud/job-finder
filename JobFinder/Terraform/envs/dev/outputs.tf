@@ -17,3 +17,8 @@ output "jumpbox_private_ip" {
   description = "Private IP of the jumpbox VM (connect via Azure Bastion)."
   value       = module.jumpbox.private_ip
 }
+
+output "action_group_id" {
+  description = "Resource ID of the owner alert action group."
+  value       = azurerm_monitor_action_group.owner.id
+}

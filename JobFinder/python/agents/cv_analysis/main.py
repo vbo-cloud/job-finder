@@ -17,6 +17,7 @@ from azure.servicebus.exceptions import ServiceBusError
 from shared.bus import receive_message, send_message
 from shared.db import get_session, run_migrations
 from shared.models import CV, UserProfile
+from shared.telemetry import configure_telemetry
 
 # ==============================================================================
 # Constants
@@ -214,6 +215,8 @@ def _update_rome_codes(user_id: str, rome_codes: list[str]) -> None:
 
 def main() -> None:
     """Consume one cv-analysis message, extract ROME codes, and dispatch offer-ready."""
+    configure_telemetry("cv-analysis")
+
     try:
         run_migrations()
     except Exception:  # intentional: Alembic can raise varied errors; any migration failure must halt the agent

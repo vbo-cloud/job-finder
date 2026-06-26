@@ -15,6 +15,7 @@ from shared.bus import receive_message, send_message
 from shared.config import MATCHING_TOP_K
 from shared.db import get_session, run_migrations
 from shared.models import Match, Offer
+from shared.telemetry import configure_telemetry
 
 OFFER_READY_QUEUE = "offer-ready"
 MATCH_READY_QUEUE = "match-ready"
@@ -105,6 +106,8 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
 
 def main() -> None:
     """Consume one offer-ready message and run matching for all CVs."""
+    configure_telemetry("matching")
+
     try:
         run_migrations()
     except Exception:  # intentional: any migration error must halt the agent

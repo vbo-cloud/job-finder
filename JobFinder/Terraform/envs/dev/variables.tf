@@ -53,6 +53,15 @@ variable "env" {
   default     = "dev"
 }
 
+variable "alert_email" {
+  description = "Email address to notify on monitoring alerts."
+  type        = string
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+\\.[^@]+$", var.alert_email))
+    error_message = "alert_email must be a valid email address."
+  }
+}
+
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000

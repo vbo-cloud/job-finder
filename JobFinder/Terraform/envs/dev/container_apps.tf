@@ -89,6 +89,10 @@ module "job_matching" {
       name  = "openai-endpoint"
       value = module.openai.endpoint
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
   env_vars = [
     {
@@ -117,6 +121,10 @@ module "job_matching" {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
     },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
   ]
 }
 
@@ -142,6 +150,10 @@ module "job_cleanup" {
       name  = "postgresql-connection-string"
       value = module.postgresql.connection_string
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
   env_vars = [
     {
@@ -151,6 +163,10 @@ module "job_cleanup" {
     {
       name  = "CLEANUP_OFFER_MAX_AGE_DAYS"
       value = "60"
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }
@@ -191,6 +207,10 @@ module "job_offer_fetching" {
       name  = "ft-client-secret"
       value = local.ft_client_secret
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
   env_vars = [
     {
@@ -222,6 +242,10 @@ module "job_offer_fetching" {
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }
@@ -256,6 +280,10 @@ module "job_cv_analysis" {
       name  = "openai-api-key"
       value = local.openai_api_key
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
   env_vars = [
     {
@@ -281,6 +309,10 @@ module "job_cv_analysis" {
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }
