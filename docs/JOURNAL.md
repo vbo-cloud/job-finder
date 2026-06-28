@@ -2920,3 +2920,23 @@ Décision : basculer sur l'authentification par SAS connection string pour KEDA 
 ### Décision technique
 
 La connexion SAS n'affecte que le scaler KEDA (lecture du message count pour trigger). Les agents Python (`bus.py`) utilisent toujours `DefaultAzureCredential` → UAMI → `Azure Service Bus Data Owner` pour lire/compléter les messages. Les deux mécanismes d'auth sont indépendants.
+
+---
+
+## PR #121 — feat(matching): switch from top-K to score threshold matching
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Le job matching gardait les 20 meilleures offres par CV (`MATCHING_TOP_K = 20`), indépendamment de leur pertinence réelle. Un CV spécialisé pouvait se retrouver avec 20 matches dont la plupart sont sémantiquement éloignés.
+
+### Ce qui a été fait
+
+- `shared/config.py` : remplacement de `MATCHING_TOP_K` par `MATCHING_SCORE_THRESHOLD` (float, défaut `0.8`, configurable via `MATCHING_SCORE_THRESHOLD` env var).
+- `agents/matching/main.py` : réécriture de `_get_all_matches` — suppression de la window function `row_number()`, ajout d'un filtre `WHERE score >= threshold`. La requête retourne tous les matches dont la similarité cosinus est supérieure au seuil, sans limite de nombre.
+- `envs/dev/container_apps.tf` : remplacement de la variable d'env `MATCHING_TOP_K = "20"` par `MATCHING_SCORE_THRESHOLD = "0.8"`.
+
+### Décision technique
+
+Un seuil de similarité cosinus à 0.8 signifie que le CV et l'offre partagent un champ sémantique très proche (80% de similarité). En pratique avec `text-embedding-3-small`, les bons matches métier se situent entre 0.75 et 0.90 — 0.8 est sélectif sans être trop restrictif. La valeur est configurable via env var pour ajuster sans redéploiement.

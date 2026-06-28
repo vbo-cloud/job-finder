@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import receive_message, send_message
-from shared.config import MATCHING_TOP_K
+from shared.config import MATCHING_SCORE_THRESHOLD
 from shared.db import get_session, run_migrations
 from shared.models import Match, Offer
 from shared.telemetry import configure_telemetry
@@ -38,26 +38,19 @@ def _get_all_matches(session: Session) -> list[dict]:
     Raises:
         SQLAlchemyError: If the database query fails.
     """
-    logger.info("matching_batch_query_started")
+    logger.info("matching_batch_query_started", threshold=MATCHING_SCORE_THRESHOLD)
     result = session.execute(
         text("""
-            SELECT cv_id, offer_id, score
-            FROM (
-                SELECT
-                    c.id AS cv_id,
-                    o.id AS offer_id,
-                    (1 - (o.embedding <=> c.embedding)) AS score,
-                    row_number() OVER (
-                        PARTITION BY c.id
-                        ORDER BY o.embedding <=> c.embedding
-                    ) AS rn
-                FROM cvs c
-                JOIN offers o ON o.embedding IS NOT NULL
-                WHERE c.embedding IS NOT NULL
-            ) ranked
-            WHERE rn <= :top_k
+            SELECT
+                c.id AS cv_id,
+                o.id AS offer_id,
+                (1 - (o.embedding <=> c.embedding)) AS score
+            FROM cvs c
+            JOIN offers o ON o.embedding IS NOT NULL
+            WHERE c.embedding IS NOT NULL
+              AND (1 - (o.embedding <=> c.embedding)) >= :threshold
         """),
-        {"top_k": MATCHING_TOP_K},
+        {"threshold": MATCHING_SCORE_THRESHOLD},
     )
 
     return [
