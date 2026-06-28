@@ -114,8 +114,8 @@ module "job_matching" {
       secret_name = "openai-endpoint"
     },
     {
-      name  = "MATCHING_TOP_K"
-      value = "20"
+      name  = "MATCHING_SCORE_THRESHOLD"
+      value = "0.8"
     },
     {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
