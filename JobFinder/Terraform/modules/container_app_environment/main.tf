@@ -18,12 +18,15 @@ resource "azurerm_container_app_environment" "this" {
     minimum_count         = 0
   }
 
-  tags = {
-    environment = var.environment
-    project     = var.project
-    owner       = var.owner
-    protect     = "true"
-  }
+  tags = merge(
+    {
+      environment = var.environment
+      project     = var.project
+      owner       = var.owner
+      protect     = "true"
+    },
+    var.additional_tags
+  )
 
   lifecycle {
     prevent_destroy       = true

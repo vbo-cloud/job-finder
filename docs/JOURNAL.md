@@ -2817,3 +2817,45 @@ L'alerte `job_execution_failed` passait `scopes = local.all_job_ids` (liste des 
 ### Décision technique
 
 Azure n'expose pas les métriques d'exécution des Container App Jobs au niveau du CAE (`managedEnvironments`) ni en mode multi-ressources — chaque ressource `Microsoft.App/jobs` est scopée individuellement. Le `for_each` sur la map garantit qu'un nouveau job ajouté dans `locals.all_job_ids` reçoit automatiquement sa propre alerte sans modification supplémentaire.
+
+---
+
+## PR #116 — fix(infra): force KEDA reset on job-cv-analysis via tag
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Tentative de fix isolée pour le scaler `azure-servicebus` du job `cv-analysis` qui ne se déclenchait plus depuis le 25 juin. L'hypothèse était qu'une recréation propre via Terraform (plutôt que depuis le portail) permettrait au contrôleur KEDA de ré-enregistrer le scaler.
+
+### Ce qui a été fait
+
+- `modules/container_app_job/variables.tf` : ajout de la variable `additional_tags` (map, default `{}`).
+- `modules/container_app_job/main.tf` : tags statiques convertis en `merge()` pour intégrer `additional_tags`.
+- `envs/dev/container_apps.tf` : `additional_tags = { keda_reset = "2026-06-28" }` ajouté sur `module.job_cv_analysis`, forçant une mise à jour Terraform du job.
+
+### Résultat
+
+La recréation du job n'a pas suffi — le problème est systémique au niveau du contrôleur KEDA dans le CAE (les deux scalers `azure-servicebus` sont morts : `cv-analysis` et `matching`). Fix complet dans PR #117.
+
+---
+
+## PR #117 — fix(infra): force KEDA controller reset via CAE tag
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Investigation KEDA complète : les deux jobs queue-triggered (`cv-analysis` et `matching`) ont une Execution History vide depuis le 25 juin. Le scaler cron (`fetch`) fonctionne normalement. Tous les éléments vérifiés sont corrects : config KEDA (`clientId`, `tenantId`), rôle IAM `Azure Service Bus Data Owner` sur l'UAMI, réseau (pas de NSG, Service Bus `defaultAction: Allow`), état du CAE (`Succeeded`, KEDA 2.18.1).
+
+La cause probable est un token Azure AD expiré ou invalidé dans le contrôleur KEDA, suite aux modifications de role assignments UAMI du 25 juin (commit `8b2af55`). KEDA n'a pas su renouveler ce token automatiquement. Le scaler cron n'a pas besoin de token Service Bus — il n'est pas affecté.
+
+### Ce qui a été fait
+
+- `modules/container_app_environment/variables.tf` : ajout de la variable `additional_tags` (map, default `{}`).
+- `modules/container_app_environment/main.tf` : tags statiques convertis en `merge()` pour intégrer `additional_tags`.
+- `envs/dev/container_apps.tf` : `additional_tags = { keda_controller_reset = "2026-06-28" }` ajouté sur `module.container_app_environment`, forçant une mise à jour Terraform du CAE et un redémarrage du contrôleur KEDA.
+
+### Décision technique
+
+Une mise à jour in-place du CAE (tag seul, pas de recréation) provoque un redémarrage du contrôleur KEDA managé par Azure. Cela force la réacquisition d'un token Azure AD frais pour le scaler `azure-servicebus`, sans interruption du scaler cron ni des jobs en cours. La variable `additional_tags` suit le même pattern que PR #116 (`container_app_job`), étendu au module `container_app_environment`.
