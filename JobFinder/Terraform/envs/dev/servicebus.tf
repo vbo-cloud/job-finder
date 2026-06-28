@@ -24,5 +24,13 @@ module "servicebus" {
   ]
 }
 
-# Connection string intentionally not stored in Key Vault —
-# agents authenticate via Managed Identity (Azure Service Bus Data Owner on UAMI).
+module "secret_servicebus_connection_string" {
+  source       = "../../modules/keyvault_secret"
+  name         = "servicebus-connection-string"
+  value        = module.servicebus.primary_connection_string
+  key_vault_id = module.keyvault.id
+  content_type = "text/plain"
+  environment  = var.env
+  project      = var.project
+  owner        = var.owner
+}
