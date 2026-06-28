@@ -2777,3 +2777,43 @@ KEDA 2.18.1 a introduit un changement de comportement : pour le scaler `azure-se
 ### Décision technique
 
 Seuls les jobs queue-triggered reçoivent `uami_tenant_id` — les jobs timer-triggered (`job_cleanup`, `job_offer_fetching`) n'utilisent pas de scaler KEDA Service Bus et n'ont pas besoin de cette valeur.
+
+### Correction post-review (non bloquant)
+
+Ajout d'une validation croisée dans `modules/container_app_job/variables.tf` pour interdire le passage de `uami_client_id` sans `uami_tenant_id` (ou inversement) :
+
+```hcl
+validation {
+  condition     = (var.uami_client_id == null) == (var.uami_tenant_id == null)
+  error_message = "uami_client_id and uami_tenant_id must both be set or both be null."
+}
+```
+
+Sans ce garde, un caller pouvait passer `uami_client_id` sans `uami_tenant_id`, ce qui aurait injecté silencieusement `tenantId = null` dans les métadonnées KEDA. La validation exploite la cross-variable validation introduite en Terraform 1.9 (supportée par `hashicorp/setup-terraform@v4` sans version épinglée, qui installe le latest stable ≥ 1.9).
+
+---
+
+## PR #115 — fix(infra): one metric alert per Container App Job
+
+**Date :** 2026-06-28
+
+### Contexte
+
+L'apply de PR #114 a échoué avec :
+
+```
+Error: creating or updating Monitor Metric Alert "alert-jf-dev-job-execution-failed":
+unexpected status 400 — "Alerts are currently not supported with multi resource level
+for microsoft.app/jobs."
+```
+
+L'alerte `job_execution_failed` passait `scopes = local.all_job_ids` (liste des 4 IDs de jobs), mais Azure ne supporte pas les metric alerts multi-ressources pour `Microsoft.App/jobs`.
+
+### Ce qui a été fait
+
+- `envs/dev/monitoring.tf` : `locals.all_job_ids` converti de `list(string)` en `map(string)` (clé = nom logique du job, valeur = resource ID).
+- `azurerm_monitor_metric_alert.job_execution_failed` : ajout de `for_each = local.all_job_ids` — une alerte distincte par job (`scopes = [each.value]`), nommée `alert-jf-dev-{each.key}-failed`.
+
+### Décision technique
+
+Azure n'expose pas les métriques d'exécution des Container App Jobs au niveau du CAE (`managedEnvironments`) ni en mode multi-ressources — chaque ressource `Microsoft.App/jobs` est scopée individuellement. Le `for_each` sur la map garantit qu'un nouveau job ajouté dans `locals.all_job_ids` reçoit automatiquement sa propre alerte sans modification supplémentaire.
