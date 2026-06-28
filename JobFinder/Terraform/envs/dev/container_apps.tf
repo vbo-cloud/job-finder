@@ -115,7 +115,7 @@ module "job_matching" {
     },
     {
       name  = "MATCHING_SCORE_THRESHOLD"
-      value = "0.8"
+      value = "0.6"
     },
     {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
