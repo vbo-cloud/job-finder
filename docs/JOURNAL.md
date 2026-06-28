@@ -2852,10 +2852,30 @@ La cause probable est un token Azure AD expiré ou invalidé dans le contrôleur
 
 ### Ce qui a été fait
 
-- `modules/container_app_environment/variables.tf` : ajout de la variable `additional_tags` (map, default `{}`).
+- `modules/container_app_environment/variables.tf` : ajout de la variable `additional_tags` (`map(string)`, default `{}`).
 - `modules/container_app_environment/main.tf` : tags statiques convertis en `merge()` pour intégrer `additional_tags`.
-- `envs/dev/container_apps.tf` : `additional_tags = { keda_controller_reset = "2026-06-28" }` ajouté sur `module.container_app_environment`, forçant une mise à jour Terraform du CAE et un redémarrage du contrôleur KEDA.
+- `envs/dev/container_apps.tf` : `additional_tags = { keda_controller_reset = "2026-06-28" }` sur `module.container_app_environment`, forçant une mise à jour du CAE et un redémarrage du contrôleur KEDA.
 
 ### Décision technique
 
-Une mise à jour in-place du CAE (tag seul, pas de recréation) provoque un redémarrage du contrôleur KEDA managé par Azure. Cela force la réacquisition d'un token Azure AD frais pour le scaler `azure-servicebus`, sans interruption du scaler cron ni des jobs en cours. La variable `additional_tags` suit le même pattern que PR #116 (`container_app_job`), étendu au module `container_app_environment`.
+Une mise à jour in-place du CAE (tag seul, pas de recréation) provoque un redémarrage du contrôleur KEDA managé par Azure. Cela force la réacquisition d'un token Azure AD frais pour le scaler `azure-servicebus`, sans interruption du scaler cron ni des jobs en cours.
+
+---
+
+## PR #118 — feat(infra): add Diagnostic Settings on CAE for KEDA logs
+
+**Date :** 2026-06-28
+
+### Contexte
+
+L'investigation KEDA (PR #117) a révélé que les tables `ContainerAppConsoleLogs` et `ContainerAppSystemLogs` dans Log Analytics étaient vides faute de Diagnostic Settings configurés sur le CAE. Sans ces logs, les échecs du contrôleur KEDA sont invisibles — les pannes futures seront impossibles à diagnostiquer.
+
+### Ce qui a été fait
+
+- `envs/dev/monitoring.tf` : ajout d'une ressource `azurerm_monitor_diagnostic_setting` ciblant le CAE (`module.container_app_environment.id`), envoyant vers le Log Analytics Workspace existant (`module.application_insights.workspace_id`).
+  - Catégorie `ContainerAppConsoleLogs` : stdout/stderr des containers agents.
+  - Catégorie `ContainerAppSystemLogs` : événements du contrôleur KEDA, provisioning, erreurs de scaler.
+
+### Décision technique
+
+Les Diagnostic Settings sont ajoutés directement dans `monitoring.tf` (pas dans le module `container_app_environment`) car ils sont une préoccupation d'observabilité de l'environnement applicatif, pas une propriété intrinsèque du CAE. Le workspace cible est le même que celui d'Application Insights — un seul workspace Log Analytics par environnement, cohérent avec l'architecture existante.
