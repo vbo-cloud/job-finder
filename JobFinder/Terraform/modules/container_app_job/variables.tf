@@ -56,6 +56,11 @@ variable "uami_client_id" {
     condition     = var.uami_client_id == null || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.uami_client_id))
     error_message = "uami_client_id must be a valid UUID (e.g. '00000000-0000-0000-0000-000000000000')."
   }
+
+  validation {
+    condition     = (var.uami_client_id == null) == (var.uami_tenant_id == null)
+    error_message = "uami_client_id and uami_tenant_id must both be set or both be null."
+  }
 }
 
 variable "uami_tenant_id" {
