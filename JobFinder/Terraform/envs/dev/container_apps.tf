@@ -18,6 +18,7 @@ module "container_app_environment" {
   environment                = var.env
   project                    = var.project
   owner                      = var.owner
+  additional_tags            = { keda_controller_reset = "2026-06-28" }
 }
 
 # ==============================================================================
