@@ -2746,3 +2746,34 @@ L'apply de la PR #112 a échoué avec une erreur 400 : `Couldn't find a metric n
 ### Décision technique
 
 Les métriques d'exécution des Container App Jobs ne sont pas exposées sur la ressource `managedEnvironments` — elles sont publiées sur chaque ressource `Microsoft.App/jobs` individuellement. L'alerte doit donc lister les 4 jobs comme scopes et cibler le namespace `Microsoft.App/jobs`. La dimension `state` avec la valeur `"failed"` est confirmée via l'API Azure (`az monitor metrics list-definitions`).
+
+---
+
+## PR #114 — fix: add tenantId to KEDA azure-servicebus scaler metadata
+
+**Date :** 2026-06-26
+
+### Contexte
+
+Suite à l'apply de la PR #112 (ajout du secret Application Insights), les Container App Jobs ont été recréés, ce qui a forcé KEDA à recréer les ScaledJobs. Depuis cet apply, KEDA 2.18.1 échoue en boucle avec l'erreur :
+
+```
+error parsing azure service bus metadata: no connection setting given
+Failed to ensure ScaledJob is correctly created
+```
+
+Les messages `cv-analysis` et `offer-ready` s'accumulent sans être consommés.
+
+### Cause racine
+
+KEDA 2.18.1 a introduit un changement de comportement : pour le scaler `azure-servicebus` en mode workload identity (`clientId` dans les métadonnées), le champ `tenantId` est désormais **obligatoire**. Sans lui, KEDA ne peut pas résoudre l'identité et signale l'absence de connection string.
+
+### Ce qui a été fait
+
+- `modules/container_app_job/variables.tf` : ajout de la variable `uami_tenant_id` (nullable, validation UUID identique à `uami_client_id`).
+- `modules/container_app_job/main.tf` : `tenantId = var.uami_tenant_id` ajouté dans le merge de métadonnées KEDA, au même niveau que `clientId`, conditionné à `uami_client_id != null`.
+- `envs/dev/container_apps.tf` : `uami_tenant_id = data.azurerm_user_assigned_identity.caj.tenant_id` ajouté sur les deux jobs queue-triggered (`job_matching`, `job_cv_analysis`).
+
+### Décision technique
+
+Seuls les jobs queue-triggered reçoivent `uami_tenant_id` — les jobs timer-triggered (`job_cleanup`, `job_offer_fetching`) n'utilisent pas de scaler KEDA Service Bus et n'ont pas besoin de cette valeur.
