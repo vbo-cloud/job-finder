@@ -135,6 +135,27 @@ resource "azurerm_monitor_metric_alert" "servicebus_deadletter" {
   }
 }
 
+# ==============================================================================
+# Diagnostic Settings — Container App Environment
+# ==============================================================================
+# Enables ContainerAppConsoleLogs (agent stdout/stderr) and
+# ContainerAppSystemLogs (KEDA controller events, provisioning) on the CAE.
+# Without these, Log Analytics tables are empty and KEDA failures are invisible.
+
+resource "azurerm_monitor_diagnostic_setting" "cae" {
+  name                       = "diag-${var.project}-${var.env}-${var.location_short}-cae"
+  target_resource_id         = module.container_app_environment.id
+  log_analytics_workspace_id = module.application_insights.workspace_id
+
+  enabled_log {
+    category = "ContainerAppConsoleLogs"
+  }
+
+  enabled_log {
+    category = "ContainerAppSystemLogs"
+  }
+}
+
 resource "azurerm_monitor_metric_alert" "servicebus_active_messages_stale" {
   name                = "alert-${var.project}-${var.env}-sb-stale-messages"
   resource_group_name = data.azurerm_resource_group.rg_app.name
