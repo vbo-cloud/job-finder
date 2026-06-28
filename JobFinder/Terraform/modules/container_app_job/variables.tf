@@ -203,3 +203,9 @@ variable "owner" {
   type        = string
   description = "Owner email address applied to resource tags."
 }
+
+variable "additional_tags" {
+  type        = map(string)
+  default     = {}
+  description = "Additional tags merged into the resource tags. Useful for one-off operational markers (e.g. keda_reset)."
+}
