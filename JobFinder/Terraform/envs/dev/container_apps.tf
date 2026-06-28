@@ -6,6 +6,8 @@
 # scaling, trigger, and lifecycle.
 # Naming: job names use {type}-{project}-{env}-{region}-{suffix} pattern.
 # Container App Job names are capped at 32 characters — the suffix is kept short accordingly.
+# Force-recreated 2026-06-28: CAE, webapp, and all jobs deleted manually to reset
+# the stuck KEDA azure-servicebus controller. Terraform recreates from this config.
 
 module "container_app_environment" {
   source = "../../modules/container_app_environment"

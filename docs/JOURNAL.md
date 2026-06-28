@@ -2879,3 +2879,23 @@ L'investigation KEDA (PR #117) a révélé que les tables `ContainerAppConsoleLo
 ### Décision technique
 
 Les Diagnostic Settings sont ajoutés directement dans `monitoring.tf` (pas dans le module `container_app_environment`) car ils sont une préoccupation d'observabilité de l'environnement applicatif, pas une propriété intrinsèque du CAE. Le workspace cible est le même que celui d'Application Insights — un seul workspace Log Analytics par environnement, cohérent avec l'architecture existante.
+
+---
+
+## PR #119 — fix(infra): force-recreate CAE, webapp and jobs after KEDA hard reset
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Après l'échec de toutes les tentatives de redémarrage du contrôleur KEDA (tag CAE, tag jobs, peer-to-peer encryption toggle), le CAE, le webapp (`app-jf-dev-frc`) et les 4 Container App Jobs ont été supprimés manuellement via CLI pour forcer une recréation propre du contrôleur KEDA.
+
+Toutes les ressources supprimées sont gérées par Terraform. Aucune donnée persistante n'est stockée dans ces ressources (données dans PostgreSQL, Service Bus, Storage — intacts).
+
+### Ce qui a été fait
+
+Ajout d'un commentaire dans `envs/dev/container_apps.tf` pour déclencher le `terraform apply` via CI/CD. Terraform détecte les ressources absentes lors du state refresh et les recrée depuis cette configuration.
+
+### Décision technique
+
+La suppression manuelle est hors Terraform (`prevent_destroy = true` ne bloque que les destroy Terraform, pas la recréation après suppression externe). Un seul apply CI/CD suffit à tout remettre en place — CAE, KEDA, webapp, 4 jobs — avec un contrôleur KEDA vierge.
