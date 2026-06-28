@@ -2899,3 +2899,24 @@ Ajout d'un commentaire dans `envs/dev/container_apps.tf` pour déclencher le `te
 ### Décision technique
 
 La suppression manuelle est hors Terraform (`prevent_destroy = true` ne bloque que les destroy Terraform, pas la recréation après suppression externe). Un seul apply CI/CD suffit à tout remettre en place — CAE, KEDA, webapp, 4 jobs — avec un contrôleur KEDA vierge.
+
+---
+
+## PR #120 — fix(infra): switch KEDA Service Bus auth from workload identity to SAS connection string
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Après recréation complète du CAE (PR #119), le scaler `azure-servicebus` KEDA ne déclenche toujours pas les jobs `cv-analysis` et `matching`. La workload identity (UAMI `id-jf-dev-frc-caj`) est correctement configurée mais le contrôleur KEDA dans le CAE managé ne parvient pas à acquérir de token valide — comportement identifié comme un bug connu de la plateforme Azure Container Apps (issue #1344 microsoft/azure-container-apps, issue #5977 kedacore/keda).
+
+Décision : basculer sur l'authentification par SAS connection string pour KEDA uniquement. Les agents Python continuent d'utiliser `DefaultAzureCredential` (UAMI) pour leurs propres appels Service Bus.
+
+### Ce qui a été fait
+
+- `envs/dev/servicebus.tf` : ajout d'un secret Key Vault `servicebus-connection-string` via `module.secret_servicebus_connection_string`, pointant vers `module.servicebus.primary_connection_string`.
+- `envs/dev/container_apps.tf` : suppression de `uami_client_id` et `uami_tenant_id` sur `job_matching` et `job_cv_analysis`. Ajout du secret `servicebus-connection-string` dans la liste `secrets` des deux jobs. Le module bascule automatiquement sur le bloc `authentication { secret_name = "servicebus-connection-string" }` quand `uami_client_id = null`.
+
+### Décision technique
+
+La connexion SAS n'affecte que le scaler KEDA (lecture du message count pour trigger). Les agents Python (`bus.py`) utilisent toujours `DefaultAzureCredential` → UAMI → `Azure Service Bus Data Owner` pour lire/compléter les messages. Les deux mécanismes d'auth sont indépendants.

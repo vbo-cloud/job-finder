@@ -71,8 +71,6 @@ module "job_matching" {
   trigger_type         = "queue"
   queue_name           = "offer-ready"
   servicebus_namespace = module.servicebus.name
-  uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
-  uami_tenant_id       = data.azurerm_user_assigned_identity.caj.tenant_id
   image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
   project              = var.project
@@ -96,6 +94,10 @@ module "job_matching" {
     {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
     },
   ]
   env_vars = [
@@ -267,8 +269,6 @@ module "job_cv_analysis" {
   trigger_type         = "queue"
   queue_name           = "cv-analysis"
   servicebus_namespace = module.servicebus.name
-  uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
-  uami_tenant_id       = data.azurerm_user_assigned_identity.caj.tenant_id
   image                = "${module.container_registry.login_server}/agents/cv-analysis:latest"
   environment          = var.env
   project              = var.project
@@ -289,6 +289,10 @@ module "job_cv_analysis" {
     {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
     },
   ]
   env_vars = [
