@@ -3140,3 +3140,34 @@ Suite à la mise en place de la grille 5 colonnes (PR #127), deux problèmes res
 
 **Retry au rechargement de page (fix MSAL) :**
 - `fetchCvs` dans `LibrarySection.tsx` : en cas d'échec du premier appel, une tentative est automatiquement effectuée après 1,5 s. Couvre les race conditions transitoires de `acquireTokenSilent` qui peuvent survenir au premier chargement quand MSAL hydrate son cache de tokens depuis le stockage navigateur — ce qui empêchait d'accéder à la bibliothèque lors d'un rechargement avec un CV en cours d'analyse.
+
+---
+
+## PR #131 — fix(frontend): replace hardcoded colors with theme tokens + enforce color convention
+
+**Date :** 2026-06-30
+**Branche :** `feature/light-theme-colors` → `dev`
+
+### Contexte
+
+Après l'introduction du système de thème centralisé (PR #129), plusieurs composants de la bibliothèque conservaient des couleurs hardcodées incompatibles avec le thème clair : `CVCardPlaceholder` avait une bordure `border-white/[0.07]` invisible sur fond blanc, `CVCardOptimistic` utilisait six valeurs `white/*` et `black/*` codées en dur, et `CVCard` utilisait `bg-black/40` directement.
+
+### Ce qui a été fait
+
+**Nouveau token `--bg-scrim` :**
+- `lib/theme/types.ts`, `dark.ts`, `light.ts` : ajout du token `--bg-scrim` (`rgba(0,0,0,0.40)` dans les deux thèmes) — overlay sombre pour assombrir un thumbnail pendant le traitement, intentionnellement identique en dark et light.
+- `tailwind.config.ts` : enregistrement de `scrim: "var(--bg-scrim)"` dans `backgroundColor`.
+- `app/globals.css` : déclaration du défaut SSR.
+
+**Migration des couleurs :**
+- `CVCardPlaceholder.tsx` : `border-white/[0.07]` → `border-subtle`.
+- `CVCardOptimistic.tsx` : 6 couleurs migrées — `border-white/10` → `border-subtle`, `bg-white/[0.04]` → `bg-card`, `bg-white/[0.05]` → `bg-overlay`, `bg-black/40` → `bg-scrim`, `text-white/35` → `text-muted`, `text-white/25` → `text-hint`.
+- `CVCard.tsx` : `bg-black/40` → `bg-scrim`.
+
+**Conventions :**
+- `docs/conventions-frontend.md` : nouvelle section "Couleurs — système de thème obligatoire" — règle interdisant les couleurs hardcodées, protocole en 4 étapes pour ajouter un token, exception `OrbitAnimation.tsx`.
+
+### Décisions techniques
+
+- `--bg-scrim` à `rgba(0,0,0,0.40)` dans les deux thèmes : l'overlay sert à assombrir une photo de thumbnail pour que le spinner soit lisible — la couleur sombre est sémantiquement correcte dans les deux thèmes (on veut toujours assombrir la photo, pas éclaircir).
+- Les tokens `text-muted` et `text-hint` correspondent exactement aux valeurs `white/35` et `white/25` du thème sombre — aucune perte de fidélité visuelle.
