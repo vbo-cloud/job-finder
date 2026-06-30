@@ -3058,7 +3058,11 @@ Le `gap-y-2` (8 px) est volontairement serré : les contrôles de suppression (f
 
 ---
 
-## PR #128 — feat(frontend): système de thème centralisé et toggle dark/light
+## PR #128 — error : cancelled
+
+---
+
+## PR #129 — feat(frontend): système de thème centralisé et toggle dark/light
 
 **Date :** 2026-06-30
 
@@ -3095,3 +3099,44 @@ Toutes les couleurs de l'application étaient hardcodées dans les composants : 
 - **Thème dark baked dans `globals.css`** : évite le FOUC au premier rendu SSR. Le hook lit `localStorage` après le mount client — un léger flash peut apparaître si l'utilisateur avait choisi le thème clair et recharge la page, cas rare et acceptable pour un portfolio.
 - **`applyTheme` sans ThemeProvider React** : les CSS vars sont globales et réactives nativement. Un contexte React forcerait tous les composants consommateurs à être `"use client"`, ce qui va à l'encontre de la convention de minimiser les client components.
 
+---
+
+## PR #130 — feat(frontend): grille 10 emplacements, accès bibliothèque conditionnel
+
+**Date :** 2026-06-30
+
+### Contexte
+
+Suite à la mise en place de la grille 5 colonnes (PR #127), deux problèmes restaient ouverts :
+1. La grille n'affichait que les CVs présents — les emplacements vides n'étaient pas matérialisés, rendant la capacité maximale (10 CVs) invisible.
+2. La section bibliothèque était toujours accessible via le scroll, même sans CV enregistré et sans être connecté, ce qui donnait accès à un état vide sans utilité.
+
+### Ce qui a été fait
+
+**Dimensionnement des cartes :**
+- `CVCard.tsx` : largeur élargie de `w-36` à `w-44`.
+- `CVCardSkeleton.tsx` : restructuré pour correspondre exactement à `CVCard` — même largeur `w-44`, même wrapper externe `flex flex-col`, 3 barres animées (au lieu de 2) calquées sur les 3 lignes de texte de la carte réelle, spacer `h-[42px]` reproduisant l'espace des contrôles de suppression toujours présents dans le DOM.
+
+**Emplacements libres :**
+- Nouveau composant `CVCardPlaceholder.tsx` : même structure que `CVCard` (même wrapper, même padding, même `aspect-[3/4]`) mais contenu invisible — simple encadré en pointillés signalant un emplacement libre.
+- `LibrarySection.tsx` : la grille affiche toujours `MAX_CVS = 10` cellules : les CVs réels suivis des placeholders pour les emplacements libres (`MAX_CVS - cvs.length`).
+
+**Accès conditionnel à la bibliothèque :**
+- `LibrarySection.tsx` : calcule `accessible = isAuthenticated && cvs.length > 0`. Quand non accessible, la section est rendue `hidden` (reste montée pour continuer à fetcher et notifier) ; quand accessible, elle devient un snap point (`snap-start`). Nouveau prop `onAccessibilityChange` pour remonter l'état au parent. Dead code supprimé : bloc "non connecté", message "Aucun CV importé", import `useMsal`.
+- `HomeClient.tsx` : maintient l'état `libraryAccessible`, le passe à `UploadSection`, reçoit les changements depuis `LibrarySection`.
+- `UploadSection.tsx` : le label `BIBLIOTHÈQUE` et la flèche animée ne s'affichent que lorsque `libraryAccessible` est `true`.
+
+### Décisions techniques
+
+- `accessible = isAuthenticated && cvs.length > 0` sans `!loading` : évite que la section disparaisse brièvement pendant les re-fetches déclenchés par un upload. La section reste visible tant qu'au moins un CV est connu, même si le chargement est en cours.
+- `hidden` plutôt que retrait du DOM : la section reste montée pour continuer à fetcher en arrière-plan et appeler `onAccessibilityChange` dès que des CVs apparaissent — notamment lors du premier upload depuis `UploadSection`.
+- Spacer `h-[42px]` dans `CVCardSkeleton` : les contrôles de suppression de `CVCard` (`h-3.5` fil + `h-7` bouton poubelle) sont toujours présents dans le DOM avec `opacity-0`, ajoutant 42 px à la hauteur du wrapper. Sans ce spacer, skeleton et carte chargée avaient des hauteurs différentes, provoquant un saut de layout au passage de l'un à l'autre.
+
+**Apparition instantanée du CV après animation (carte optimiste) :**
+- `UploadSection.tsx` : la révocation de l'objectURL est différée — au lieu d'être faite dans `handleThumbnailReady`, elle est transférée au parent via le nouveau prop `onAnimationComplete(thumbnailUrl)` appelé dans `handleDoneComplete`. L'ownership de l'URL passe à `HomeClient`.
+- `HomeClient.tsx` : maintient `optimisticUpload { thumbnailUrl, cvId }`. Un `ref` (`uploadedCvIdRef`) capture le `cv_id` retourné par `POST /cv/upload` pour gérer les deux ordres possibles : animation terminée avant la réponse HTTP, ou réponse HTTP reçue avant la fin de l'animation.
+- `LibrarySection.tsx` : quand `optimisticUpload` est défini, affiche immédiatement `CVCardOptimistic` en première position, rendant la bibliothèque accessible sans attendre le réseau. L'entrée optimiste est consommée (URL révoquée, état effacé) dès que le vrai CV apparaît dans la liste (matching par `cv_id`).
+- Nouveau composant `CVCardOptimistic.tsx` : carte identique à `CVCard` (mêmes dimensions `w-44`, `aspect-[3/4]`, spacer `h-[42px]`) avec l'objectURL local comme miniature, overlay `bg-black/40`, spinner SVG, et texte "Analyse en cours…".
+
+**Retry au rechargement de page (fix MSAL) :**
+- `fetchCvs` dans `LibrarySection.tsx` : en cas d'échec du premier appel, une tentative est automatiquement effectuée après 1,5 s. Couvre les race conditions transitoires de `acquireTokenSilent` qui peuvent survenir au premier chargement quand MSAL hydrate son cache de tokens depuis le stockage navigateur — ce qui empêchait d'accéder à la bibliothèque lors d'un rechargement avec un CV en cours d'analyse.

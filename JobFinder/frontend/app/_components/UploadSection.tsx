@@ -15,10 +15,12 @@ type AnimState = "idle" | "uploaded" | "done";
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 interface Props {
-  onUploadComplete?: () => void;
+  onUploadComplete?: (cvId: string) => void;
+  onAnimationComplete?: (thumbnailUrl: string) => void;
+  libraryAccessible?: boolean;
 }
 
-export default function UploadSection({ onUploadComplete }: Props) {
+export default function UploadSection({ onUploadComplete, onAnimationComplete, libraryAccessible = false }: Props) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -46,26 +48,27 @@ export default function UploadSection({ onUploadComplete }: Props) {
       // Upload runs in background — done state driven by onThumbnailReady, not the network.
       // No .finally() revoke here: pdfjs must read the URL first (race condition fix).
       apiClient
-        .post<void>("/cv/upload", formData)
-        .then(() => { onUploadComplete?.(); })
+        .post<{ cv_id: string }>("/cv/upload", formData)
+        .then((res) => { onUploadComplete?.(res.data.cv_id); })
         .catch(() => { /* silent — library card shows regardless */ });
     },
     [isAuthenticated, instance, onUploadComplete],
   );
 
   const handleThumbnailReady = useCallback(() => {
-    // pdfjs has finished reading the objectUrl — safe to revoke now
-    if (pendingRevokeRef.current) {
-      URL.revokeObjectURL(pendingRevokeRef.current);
-      pendingRevokeRef.current = null;
-    }
+    // URL revocation is deferred to handleDoneComplete so the parent can
+    // use it as an optimistic thumbnail in the library.
     setAnimState("done");
   }, []);
 
   const handleDoneComplete = useCallback(() => {
+    if (pendingRevokeRef.current) {
+      onAnimationComplete?.(pendingRevokeRef.current);
+      pendingRevokeRef.current = null; // ownership transferred to parent
+    }
     setAnimState("idle");
     setThumbnailUrl(null);
-  }, []);
+  }, [onAnimationComplete]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -134,10 +137,12 @@ export default function UploadSection({ onUploadComplete }: Props) {
         </p>
       )}
 
-      <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-        <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
-        <span className="animate-bounce text-sm text-hint">⌄</span>
-      </div>
+      {libraryAccessible && (
+        <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+          <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
+          <span className="animate-bounce text-sm text-hint">⌄</span>
+        </div>
+      )}
     </section>
   );
 }
