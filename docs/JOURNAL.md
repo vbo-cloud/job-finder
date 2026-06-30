@@ -2964,3 +2964,25 @@ Deux changements dans `LibrarySection.tsx` :
 ### Décision technique
 
 Le polling par intervalle (`setInterval`) appelle `fetchCvs()` directement, sans passer par le `useEffect` — il ne remet pas `loading` à `true`. Les mises à jour de statut en arrière-plan restent donc silencieuses, sans flash de skeleton.
+
+---
+
+## PR #124 — docs: extract conventions to separate files and slim down CLAUDE.md
+
+**Date :** 2026-06-30
+
+### Contexte
+
+`CLAUDE.md` concentrait à la fois le contexte projet (stack, CI/CD, git flow) et les conventions détaillées de chaque technologie (Terraform, Python, SQL, Frontend). Cette densité alourdissait chaque session sans que toutes les conventions soient pertinentes en permanence.
+
+### Ce qui a été fait
+
+- `docs/conventions-python.md` — conventions Python extraites de `CLAUDE.md` (typage, logging, structlog, variables d'environnement, gestion des erreurs, style)
+- `docs/conventions-sql.md` — conventions SQLAlchemy / Alembic extraites (modèles, nommage des contraintes, migrations)
+- `docs/conventions-frontend.md` — conventions Next.js / React / TypeScript extraites (Server Components, `cn()`, dynamic import, Three.js, types API, `next/image`, API client, env vars, `loading.tsx`, route groups, nommage, découpe, `useEffect`, accessibilité)
+- `docs/conventions-terraform.md` — conventions Terraform extraites (nommage, séparateurs, règles de module, commandes CLI, architecture, modules, state backend)
+- `CLAUDE.md` — chaque section de conventions remplacée par une ligne de renvoi vers le fichier correspondant
+
+### Décision technique
+
+Les conventions restent dans des fichiers dédiés consultés à la demande (avant d'écrire du code dans la technologie concernée). `CLAUDE.md` conserve uniquement le contexte projet stable : workflow collaboratif, stack, structure repo, CI/CD, git flow, code review standards.
