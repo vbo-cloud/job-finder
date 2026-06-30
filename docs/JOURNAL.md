@@ -3055,3 +3055,43 @@ La bibliothèque affichait les cartes CV en défilement horizontal (`flex overfl
 ### Décision technique
 
 Le `gap-y-2` (8 px) est volontairement serré : les contrôles de suppression (fil vertical + rangée de boutons) apparaissent en survol dans l'espace `gap-y`, ce qui les rend accessibles sans se superposer à la carte du dessous. Le label en `absolute` évite qu'il pousse le contenu centré vers le bas.
+
+---
+
+## PR #128 — feat(frontend): système de thème centralisé et toggle dark/light
+
+**Date :** 2026-06-30
+
+### Contexte
+
+Toutes les couleurs de l'application étaient hardcodées dans les composants : classes Tailwind arbitraires (`bg-[#0a0a0f]`, `text-white/20`…), valeurs hex dans `OrbitAnimation.tsx` via le canvas 2D. Il n'existait aucun moyen de changer l'apparence globale sans modifier des dizaines de fichiers.
+
+### Ce qui a été fait
+
+**Infrastructure du thème :**
+- `lib/theme/types.ts` : type `Theme` — 42 slots nommés par leur rôle CSS (`"--bg-page"`, `"--text-label"`, `"--canvas-ambient"`…). Les clés sont les noms des custom properties CSS, ce qui permet à `applyTheme()` de les écrire directement sur `:root` sans mapping intermédiaire.
+- `lib/theme/themes/dark.ts` : thème sombre (palette existante — `#0a0a0f`, `rgba(255,255,255,X)`, emerald, blue-600…).
+- `lib/theme/themes/light.ts` : thème clair — fonds blancs/gris, textes noirs avec opacité miroir, particules canvas sombres.
+- `lib/theme/index.ts` : `applyTheme(theme: Theme)` — itère sur les entrées du thème et appelle `root.style.setProperty(key, value)`. Un seul appel pour basculer toutes les couleurs.
+- `lib/theme/useTheme.ts` : hook client `useTheme()` — lit `localStorage` au mount pour persister le choix entre sessions, expose `{ themeId, toggle }`.
+
+**Tailwind :**
+- `tailwind.config.ts` : extensions `textColor`, `backgroundColor`, `borderColor`, `ringColor` avec les noms sémantiques (`text-label`, `bg-page`, `border-subtle`, `ring-default`…). Les valeurs pointent vers les CSS vars — Tailwind génère les classes, les vars fournissent les couleurs à runtime.
+- `app/globals.css` : 42 custom properties dans `:root` avec les valeurs du thème sombre par défaut. Garantit que le rendu SSR est correct sans flash (le thème dark est dans le CSS statique ; `applyTheme` n'est appelé qu'au switch).
+
+**Migration des composants :**
+- `layout.tsx`, `page.tsx`, `error.tsx`, `UploadSection.tsx`, `AuthButton.tsx`, `LibrarySection.tsx`, `CVCard.tsx`, `CVCardSkeleton.tsx`, `profile/page.tsx` : toutes les couleurs hardcodées remplacées par les classes sémantiques. La page profile (palette gris/bleu) est migrée vers le thème unifié.
+
+**Canvas (OrbitAnimation.tsx) :**
+- La boucle `draw()` appelait `ctx.fillStyle = "#0a0a0f"` à chaque frame, rendant le canvas imperméable au thème CSS. Fix : `getComputedStyle(document.documentElement)` lit les vars `--bg-page`, `--canvas-ambient`, `--canvas-orbit`, `--canvas-icon` et `--canvas-icon-text` à chaque frame. Le canvas réagit instantanément au switch de thème.
+
+**Toggle :**
+- `AuthButton.tsx` : bouton ☀️/🌙 ajouté dans le dropdown du menu utilisateur. Appelle `toggle()` du hook `useTheme`.
+
+### Décisions techniques
+
+- **CSS vars avec valeurs rgba complètes** (pas de canaux RGB + `<alpha-value>` Tailwind) : les couleurs de l'app utilisent des opacités très variées (`/15`, `/20`, `/25`…). Stocker des valeurs complètes dans les vars simplifie les thèmes (`"rgba(255,255,255,0.20)"`) sans nécessiter de config Tailwind complexe.
+- **`getComputedStyle` à chaque frame dans le canvas** : les browsers cachent la valeur, l'overhead est négligeable à 60 fps. Alternative (ref mise à jour via MutationObserver) : plus complexe pour un gain imperceptible.
+- **Thème dark baked dans `globals.css`** : évite le FOUC au premier rendu SSR. Le hook lit `localStorage` après le mount client — un léger flash peut apparaître si l'utilisateur avait choisi le thème clair et recharge la page, cas rare et acceptable pour un portfolio.
+- **`applyTheme` sans ThemeProvider React** : les CSS vars sont globales et réactives nativement. Un contexte React forcerait tous les composants consommateurs à être `"use client"`, ce qui va à l'encontre de la convention de minimiser les client components.
+

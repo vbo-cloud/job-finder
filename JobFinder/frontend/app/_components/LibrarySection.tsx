@@ -66,20 +66,20 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   return (
     <section
       id="library"
-      className="relative h-dvh snap-start bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8"
+      className="relative h-dvh snap-start bg-page flex flex-col items-center justify-center px-6 py-8"
     >
-      <p className="absolute top-8 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
+      <p className="absolute top-8 text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</p>
 
       {/* État non connecté */}
       {!isAuthenticated && (
         <div className="flex flex-col items-center justify-center gap-6 pt-32">
-          <p className="text-center text-sm text-white/35">
+          <p className="text-center text-sm text-muted">
             Connectez-vous afin de pouvoir consulter<br />et charger des CV dans votre bibliothèque.
           </p>
           <button
             type="button"
             onClick={() => void instance.loginRedirect(loginRequest)}
-            className="rounded-full border border-white/25 px-5 py-2 text-xs text-white/65 transition-colors hover:border-white/40 hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+            className="rounded-full border border-default px-5 py-2 text-xs text-body transition-colors hover:border-hover hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
           >
             Se connecter
           </button>
@@ -95,7 +95,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {/* Aucun CV */}
       {!loading && isAuthenticated && cvs.length === 0 && !error && (
-        <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
+        <p className="mt-24 text-center text-xs text-empty">Aucun CV importé</p>
       )}
 
       {/* Liste des CVs */}
@@ -109,7 +109,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {/* Erreur */}
       {isAuthenticated && error && (
-        <p className="mt-4 text-xs text-red-400/50">Impossible de charger les CVs.</p>
+        <p className="mt-4 text-xs text-destructive">Impossible de charger les CVs.</p>
       )}
     </section>
   );

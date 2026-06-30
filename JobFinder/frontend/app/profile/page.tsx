@@ -87,12 +87,12 @@ export default function ProfilePage() {
   if (!isAuthenticated) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-8 text-center">
-        <h1 className="text-2xl font-bold">Profil</h1>
-        <p className="text-gray-600">Connectez-vous pour accéder à votre profil.</p>
+        <h1 className="text-2xl font-bold text-strong">Profil</h1>
+        <p className="text-body">Connectez-vous pour accéder à votre profil.</p>
         <button
           type="button"
           onClick={() => void instance.loginRedirect(loginRequest)}
-          className="rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="rounded bg-solid-primary px-5 py-2 text-strong hover:bg-solid-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           Se connecter
         </button>
@@ -103,7 +103,7 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center">
-        <p className="text-gray-500">Chargement…</p>
+        <p className="text-muted">Chargement…</p>
       </main>
     );
   }
@@ -111,7 +111,7 @@ export default function ProfilePage() {
   if (loadError) {
     return (
       <main className="flex min-h-screen items-center justify-center">
-        <p className="text-red-600">{loadError}</p>
+        <p className="text-destructive">{loadError}</p>
       </main>
     );
   }
@@ -119,15 +119,15 @@ export default function ProfilePage() {
   return (
     <main className="mx-auto max-w-xl px-6 py-12">
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Mon profil</h1>
-        <Link href="/" className="text-sm text-blue-600 hover:underline">
+        <h1 className="text-2xl font-bold text-strong">Mon profil</h1>
+        <Link href="/" className="text-sm text-accent hover:underline">
           ← Accueil
         </Link>
       </div>
 
       <div className="flex flex-col gap-6">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">
+          <label className="mb-1 block text-sm font-medium text-primary">
             Localisation
           </label>
           <input
@@ -135,20 +135,20 @@ export default function ProfilePage() {
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             placeholder="ex. Paris, Télétravail…"
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            className="w-full rounded border border-default bg-card px-3 py-2 text-sm text-strong placeholder:text-hint focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
 
         <div>
-          <p className="mb-2 text-sm font-medium text-gray-700">Types de contrat</p>
+          <p className="mb-2 text-sm font-medium text-primary">Types de contrat</p>
           <div className="flex flex-wrap gap-3">
             {CONTRACT_TYPES.map((type) => (
-              <label key={type} className="flex cursor-pointer items-center gap-1.5 text-sm">
+              <label key={type} className="flex cursor-pointer items-center gap-1.5 text-sm text-body">
                 <input
                   type="checkbox"
                   checked={contractTypes.includes(type)}
                   onChange={() => toggleContractType(type)}
-                  className="h-4 w-4 accent-blue-600"
+                  className="h-4 w-4 accent-[var(--bg-solid-primary)]"
                 />
                 {type}
               </label>
@@ -157,7 +157,7 @@ export default function ProfilePage() {
         </div>
 
         <div>
-          <p className="mb-2 text-sm font-medium text-gray-700">Catégories de poste</p>
+          <p className="mb-2 text-sm font-medium text-primary">Catégories de poste</p>
           <div className="flex gap-2">
             <input
               type="text"
@@ -170,12 +170,12 @@ export default function ProfilePage() {
                 }
               }}
               placeholder="ex. Développeur backend — Entrée ou virgule pour ajouter"
-              className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="flex-1 rounded border border-default bg-card px-3 py-2 text-sm text-strong placeholder:text-hint focus:outline-none focus:ring-2 focus:ring-primary"
             />
             <button
               type="button"
               onClick={addJobCategory}
-              className="rounded bg-gray-100 px-3 py-2 text-sm hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="rounded bg-solid-secondary px-3 py-2 text-sm text-body hover:bg-solid-secondary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
             >
               Ajouter
             </button>
@@ -185,13 +185,13 @@ export default function ProfilePage() {
               {jobCategories.map((cat) => (
                 <span
                   key={cat}
-                  className="flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-xs text-blue-800"
+                  className="flex items-center gap-1 rounded-full bg-accent-muted px-3 py-1 text-xs text-accent"
                 >
                   {cat}
                   <button
                     type="button"
                     onClick={() => removeJobCategory(cat)}
-                    className="ml-0.5 text-blue-500 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="ml-0.5 text-accent hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     aria-label={`Supprimer ${cat}`}
                   >
                     ×
@@ -204,15 +204,15 @@ export default function ProfilePage() {
 
         {romeCodes.length > 0 && (
           <div>
-            <p className="mb-2 text-sm font-medium text-gray-700">
+            <p className="mb-2 text-sm font-medium text-primary">
               Codes ROME{" "}
-              <span className="font-normal text-gray-400">(détectés depuis votre CV)</span>
+              <span className="font-normal text-muted">(détectés depuis votre CV)</span>
             </p>
             <div className="flex flex-wrap gap-2">
               {romeCodes.map((code) => (
                 <span
                   key={code}
-                  className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"
+                  className="rounded-full bg-card px-3 py-1 text-xs text-body"
                 >
                   {code}
                 </span>
@@ -222,7 +222,7 @@ export default function ProfilePage() {
         )}
 
         {feedback && (
-          <p className={cn("text-sm", feedback.type === "success" ? "text-green-600" : "text-red-600")}>
+          <p className={cn("text-sm", feedback.type === "success" ? "text-success" : "text-destructive")}>
             {feedback.message}
           </p>
         )}
@@ -231,7 +231,7 @@ export default function ProfilePage() {
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="self-start rounded bg-blue-600 px-6 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="self-start rounded bg-solid-primary px-6 py-2 text-sm text-strong hover:bg-solid-primary-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           {saving ? "Enregistrement…" : "Enregistrer"}
         </button>

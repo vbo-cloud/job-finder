@@ -2,16 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut, Moon, Sun, UserRound } from "lucide-react";
 import Link from "next/link";
 
 import { loginRequest } from "@/lib/auth/msalConfig";
+import { useTheme } from "@/lib/theme/useTheme";
 
 export default function AuthButton() {
   const { instance, accounts } = useMsal();
   const isAuthenticated         = useIsAuthenticated();
   const [open, setOpen]         = useState(false);
   const menuRef                 = useRef<HTMLDivElement>(null);
+  const { themeId, toggle }     = useTheme();
 
   useEffect(() => {
     if (!open) return;
@@ -37,7 +39,7 @@ export default function AuthButton() {
       <button
         type="button"
         onClick={() => void instance.loginRedirect(loginRequest)}
-        className="rounded-full border border-white/25 px-4 py-1 text-xs text-white/65 transition-colors hover:border-white/40 hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+        className="rounded-full border border-default px-4 py-1 text-xs text-body transition-colors hover:border-hover hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
       >
         Se connecter
       </button>
@@ -49,29 +51,44 @@ export default function AuthButton() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-full border border-white/[0.18] bg-white/[0.05] py-1 pl-3 pr-1 text-xs text-white/70 transition-colors hover:border-white/30 hover:text-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+        className="flex items-center gap-2 rounded-full border border-soft bg-card py-1 pl-3 pr-1 text-xs text-primary transition-colors hover:border-default hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
       >
         <span>{account?.name?.split(" ")[0] ?? "Mon compte"}</span>
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/[0.12] text-[10px] font-semibold text-white/80">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-badge text-[10px] font-semibold text-strong">
           {initials}
         </span>
       </button>
 
       {open && (
-        <div className="absolute right-0 top-9 z-50 w-44 rounded-xl border border-white/[0.12] bg-[#1a1a22] p-1.5 shadow-2xl">
+        <div className="absolute right-0 top-9 z-50 w-44 rounded-xl border border-soft bg-surface p-1.5 shadow-2xl">
           <Link
             href="/profile"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-white/70 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
           >
             <UserRound className="h-3.5 w-3.5" />
             Mon profil
           </Link>
-          <div className="mx-2 my-1 h-px bg-white/[0.08]" />
+
+          <button
+            type="button"
+            onClick={toggle}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+          >
+            {themeId === "dark" ? (
+              <Sun className="h-3.5 w-3.5" />
+            ) : (
+              <Moon className="h-3.5 w-3.5" />
+            )}
+            {themeId === "dark" ? "Thème clair" : "Thème sombre"}
+          </button>
+
+          <div className="mx-2 my-1 h-px bg-card-hover" />
+
           <button
             type="button"
             onClick={() => void instance.logoutRedirect()}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-red-400/75 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-destructive transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
           >
             <LogOut className="h-3.5 w-3.5" />
             Se déconnecter

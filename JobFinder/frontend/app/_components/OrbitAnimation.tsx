@@ -122,7 +122,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
     }
 
     // ── Document icon ──────────────────────────────────────────
-    function drawDocument(isHover: boolean) {
+    function drawDocument(isHover: boolean, textRgb: string) {
       const x = CX - 22, y = CY - 27;
       const fold = 12, r = 4;
       ctx.save();
@@ -136,7 +136,8 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         ctx.restore();
       }
 
-      ctx.fillStyle = isHover ? "#484848" : "#383838";
+      const iconColor = getComputedStyle(document.documentElement).getPropertyValue("--canvas-icon").trim() || "#383838";
+      ctx.fillStyle = iconColor;
       ctx.beginPath();
       ctx.moveTo(x + r, y); ctx.lineTo(x + 44 - fold, y);
       ctx.lineTo(x + 44, y + fold); ctx.lineTo(x + 44, y + 54 - r);
@@ -151,16 +152,16 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
       ctx.moveTo(x + 44 - fold, y); ctx.lineTo(x + 44 - fold, y + fold);
       ctx.lineTo(x + 44, y + fold); ctx.closePath(); ctx.fill();
 
-      ctx.fillStyle = `rgba(255,255,255,${0.5 + hoverLerp * 0.35})`;
+      ctx.fillStyle = `rgba(${textRgb},${0.5 + hoverLerp * 0.35})`;
       ctx.font = "600 7.5px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "top";
       ctx.fillText("CV", CX, y + 5);
 
-      ctx.strokeStyle = "rgba(255,255,255,0.055)"; ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgba(${textRgb},0.055)`; ctx.lineWidth = 1;
       for (let i = 0; i < 4; i++) {
         ctx.beginPath(); ctx.moveTo(x + 6, y + 20 + i * 7); ctx.lineTo(x + 38, y + 20 + i * 7); ctx.stroke();
       }
 
-      ctx.strokeStyle = `rgba(255,255,255,${0.5 + hoverLerp * 0.4})`;
+      ctx.strokeStyle = `rgba(${textRgb},${0.5 + hoverLerp * 0.4})`;
       ctx.lineWidth = 1.8 + hoverLerp * 0.8; ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(CX - 9, CY); ctx.lineTo(CX + 9, CY);
@@ -245,7 +246,14 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         && Math.abs(mp.x - CX) < 28 && Math.abs(mp.y - CY) < 34;
       hoverLerp += ((isHover ? 1 : 0) - hoverLerp) * 0.12;
 
-      ctx.fillStyle = "#0a0a0f"; ctx.fillRect(0, 0, W, H);
+      // Read theme CSS vars each frame so the canvas reacts instantly to theme switches
+      const style        = getComputedStyle(document.documentElement);
+      const bgColor      = style.getPropertyValue("--bg-page").trim()        || "#0a0a0f";
+      const ambient_rgb  = style.getPropertyValue("--canvas-ambient").trim() || "200,210,230";
+      const orbit_rgb    = style.getPropertyValue("--canvas-orbit").trim()   || "170,210,255";
+      const iconTextRgb  = style.getPropertyValue("--canvas-icon-text").trim() || "255,255,255";
+
+      ctx.fillStyle = bgColor; ctx.fillRect(0, 0, W, H);
 
       // Ambient particles — staggered birth with ease-out scale
       for (const p of ambient) {
@@ -260,7 +268,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         ctx.translate(p.x, p.y);
         ctx.scale(easeOut(p.scale), easeOut(p.scale));
         ctx.beginPath(); ctx.arc(0, 0, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(200,210,230,${p.a})`; ctx.fill();
+        ctx.fillStyle = `rgba(${ambient_rgb},${p.a})`; ctx.fill();
         ctx.restore();
       }
 
@@ -286,14 +294,14 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         ctx.translate(px, py);
         ctx.scale(drawScale, drawScale);
         ctx.beginPath(); ctx.arc(0, 0, op.r * sc, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(170,210,255,${a})`; ctx.fill();
+        ctx.fillStyle = `rgba(${orbit_rgb},${a})`; ctx.fill();
         ctx.restore();
       }
 
-      if (s === "idle")     { drawDocument(isHover); }
+      if (s === "idle")     { drawDocument(isHover, iconTextRgb); }
       if (s === "uploaded") { drawThumbnail(0, 1); }
       if (s === "done") {
-        drawDocument(false);
+        drawDocument(false, iconTextRgb);
         drawThumbnail(doneOffset(dp), Math.max(0, 1 - dp * 1.35));
       }
 
