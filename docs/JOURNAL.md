@@ -3035,3 +3035,23 @@ Suite à PR #125, le badge vert `+N` était positionné au-dessus du bloc matche
 ### Décision technique
 
 Le span fantôme (invisible, même police que le paragraphe) est la seule approche CSS pure permettant d'aligner dynamiquement un élément `absolute` sur une position intra-texte sans JavaScript et sans perturber le flux. Les alternatives testées (inline avec `relative -top-2`, `flex items-baseline gap-1`, `ml-6 block`) modifiaient toutes soit le flux, soit l'espacement entre chiffre et "matchs".
+
+---
+
+## PR #127 — feat(frontend): refonte de la bibliothèque CV en grille 5 colonnes
+
+**Date :** 2026-06-30
+
+### Contexte
+
+La bibliothèque affichait les cartes CV en défilement horizontal (`flex overflow-x-auto`). Ce mode ne passait pas bien visuellement sur la section snap-scroll pleine hauteur : les contrôles de suppression (fil + corbeille) débordaient hors du conteneur scrollable, et la section n'était pas centrée.
+
+### Ce qui a été fait
+
+- `LibrarySection.tsx` : passage de `flex overflow-x-auto` à `grid grid-cols-5 gap-x-5 gap-y-2` ; section centrée avec `flex flex-col items-center justify-center` + `relative` ; label `BIBLIOTHÈQUE` sorti du flux (`absolute top-8`) pour ne pas perturber l'alignement vertical du contenu ; skeleton étendu à 10 items (2 rangées × 5 colonnes) ; liste plafonnée à `MAX_CVS = 10`.
+- `CVCard.tsx` : largeur du wrapper réduite de `w-44` à `w-36` pour s'adapter à la grille 5 colonnes.
+- `CVCardSkeleton.tsx` : idem, `w-44` → `w-36`.
+
+### Décision technique
+
+Le `gap-y-2` (8 px) est volontairement serré : les contrôles de suppression (fil vertical + rangée de boutons) apparaissent en survol dans l'espace `gap-y`, ce qui les rend accessibles sans se superposer à la carte du dessous. Le label en `absolute` évite qu'il pousse le contenu centré vers le bas.
