@@ -66,9 +66,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   return (
     <section
       id="library"
-      className="h-dvh snap-start bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8"
+      className="relative h-dvh snap-start bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8"
     >
-      <p className="mb-8 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
+      <p className="absolute top-8 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
 
       {/* État non connecté */}
       {!isAuthenticated && (
@@ -89,7 +89,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       {/* Skeleton pendant le chargement initial */}
       {loading && isAuthenticated && (
         <div className="grid grid-cols-5 gap-x-4 gap-y-12">
-          {[0, 1, 2].map((i) => <CVCardSkeleton key={i} />)}
+          {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
         </div>
       )}
 

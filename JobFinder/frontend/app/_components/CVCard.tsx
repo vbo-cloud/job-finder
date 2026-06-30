@@ -112,7 +112,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
   return (
     <div
       ref={wrapperRef}
-      className="flex w-32 flex-shrink-0 flex-col"
+      className="flex w-44 flex-shrink-0 flex-col"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
