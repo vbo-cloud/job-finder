@@ -1,7 +1,9 @@
 """Matches endpoint — returns ranked job offers for the authenticated user's CV."""
 
+import uuid
+
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
@@ -59,3 +61,48 @@ def get_matches(
     matches = [MatchOut.model_validate(m) for m in results]
     logger.info("matches_fetch_completed", user_id=user_id, count=len(matches))
     return MatchesOut(rome_codes=rome_codes, matches=matches)
+
+
+@router.get("/cv/{cv_id}", response_model=MatchesOut)
+def get_matches_for_cv(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> MatchesOut:
+    """Return ranked matches for a specific CV owned by the authenticated user.
+
+    Args:
+        cv_id: UUID of the CV to fetch matches for.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Returns:
+        MatchesOut with an empty rome_codes list and matches sorted by descending score.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+        SQLAlchemyError: If a database error occurs during the query.
+    """
+    logger.info("cv_matches_fetch_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+        if cv is None:
+            raise HTTPException(status_code=404, detail="CV not found")
+
+        results = session.execute(
+            select(Match)
+            .where(Match.cv_id == cv_id)
+            .options(selectinload(Match.offer))
+            .order_by(Match.score.desc())
+        ).scalars().all()
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        logger.error("cv_matches_fetch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    matches = [MatchOut.model_validate(m) for m in results]
+    logger.info("cv_matches_fetch_done", user_id=user_id, cv_id=str(cv_id), count=len(matches))
+    return MatchesOut(rome_codes=[], matches=matches)
