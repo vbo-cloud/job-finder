@@ -23,6 +23,7 @@ export type Theme = {
   "--bg-solid-destructive-hover": string;
   "--bg-solid-confirm": string;
   "--bg-solid-confirm-hover": string;
+  "--bg-scrim": string;
 
   /* Text */
   "--text-empty": string;

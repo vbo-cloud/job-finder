@@ -27,6 +27,7 @@ const config: Config = {
         "solid-destructive-hover": "var(--bg-solid-destructive-hover)",
         "solid-confirm":         "var(--bg-solid-confirm)",
         "solid-confirm-hover":   "var(--bg-solid-confirm-hover)",
+        scrim:                   "var(--bg-scrim)",
       },
       textColor: {
         empty:       "var(--text-empty)",

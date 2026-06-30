@@ -6,6 +6,13 @@
 - Les composants MSAL (`useIsAuthenticated`, `useMsal`, `MsalProvider`) sont toujours `"use client"`.
 - Pousser `"use client"` aussi bas que possible dans l'arbre : extraire la partie interactive dans un sous-composant plutôt que de marquer toute une page.
 
+## Couleurs — système de thème obligatoire
+- **Toute couleur utilisée dans un composant doit passer par un token du système de thème** : `bg-card`, `text-muted`, `border-subtle`, etc. Jamais de valeur codée en dur (`text-white`, `bg-black/40`, `text-gray-500`, `border-white/10`, etc.).
+- Les tokens sont déclarés dans `lib/theme/types.ts`, définis dans `lib/theme/themes/dark.ts` et `light.ts`, enregistrés dans `tailwind.config.ts`, et déclarés comme valeurs par défaut dans `app/globals.css`.
+- Pour ajouter un token : (1) ajouter la clé dans `Theme` (`types.ts`), (2) ajouter la valeur dans `dark.ts` et `light.ts`, (3) enregistrer dans `tailwind.config.ts`, (4) déclarer le défaut dark dans `globals.css`.
+- Exception — `OrbitAnimation.tsx` : utilise des valeurs JS brutes pour WebGL (canvas). Ces valeurs doivent utiliser les tokens `--canvas-*` lus via `getComputedStyle`.
+- Raison : chaque composant doit s'adapter automatiquement au thème actif. Une couleur codée en dur casse l'un des deux thèmes.
+
 ## Utilitaire `cn()` — classes Tailwind conditionnelles
 - **Toujours utiliser `cn()` pour les classes conditionnelles**, jamais de concaténation de strings ou de template literals.
 - `cn()` est défini dans `lib/utils.ts` (`clsx` + `tailwind-merge`) — dépendances : `clsx`, `tailwind-merge`.

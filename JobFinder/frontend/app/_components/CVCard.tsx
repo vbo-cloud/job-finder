@@ -144,7 +144,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           )}
 
           {thumbnailSrc && isPending && (
-            <div className="absolute inset-0 bg-black/40" />
+            <div className="absolute inset-0 bg-scrim" />
           )}
 
           {isPending && (
