@@ -45,6 +45,7 @@ export const lightTheme: Theme = {
   "--border-default": "rgba(0, 0, 0, 0.22)",
   "--border-hover": "rgba(0, 0, 0, 0.45)",
   "--border-active": "rgba(0, 0, 0, 0.55)",
+  "--border-accent": "rgba(37, 99, 235, 0.35)",
 
   /* Focus rings */
   "--ring-default": "rgba(0, 0, 0, 0.28)",

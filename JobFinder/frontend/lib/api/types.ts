@@ -25,6 +25,7 @@ export interface ProfileData {
 
 export interface OfferOut {
   id: string;
+  ft_id: string;
   title: string;
   company: string;
   location: string;
@@ -32,6 +33,7 @@ export interface OfferOut {
   salary: string | null;
   rome_code: string | null;
   skills: string[];
+  expires_at: string | null;
 }
 
 export interface MatchOut {

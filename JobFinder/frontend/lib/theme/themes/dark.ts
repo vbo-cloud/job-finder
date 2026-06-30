@@ -45,6 +45,7 @@ export const darkTheme: Theme = {
   "--border-default": "rgba(255, 255, 255, 0.25)",
   "--border-hover": "rgba(255, 255, 255, 0.40)",
   "--border-active": "rgba(255, 255, 255, 0.50)",
+  "--border-accent": "rgba(96, 165, 250, 0.35)",
 
   /* Focus rings */
   "--ring-default": "rgba(255, 255, 255, 0.30)",
