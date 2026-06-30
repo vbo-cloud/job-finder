@@ -11,6 +11,7 @@ import CVCard from "./CVCard";
 import CVCardSkeleton from "./CVCardSkeleton";
 
 const POLL_INTERVAL_MS = 3000;
+const MAX_CVS = 10;
 
 interface Props {
   /** Increment to trigger a manual re-fetch (e.g. right after an upload). */
@@ -65,9 +66,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   return (
     <section
       id="library"
-      className="h-dvh snap-start bg-[#0a0a0f] px-6 py-8"
+      className="h-dvh snap-start bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8"
     >
-      <p className="mb-6 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
+      <p className="mb-8 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
 
       {/* État non connecté */}
       {!isAuthenticated && (
@@ -86,8 +87,8 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       )}
 
       {/* Skeleton pendant le chargement initial */}
-      {loading && isAuthenticated && cvs.length === 0 && (
-        <div className="flex gap-4 overflow-x-auto pb-4">
+      {loading && isAuthenticated && (
+        <div className="grid grid-cols-5 gap-x-4 gap-y-12">
           {[0, 1, 2].map((i) => <CVCardSkeleton key={i} />)}
         </div>
       )}
@@ -98,12 +99,9 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       )}
 
       {/* Liste des CVs */}
-      {/* pb-20: reserves vertical space for CVCard's delete controls (wire + trash row)
-          that appear below each card on hover. overflow-x:auto forces overflow-y:auto,
-          so without this padding the controls would be clipped by the scroll container. */}
       {cvs.length > 0 && (
-        <div className="flex gap-4 overflow-x-auto pb-20">
-          {cvs.map((cv) => (
+        <div className="grid grid-cols-5 gap-x-4 gap-y-12">
+          {cvs.slice(0, MAX_CVS).map((cv) => (
             <CVCard key={cv.id} cv={cv} onDeleted={handleCvDeleted} />
           ))}
         </div>
