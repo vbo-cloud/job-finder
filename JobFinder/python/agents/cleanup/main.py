@@ -39,7 +39,8 @@ def _cleanup(session: Session) -> tuple[int, int]:
     Raises:
         SQLAlchemyError: If any database operation fails.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=OFFER_MAX_AGE_DAYS)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=OFFER_MAX_AGE_DAYS)
 
     logger.info("cleanup_started", cutoff=cutoff.isoformat())
 
@@ -49,6 +50,10 @@ def _cleanup(session: Session) -> tuple[int, int]:
             and_(
                 Offer.ft_updated_at.is_(None),
                 Offer.collected_at < cutoff,
+            ),
+            and_(
+                Offer.expires_at.isnot(None),
+                Offer.expires_at < now,
             ),
         )
     )
