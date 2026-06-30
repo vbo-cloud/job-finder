@@ -3017,3 +3017,21 @@ Le nombre de matches s'affichait sur chaque carte CV, mais sans distinction entr
 - `COUNT FILTER (WHERE seen_at IS NULL)` dans la subquery existante : un seul GROUP BY pour `match_count` et `unseen_count` — même scan, même jointure que l'existant.
 - Le décrément individuel (une offre vue → `unseen_count -= 1`) est volontairement absent : il n'existe pas encore de vue liste-des-offres dans le frontend. L'infra est en place (`seen_at` en base, le champ exposé dans l'API), le câblage UI se fera quand la page matches sera construite.
 - Si des offres expirent et sont supprimées par le cleanup agent, leurs matches disparaissent → l'`unseen_count` baisse automatiquement sur le prochain fetch, sans logique spéciale.
+
+---
+
+## PR #126 — fix(frontend): positionnement du badge +N au-dessus du compteur de matches
+
+**Date :** 2026-06-30
+
+### Contexte
+
+Suite à PR #125, le badge vert `+N` était positionné au-dessus du bloc matches mais son alignement horizontal n'était pas satisfaisant. L'objectif : que le `+` démarre exactement à l'espace entre le chiffre et le mot "matchs", sans perturber le rendu de la ligne.
+
+### Ce qui a été fait
+
+- `CVCard.tsx` : refactoring du bloc match. Le `<p>` affiche "106 matchs" normalement avec un espace simple. Le bouton badge est sorti du flux (`absolute bottom-full left-0`) et positionné au-dessus via un span fantôme invisible (`<span className="invisible text-[10px]">{cv.match_count}</span>`) qui reproduit la largeur du nombre — le `+N` se positionne ainsi naturellement à l'espace entre le chiffre et "matchs", quelle que soit la largeur du nombre.
+
+### Décision technique
+
+Le span fantôme (invisible, même police que le paragraphe) est la seule approche CSS pure permettant d'aligner dynamiquement un élément `absolute` sur une position intra-texte sans JavaScript et sans perturber le flux. Les alternatives testées (inline avec `relative -top-2`, `flex items-baseline gap-1`, `ml-6 block`) modifiaient toutes soit le flux, soit l'espacement entre chiffre et "matchs".

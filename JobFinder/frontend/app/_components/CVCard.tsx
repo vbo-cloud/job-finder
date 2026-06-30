@@ -28,19 +28,11 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
   const [thumbnailSrc, setThumbnailSrc]   = useState<string | null>(null);
   const [isHovered, setIsHovered]         = useState(false);
   const [deleteState, setDeleteState]     = useState<DeleteState>("idle");
-  const [unseenCount, setUnseenCount]     = useState(cv.unseen_count);
-  const [markSeenError, setMarkSeenError] = useState(false);
-  const markSeenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [unseenCount, setUnseenCount] = useState(cv.unseen_count);
 
   useEffect(() => {
     setUnseenCount(cv.unseen_count);
   }, [cv.unseen_count]);
-
-  useEffect(() => {
-    return () => {
-      if (markSeenTimerRef.current) clearTimeout(markSeenTimerRef.current);
-    };
-  }, []);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const rowRef     = useRef<HTMLDivElement>(null);
@@ -115,21 +107,6 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
     onDeleted(cv.id);
   };
 
-  const handleMarkAllSeen = async () => {
-    const prev = unseenCount;
-    setUnseenCount(0);
-    setMarkSeenError(false);
-    try {
-      await apiClient.patch(`/cv/${cv.id}/mark-all-seen`);
-    } catch (err) {
-      console.error("mark-all-seen failed", err);
-      setUnseenCount(prev);
-      setMarkSeenError(true);
-      if (markSeenTimerRef.current) clearTimeout(markSeenTimerRef.current);
-      markSeenTimerRef.current = setTimeout(() => setMarkSeenError(false), 3000);
-    }
-  };
-
   const showControls = (isHovered || deleteState !== "idle") && deleteState !== "absorbing";
 
   return (
@@ -195,21 +172,12 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
         {isPending && (
           <p className="text-[10px] text-white/25">Analyse en cours…</p>
         )}
-        {!isPending && !isError && unseenCount > 0 && (
-          <button
-            onClick={() => void handleMarkAllSeen()}
-            className="self-start text-[10px] text-emerald-400 transition-colors hover:text-emerald-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/50 rounded"
-            aria-label="Marquer tous les matchs comme vus"
-          >
-            +{unseenCount} nouveaux
-          </button>
-        )}
-        {markSeenError && (
-          <p className="text-[10px] text-red-400/70">Erreur, réessayez</p>
-        )}
         {!isPending && !isError && (
           <p className="text-[10px] text-white/35">
             {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
+            {unseenCount > 0 && (
+              <span className="ml-1 text-[9px] text-emerald-400">+{unseenCount}</span>
+            )}
           </p>
         )}
       </div>
