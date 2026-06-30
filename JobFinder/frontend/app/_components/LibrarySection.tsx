@@ -41,9 +41,12 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
     }
   }, []);
 
-  // Only fetch when the user is authenticated; re-fetch when refreshTrigger changes
+  // Only fetch when the user is authenticated; re-fetch when refreshTrigger changes.
+  // setLoading(true) ensures the skeleton appears even when loading was reset to false
+  // by a prior unauthenticated render (MSAL resolves auth after the first paint).
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
+    setLoading(true);
     void fetchCvs();
   }, [fetchCvs, isAuthenticated, refreshTrigger]);
 
@@ -83,7 +86,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
       )}
 
       {/* Skeleton pendant le chargement initial */}
-      {loading && isAuthenticated && (
+      {loading && isAuthenticated && cvs.length === 0 && (
         <div className="flex gap-4 overflow-x-auto pb-4">
           {[0, 1, 2].map((i) => <CVCardSkeleton key={i} />)}
         </div>

@@ -2940,3 +2940,27 @@ Le job matching gardait les 20 meilleures offres par CV (`MATCHING_TOP_K = 20`),
 ### Décision technique
 
 Un seuil de similarité cosinus à 0.8 signifie que le CV et l'offre partagent un champ sémantique très proche (80% de similarité). En pratique avec `text-embedding-3-small`, les bons matches métier se situent entre 0.75 et 0.90 — 0.8 est sélectif sans être trop restrictif. La valeur est configurable via env var pour ajuster sans redéploiement.
+
+---
+
+## PR #123 — fix(frontend): show skeleton while CV library loads after login
+
+**Date :** 2026-06-30
+
+### Contexte
+
+Après connexion, la bibliothèque de CV restait vide sans aucun feedback pendant une dizaine de secondes — le temps que le fetch `/cv/` se complète. Le squelette de chargement existait déjà (`CVCardSkeleton`) mais n'était jamais affiché dans ce scénario.
+
+### Root cause
+
+MSAL résout l'état d'authentification de manière asynchrone après le premier rendu. Au premier rendu, `isAuthenticated = false`, ce qui déclenchait `setLoading(false)` dans le `useEffect`. Quand MSAL confirmait l'authentification (`isAuthenticated = true`), `loading` était déjà à `false` — la condition `loading && isAuthenticated` du skeleton était donc fausse pendant tout le fetch initial.
+
+### Ce qui a été fait
+
+Deux changements dans `LibrarySection.tsx` :
+- Ajout de `setLoading(true)` avant `fetchCvs()` dans le `useEffect` principal — garantit que le skeleton s'affiche dès que MSAL confirme l'auth, quelle que soit la valeur précédente de `loading`.
+- Ajout de `cvs.length === 0` à la condition du skeleton — évite d'afficher les skeletons par-dessus des CV déjà chargés lors d'un `refreshTrigger` (upload).
+
+### Décision technique
+
+Le polling par intervalle (`setInterval`) appelle `fetchCvs()` directement, sans passer par le `useEffect` — il ne remet pas `loading` à `true`. Les mises à jour de statut en arrière-plan restent donc silencieuses, sans flash de skeleton.
