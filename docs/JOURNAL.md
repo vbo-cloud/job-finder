@@ -3131,3 +3131,12 @@ Suite à la mise en place de la grille 5 colonnes (PR #127), deux problèmes res
 - `accessible = isAuthenticated && cvs.length > 0` sans `!loading` : évite que la section disparaisse brièvement pendant les re-fetches déclenchés par un upload. La section reste visible tant qu'au moins un CV est connu, même si le chargement est en cours.
 - `hidden` plutôt que retrait du DOM : la section reste montée pour continuer à fetcher en arrière-plan et appeler `onAccessibilityChange` dès que des CVs apparaissent — notamment lors du premier upload depuis `UploadSection`.
 - Spacer `h-[42px]` dans `CVCardSkeleton` : les contrôles de suppression de `CVCard` (`h-3.5` fil + `h-7` bouton poubelle) sont toujours présents dans le DOM avec `opacity-0`, ajoutant 42 px à la hauteur du wrapper. Sans ce spacer, skeleton et carte chargée avaient des hauteurs différentes, provoquant un saut de layout au passage de l'un à l'autre.
+
+**Apparition instantanée du CV après animation (carte optimiste) :**
+- `UploadSection.tsx` : la révocation de l'objectURL est différée — au lieu d'être faite dans `handleThumbnailReady`, elle est transférée au parent via le nouveau prop `onAnimationComplete(thumbnailUrl)` appelé dans `handleDoneComplete`. L'ownership de l'URL passe à `HomeClient`.
+- `HomeClient.tsx` : maintient `optimisticUpload { thumbnailUrl, cvId }`. Un `ref` (`uploadedCvIdRef`) capture le `cv_id` retourné par `POST /cv/upload` pour gérer les deux ordres possibles : animation terminée avant la réponse HTTP, ou réponse HTTP reçue avant la fin de l'animation.
+- `LibrarySection.tsx` : quand `optimisticUpload` est défini, affiche immédiatement `CVCardOptimistic` en première position, rendant la bibliothèque accessible sans attendre le réseau. L'entrée optimiste est consommée (URL révoquée, état effacé) dès que le vrai CV apparaît dans la liste (matching par `cv_id`).
+- Nouveau composant `CVCardOptimistic.tsx` : carte identique à `CVCard` (mêmes dimensions `w-44`, `aspect-[3/4]`, spacer `h-[42px]`) avec l'objectURL local comme miniature, overlay `bg-black/40`, spinner SVG, et texte "Analyse en cours…".
+
+**Retry au rechargement de page (fix MSAL) :**
+- `fetchCvs` dans `LibrarySection.tsx` : en cas d'échec du premier appel, une tentative est automatiquement effectuée après 1,5 s. Couvre les race conditions transitoires de `acquireTokenSilent` qui peuvent survenir au premier chargement quand MSAL hydrate son cache de tokens depuis le stockage navigateur — ce qui empêchait d'accéder à la bibliothèque lors d'un rechargement avec un CV en cours d'analyse.
