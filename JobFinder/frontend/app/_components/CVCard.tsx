@@ -119,16 +119,16 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
       {/* Card */}
       <div
         ref={cardRef}
-        className="flex flex-col gap-2.5 rounded-xl border border-white/10 bg-white/[0.04] p-4"
+        className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4"
       >
         <div
           role={isPending ? "status" : undefined}
           aria-label={isPending ? "Analyse en cours" : undefined}
           className={cn(
             "relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg",
-            !thumbnailSrc && isPending && "bg-white/[0.05]",
-            !thumbnailSrc && !isPending && !isError && "bg-white/[0.08]",
-            isError && "bg-red-500/[0.08]",
+            !thumbnailSrc && isPending && "bg-card",
+            !thumbnailSrc && !isPending && !isError && "bg-card-hover",
+            isError && "bg-destructive-muted",
           )}
         >
           {thumbnailSrc && (
@@ -150,7 +150,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           {isPending && (
             <svg
               aria-hidden="true"
-              className="relative h-5 w-5 animate-spin text-white/35"
+              className="relative h-5 w-5 animate-spin text-muted"
               xmlns="http://www.w3.org/2000/svg"
               fill="none"
               viewBox="0 0 24 24"
@@ -160,23 +160,23 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
             </svg>
           )}
 
-          {isError && <span className="text-xs text-red-400/60">Erreur</span>}
+          {isError && <span className="text-xs text-destructive">Erreur</span>}
           {!isPending && !isError && !thumbnailSrc && (
-            <span className="text-xs text-white/20">PDF</span>
+            <span className="text-xs text-label">PDF</span>
           )}
         </div>
 
-        <p className="truncate text-[11px] text-white/55" title={displayName}>{displayName}</p>
-        <p className="text-[10px] text-white/25">{date}</p>
+        <p className="truncate text-[11px] text-secondary" title={displayName}>{displayName}</p>
+        <p className="text-[10px] text-hint">{date}</p>
 
         {isPending && (
-          <p className="text-[10px] text-white/25">Analyse en cours…</p>
+          <p className="text-[10px] text-hint">Analyse en cours…</p>
         )}
         {!isPending && !isError && (
-          <p className="text-[10px] text-white/35">
+          <p className="text-[10px] text-muted">
             {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
             {unseenCount > 0 && (
-              <span className="ml-1 text-[9px] text-emerald-400">+{unseenCount}</span>
+              <span className="ml-1 text-[9px] text-success">+{unseenCount}</span>
             )}
           </p>
         )}
@@ -190,7 +190,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
         )}
       >
         {/* Vertical wire from card bottom to trash row */}
-        <div className="h-3.5 w-px bg-white/20" />
+        <div className="h-3.5 w-px bg-interactive-hover" />
 
         {/* Horizontal row: [cancel] ─ [trash] ─ [confirm] */}
         <div ref={rowRef} className="flex items-center">
@@ -201,7 +201,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
               <button
                 aria-label="Annuler la suppression"
                 onClick={() => setDeleteState("idle")}
-                className="flex items-center justify-center rounded-md bg-white/10 px-3 py-1.5 transition-colors hover:bg-white/20 active:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                className="flex items-center justify-center rounded-md bg-interactive px-3 py-1.5 transition-colors hover:bg-interactive-hover active:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -211,13 +211,13 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
                   strokeWidth="1.5"
                   width="14"
                   height="14"
-                  className="text-white/70"
+                  className="text-primary"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
               {/* Wire: right of cancel → left of trash */}
-              <div className="h-px w-2 bg-white/20" />
+              <div className="h-px w-2 bg-interactive-hover" />
             </>
           )}
 
@@ -228,8 +228,8 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
             aria-disabled={deleteState === "confirm"}
             onClick={() => setDeleteState("confirm")}
             className={cn(
-              "group flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-colors hover:border-transparent hover:bg-red-600 active:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-60",
-              deleteState === "confirm" && "border-transparent bg-red-800",
+              "group flex h-7 w-7 items-center justify-center rounded-full border border-subtle bg-card transition-colors hover:border-transparent hover:bg-solid-destructive-hover active:bg-solid-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:cursor-not-allowed disabled:opacity-60",
+              deleteState === "confirm" && "border-transparent bg-solid-destructive",
             )}
           >
             <svg
@@ -242,7 +242,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
               height="14"
               className={cn(
                 "transition-colors",
-                deleteState === "confirm" ? "text-white" : "text-white/40 group-hover:text-white",
+                deleteState === "confirm" ? "text-strong" : "text-muted group-hover:text-strong",
               )}
             >
               <path
@@ -257,11 +257,11 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
           {deleteState === "confirm" && (
             <>
               {/* Wire: right of trash → left of confirm */}
-              <div className="h-px w-2 bg-white/20" />
+              <div className="h-px w-2 bg-interactive-hover" />
               <button
                 aria-label="Confirmer la suppression"
                 onClick={() => void handleConfirmDelete()}
-                className="flex items-center justify-center rounded-md bg-green-800 px-3 py-1.5 transition-colors hover:bg-green-600 active:bg-green-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+                className="flex items-center justify-center rounded-md bg-solid-confirm px-3 py-1.5 transition-colors hover:bg-solid-confirm-hover active:bg-solid-confirm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -271,7 +271,7 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
                   strokeWidth="1.5"
                   width="14"
                   height="14"
-                  className="text-white"
+                  className="text-strong"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>

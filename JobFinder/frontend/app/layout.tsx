@@ -20,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <body className={cn(inter.className, "min-h-screen bg-gray-50 text-gray-900 antialiased")}>
+      <body className={cn(inter.className, "min-h-screen bg-page text-strong antialiased")}>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

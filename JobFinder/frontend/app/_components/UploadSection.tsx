@@ -88,7 +88,7 @@ export default function UploadSection({ onUploadComplete }: Props) {
   }, [handleFile]);
 
   return (
-    <section className="relative h-dvh snap-start overflow-hidden bg-[#0a0a0f]">
+    <section className="relative h-dvh snap-start overflow-hidden bg-page">
       <OrbitAnimation
         state={animState}
         thumbnailUrl={thumbnailUrl}
@@ -116,7 +116,7 @@ export default function UploadSection({ onUploadComplete }: Props) {
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={cn("absolute inset-0", isDragging && "ring-1 ring-white/10")}
+        className={cn("absolute inset-0", isDragging && "ring-1 ring-subtle")}
         aria-label="Importer un CV"
       />
 
@@ -129,14 +129,14 @@ export default function UploadSection({ onUploadComplete }: Props) {
       />
 
       {animState === "idle" && (
-        <p className="pointer-events-none absolute bottom-[88px] left-0 right-0 text-center text-xs text-white/25">
+        <p className="pointer-events-none absolute bottom-[88px] left-0 right-0 text-center text-xs text-hint">
           Déposez votre CV (PDF) · ou cliquez pour parcourir
         </p>
       )}
 
       <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-        <span className="text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</span>
-        <span className="animate-bounce text-sm text-white/25">⌄</span>
+        <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
+        <span className="animate-bounce text-sm text-hint">⌄</span>
       </div>
     </section>
   );
