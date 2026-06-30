@@ -88,7 +88,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {/* Skeleton pendant le chargement initial */}
       {loading && isAuthenticated && (
-        <div className="grid grid-cols-5 gap-x-5 gap-y-8">
+        <div className="grid grid-cols-5 gap-x-5 gap-y-2">
           {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
         </div>
       )}
@@ -100,7 +100,7 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
 
       {/* Liste des CVs */}
       {cvs.length > 0 && (
-        <div className="grid grid-cols-5 gap-x-5 gap-y-8">
+        <div className="grid grid-cols-5 gap-x-5 gap-y-2">
           {cvs.slice(0, MAX_CVS).map((cv) => (
             <CVCard key={cv.id} cv={cv} onDeleted={handleCvDeleted} />
           ))}
