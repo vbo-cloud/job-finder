@@ -16,9 +16,10 @@ const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 interface Props {
   onUploadComplete?: () => void;
+  libraryAccessible?: boolean;
 }
 
-export default function UploadSection({ onUploadComplete }: Props) {
+export default function UploadSection({ onUploadComplete, libraryAccessible = false }: Props) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -134,10 +135,12 @@ export default function UploadSection({ onUploadComplete }: Props) {
         </p>
       )}
 
-      <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-        <span className="text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</span>
-        <span className="animate-bounce text-sm text-white/25">⌄</span>
-      </div>
+      {libraryAccessible && (
+        <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+          <span className="text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</span>
+          <span className="animate-bounce text-sm text-white/25">⌄</span>
+        </div>
+      )}
     </section>
   );
 }

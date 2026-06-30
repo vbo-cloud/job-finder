@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useIsAuthenticated, useMsal } from "@azure/msal-react";
+import { useIsAuthenticated } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
-import { loginRequest } from "@/lib/auth/msalConfig";
+import { cn } from "@/lib/utils";
 import type { CVData } from "@/lib/api/types";
 
 import CVCard from "./CVCard";
+import CVCardPlaceholder from "./CVCardPlaceholder";
 import CVCardSkeleton from "./CVCardSkeleton";
 
 const POLL_INTERVAL_MS = 3000;
@@ -16,14 +17,15 @@ const MAX_CVS = 10;
 interface Props {
   /** Increment to trigger a manual re-fetch (e.g. right after an upload). */
   refreshTrigger?: number;
+  /** Fires whenever the library becomes accessible (authenticated + ≥1 CV) or not. */
+  onAccessibilityChange?: (accessible: boolean) => void;
 }
 
-export default function LibrarySection({ refreshTrigger = 0 }: Props) {
-  const isAuthenticated           = useIsAuthenticated();
-  const { instance }              = useMsal();
-  const [cvs, setCvs]             = useState<CVData[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(false);
+export default function LibrarySection({ refreshTrigger = 0, onAccessibilityChange }: Props) {
+  const isAuthenticated        = useIsAuthenticated();
+  const [cvs, setCvs]          = useState<CVData[]>([]);
+  const [loading, setLoading]  = useState(true);
+  const [error, setError]      = useState(false);
 
   const handleCvDeleted = useCallback((id: string) => {
     setCvs((prev) => prev.filter((cv) => cv.id !== id));
@@ -51,6 +53,14 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
     void fetchCvs();
   }, [fetchCvs, isAuthenticated, refreshTrigger]);
 
+  // Accessible as soon as we know at least one CV exists — stays accessible during re-fetches
+  // so the section doesn't flicker hidden on every upload.
+  const accessible = isAuthenticated && cvs.length > 0;
+
+  useEffect(() => {
+    onAccessibilityChange?.(accessible);
+  }, [accessible, onAccessibilityChange]);
+
   // Poll only while at least one CV is still being analysed
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -66,43 +76,28 @@ export default function LibrarySection({ refreshTrigger = 0 }: Props) {
   return (
     <section
       id="library"
-      className="relative h-dvh snap-start bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8"
+      className={cn(
+        "relative h-dvh bg-[#0a0a0f] flex flex-col items-center justify-center px-6 py-8",
+        accessible ? "snap-start" : "hidden",
+      )}
     >
       <p className="absolute top-8 text-[9px] tracking-widest text-white/20">BIBLIOTHÈQUE</p>
 
-      {/* État non connecté */}
-      {!isAuthenticated && (
-        <div className="flex flex-col items-center justify-center gap-6 pt-32">
-          <p className="text-center text-sm text-white/35">
-            Connectez-vous afin de pouvoir consulter<br />et charger des CV dans votre bibliothèque.
-          </p>
-          <button
-            type="button"
-            onClick={() => void instance.loginRedirect(loginRequest)}
-            className="rounded-full border border-white/25 px-5 py-2 text-xs text-white/65 transition-colors hover:border-white/40 hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
-          >
-            Se connecter
-          </button>
-        </div>
-      )}
-
-      {/* Skeleton pendant le chargement initial */}
-      {loading && isAuthenticated && (
+      {/* Skeleton pendant le chargement initial (avant qu'un premier CV soit connu) */}
+      {loading && cvs.length === 0 && (
         <div className="grid grid-cols-5 gap-x-5 gap-y-2">
           {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
         </div>
       )}
 
-      {/* Aucun CV */}
-      {!loading && isAuthenticated && cvs.length === 0 && !error && (
-        <p className="mt-24 text-center text-xs text-white/15">Aucun CV importé</p>
-      )}
-
-      {/* Liste des CVs */}
+      {/* Grille CVs + emplacements libres */}
       {cvs.length > 0 && (
         <div className="grid grid-cols-5 gap-x-5 gap-y-2">
           {cvs.slice(0, MAX_CVS).map((cv) => (
             <CVCard key={cv.id} cv={cv} onDeleted={handleCvDeleted} />
+          ))}
+          {Array.from({ length: MAX_CVS - Math.min(cvs.length, MAX_CVS) }).map((_, i) => (
+            <CVCardPlaceholder key={`placeholder-${i}`} />
           ))}
         </div>
       )}
