@@ -20,6 +20,7 @@ export const darkTheme: Theme = {
   "--bg-solid-destructive-hover": "rgb(220, 38, 38)",
   "--bg-solid-confirm": "rgb(22, 101, 52)",
   "--bg-solid-confirm-hover": "rgb(22, 163, 74)",
+  "--bg-scrim": "rgba(0, 0, 0, 0.40)",
 
   /* Text */
   "--text-empty": "rgba(255, 255, 255, 0.15)",
