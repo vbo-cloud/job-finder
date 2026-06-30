@@ -1,0 +1,54 @@
+import type { Theme } from "../types";
+
+export const darkTheme: Theme = {
+  /* Backgrounds */
+  "--bg-page": "#0a0a0f",
+  "--bg-surface": "#1a1a22",
+  "--bg-card": "rgba(255, 255, 255, 0.04)",
+  "--bg-overlay": "rgba(255, 255, 255, 0.06)",
+  "--bg-card-hover": "rgba(255, 255, 255, 0.08)",
+  "--bg-badge": "rgba(255, 255, 255, 0.12)",
+  "--bg-interactive": "rgba(255, 255, 255, 0.10)",
+  "--bg-interactive-hover": "rgba(255, 255, 255, 0.20)",
+  "--bg-destructive-muted": "rgba(239, 68, 68, 0.08)",
+  "--bg-accent-muted": "rgba(37, 99, 235, 0.15)",
+  "--bg-solid-primary": "rgb(37, 99, 235)",
+  "--bg-solid-primary-hover": "rgb(29, 78, 216)",
+  "--bg-solid-secondary": "rgba(255, 255, 255, 0.08)",
+  "--bg-solid-secondary-hover": "rgba(255, 255, 255, 0.14)",
+  "--bg-solid-destructive": "rgb(153, 27, 27)",
+  "--bg-solid-destructive-hover": "rgb(220, 38, 38)",
+  "--bg-solid-confirm": "rgb(22, 101, 52)",
+  "--bg-solid-confirm-hover": "rgb(22, 163, 74)",
+
+  /* Text */
+  "--text-empty": "rgba(255, 255, 255, 0.15)",
+  "--text-label": "rgba(255, 255, 255, 0.20)",
+  "--text-hint": "rgba(255, 255, 255, 0.25)",
+  "--text-muted": "rgba(255, 255, 255, 0.35)",
+  "--text-secondary": "rgba(255, 255, 255, 0.55)",
+  "--text-body": "rgba(255, 255, 255, 0.65)",
+  "--text-primary": "rgba(255, 255, 255, 0.75)",
+  "--text-strong": "rgba(255, 255, 255, 0.85)",
+  "--text-success": "rgb(52, 211, 153)",
+  "--text-destructive": "rgba(248, 113, 113, 0.65)",
+  "--text-accent": "rgb(96, 165, 250)",
+
+  /* Borders */
+  "--border-subtle": "rgba(255, 255, 255, 0.10)",
+  "--border-soft": "rgba(255, 255, 255, 0.18)",
+  "--border-default": "rgba(255, 255, 255, 0.25)",
+  "--border-hover": "rgba(255, 255, 255, 0.40)",
+
+  /* Focus rings */
+  "--ring-default": "rgba(255, 255, 255, 0.30)",
+  "--ring-primary": "rgb(96, 165, 250)",
+  "--ring-destructive": "rgb(248, 113, 113)",
+  "--ring-confirm": "rgb(34, 197, 94)",
+
+  /* Canvas */
+  "--canvas-ambient": "200, 210, 230",
+  "--canvas-orbit": "170, 210, 255",
+  "--canvas-icon": "#383838",
+  "--canvas-icon-text": "255, 255, 255",
+};
