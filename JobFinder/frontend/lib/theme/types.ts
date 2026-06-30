@@ -24,6 +24,8 @@ export type Theme = {
   "--bg-solid-confirm": string;
   "--bg-solid-confirm-hover": string;
   "--bg-scrim": string;
+  "--bg-chip": string;
+  "--bg-dot-active": string;
 
   /* Text */
   "--text-empty": string;
@@ -35,14 +37,17 @@ export type Theme = {
   "--text-primary": string;
   "--text-strong": string;
   "--text-success": string;
+  "--text-warning": string;
   "--text-destructive": string;
   "--text-accent": string;
 
   /* Borders */
+  "--border-faint": string;
   "--border-subtle": string;
   "--border-soft": string;
   "--border-default": string;
   "--border-hover": string;
+  "--border-active": string;
 
   /* Focus rings */
   "--ring-default": string;

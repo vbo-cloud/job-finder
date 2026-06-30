@@ -3171,3 +3171,42 @@ Après l'introduction du système de thème centralisé (PR #129), plusieurs com
 
 - `--bg-scrim` à `rgba(0,0,0,0.40)` dans les deux thèmes : l'overlay sert à assombrir une photo de thumbnail pour que le spinner soit lisible — la couleur sombre est sémantiquement correcte dans les deux thèmes (on veut toujours assombrir la photo, pas éclaircir).
 - Les tokens `text-muted` et `text-hint` correspondent exactement aux valeurs `white/35` et `white/25` du thème sombre — aucune perte de fidélité visuelle.
+
+---
+
+## PR #133 — feat: section détail CV avec liste de matchs
+
+**Date :** 2026-06-30
+**Branche :** `feature/cv-detail-section` → `dev`
+
+### Contexte
+
+La bibliothèque affichait les CVs sous forme de grille mais ne permettait pas d'accéder aux détails d'un CV ni à ses matchs. Il manquait un point d'entrée pour consulter les offres associées à chaque CV individuellement.
+
+### Ce qui a été fait
+
+**Backend :**
+- `routers/matches.py` : nouvel endpoint `GET /matches/cv/{cv_id}` — vérifie l'ownership du CV (`CV.user_id == user_id`), charge les matchs triés par score décroissant via `selectinload(Match.offer)`, log structuré à l'entrée et à la sortie. Gestion explicite des `HTTPException` (404 si CV introuvable ou non possédé) et `SQLAlchemyError` avec `bare raise` après logging.
+
+**Nouveaux tokens de thème :**
+- `lib/theme/types.ts`, `dark.ts`, `light.ts`, `tailwind.config.ts`, `app/globals.css` : cinq tokens ajoutés — `border-faint` (séparateurs discrets), `border-active` (onglet actif), `bg-chip` (fond carte match), `bg-dot-active` (point pagination actif), `text-warning` (score moyen).
+
+**Types frontend :**
+- `lib/api/types.ts` : trois interfaces ajoutées — `OfferOut`, `MatchOut`, `CVMatchesOut` — en miroir des schémas Pydantic du backend.
+
+**Sélection de CV :**
+- `LibrarySection.tsx` : props `onCvSelect` et `onCvsChange` ajoutés ; chaque `CVCard` reçoit `onSelect`. `onCvsChange` notifie le parent dès que la liste des CVs est chargée.
+- `HomeClient.tsx` : état `selectedCvId` + `cvList`, ref `detailRef` pour le scroll. `CVDetailSection` monté conditionnellement. Scroll dans `requestAnimationFrame` pour éviter la race condition snap-mandatory (le snap point doit être enregistré par le browser avant que `scrollIntoView` soit appelé).
+- `CVCard.tsx` : `hover:border-white/20` → `hover:border-soft` (conformité conventions).
+
+**Composants :**
+- `CVDetailSection.tsx` : section pleine hauteur (`snap-start`) avec indicateur BIBLIOTHÈQUE (centré, flèche ⌃ animée, ferme la section), boutons de navigation latérale pleine hauteur (← / →, `disabled:opacity-0`), points de pagination, panneau gauche (miniature + nom du CV), panneau droit (onglets Matchs / Review). Erreur réseau surfacée dans l'UI plutôt que silencieusement avalée.
+- `MatchList.tsx` : skeletons de chargement (5 × `animate-pulse`), état vide, liste de `MatchItem`.
+- `MatchItem.tsx` : accordéon — score coloré (`text-success` ≥ 75 %, `text-warning` ≥ 50 %, `text-muted` sinon), intitulé + entreprise + lieu + type de contrat, section dépliable (salaire, code ROME, compétences en chips).
+
+### Décisions techniques
+
+- **`requestAnimationFrame` pour le scroll snap** : dans un conteneur `snap-mandatory`, un `scrollIntoView` synchrone appelé au montage d'un nouveau `snap-start` est ignoré car le browser n'a pas encore enregistré le snap point. Envelopper dans `rAF` laisse le browser un cycle pour enregistrer le point avant de scroller.
+- **`matchesError` explicite** : le `.catch()` original avalait silencieusement les erreurs, laissant `matches = null` et affichant "Aucun match trouvé". La gestion explicite de l'erreur permet de distinguer "pas de matchs" de "échec réseau".
+- **`forwardRef` sur `CVDetailSection`** : la ref est nécessaire pour que `HomeClient` puisse appeler `scrollIntoView` sur l'élément DOM. `displayName` défini pour les DevTools React.
+- **Thumbnail à faible résolution** : la constante `THUMBNAIL_SCALE = 0.4` dans `shared/constants.py` génère des miniatures à ~29 DPI — résolution intentionnellement basse pour limiter la taille de stockage. Un endpoint `GET /cv/{cv_id}/pdf` existe pour le PDF haute qualité.

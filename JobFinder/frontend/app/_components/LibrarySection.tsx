@@ -29,6 +29,10 @@ interface Props {
   optimisticUpload?: OptimisticUpload | null;
   /** Called once the real CV is confirmed in the list so the parent can revoke the objectURL. */
   onOptimisticConsumed?: () => void;
+  /** Called when the user clicks a CV card to open its detail view. */
+  onCvSelect?: (id: string) => void;
+  /** Called after each successful fetch so the parent can keep a mirror of the CV list. */
+  onCvsChange?: (cvs: CVData[]) => void;
 }
 
 export default function LibrarySection({
@@ -36,6 +40,8 @@ export default function LibrarySection({
   onAccessibilityChange,
   optimisticUpload,
   onOptimisticConsumed,
+  onCvSelect,
+  onCvsChange,
 }: Props) {
   const isAuthenticated        = useIsAuthenticated();
   const [cvs, setCvs]          = useState<CVData[]>([]);
@@ -56,6 +62,7 @@ export default function LibrarySection({
         return tryFetch();
       });
       setCvs(data);
+      onCvsChange?.(data);
       setError(false);
     } catch (err) {
       console.error("[LibrarySection] fetch failed", err);
@@ -63,7 +70,7 @@ export default function LibrarySection({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onCvsChange]);
 
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
@@ -135,7 +142,12 @@ export default function LibrarySection({
             <CVCardOptimistic thumbnailUrl={optimisticUpload!.thumbnailUrl} />
           )}
           {realCvs.map((cv) => (
-            <CVCard key={cv.id} cv={cv} onDeleted={handleCvDeleted} />
+            <CVCard
+              key={cv.id}
+              cv={cv}
+              onDeleted={handleCvDeleted}
+              onSelect={() => onCvSelect?.(cv.id)}
+            />
           ))}
           {Array.from({ length: placeholderCount }).map((_, i) => (
             <CVCardPlaceholder key={`placeholder-${i}`} />

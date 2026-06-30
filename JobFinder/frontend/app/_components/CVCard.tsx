@@ -11,11 +11,12 @@ type DeleteState = "idle" | "confirm" | "absorbing";
 interface CVCardProps {
   cv: CVData;
   onDeleted: (id: string) => void;
+  onSelect?: () => void;
 }
 
 const delay = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
-export default function CVCard({ cv, onDeleted }: CVCardProps) {
+export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
   const isPending   = cv.status === "pending" || cv.status === "processing";
   const isError     = cv.status === "error";
   const displayName = cv.name ?? "CV sans nom";
@@ -119,7 +120,8 @@ export default function CVCard({ cv, onDeleted }: CVCardProps) {
       {/* Card */}
       <div
         ref={cardRef}
-        className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4"
+        onClick={onSelect}
+        className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4 cursor-pointer hover:border-soft transition-colors"
       >
         <div
           role={isPending ? "status" : undefined}
