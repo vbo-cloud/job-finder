@@ -21,6 +21,8 @@ export const lightTheme: Theme = {
   "--bg-solid-confirm": "rgb(22, 101, 52)",
   "--bg-solid-confirm-hover": "rgb(22, 163, 74)",
   "--bg-scrim": "rgba(0, 0, 0, 0.40)",
+  "--bg-chip": "rgba(0, 0, 0, 0.03)",
+  "--bg-dot-active": "rgba(0, 0, 0, 0.60)",
 
   /* Text */
   "--text-empty": "rgba(0, 0, 0, 0.20)",
@@ -32,14 +34,17 @@ export const lightTheme: Theme = {
   "--text-primary": "rgba(0, 0, 0, 0.82)",
   "--text-strong": "rgba(0, 0, 0, 0.92)",
   "--text-success": "rgb(22, 163, 74)",
+  "--text-warning": "rgb(180, 83, 9)",
   "--text-destructive": "rgba(220, 38, 38, 0.90)",
   "--text-accent": "rgb(37, 99, 235)",
 
   /* Borders */
+  "--border-faint": "rgba(0, 0, 0, 0.07)",
   "--border-subtle": "rgba(0, 0, 0, 0.10)",
   "--border-soft": "rgba(0, 0, 0, 0.15)",
   "--border-default": "rgba(0, 0, 0, 0.22)",
   "--border-hover": "rgba(0, 0, 0, 0.45)",
+  "--border-active": "rgba(0, 0, 0, 0.55)",
 
   /* Focus rings */
   "--ring-default": "rgba(0, 0, 0, 0.28)",

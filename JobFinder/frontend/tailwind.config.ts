@@ -28,6 +28,8 @@ const config: Config = {
         "solid-confirm":         "var(--bg-solid-confirm)",
         "solid-confirm-hover":   "var(--bg-solid-confirm-hover)",
         scrim:                   "var(--bg-scrim)",
+        chip:                    "var(--bg-chip)",
+        "dot-active":            "var(--bg-dot-active)",
       },
       textColor: {
         empty:       "var(--text-empty)",
@@ -39,14 +41,17 @@ const config: Config = {
         primary:     "var(--text-primary)",
         strong:      "var(--text-strong)",
         success:     "var(--text-success)",
+        warning:     "var(--text-warning)",
         destructive: "var(--text-destructive)",
         accent:      "var(--text-accent)",
       },
       borderColor: {
+        faint:   "var(--border-faint)",
         subtle:  "var(--border-subtle)",
         soft:    "var(--border-soft)",
         default: "var(--border-default)",
         hover:   "var(--border-hover)",
+        active:  "var(--border-active)",
       },
       ringColor: {
         subtle:      "var(--border-subtle)",

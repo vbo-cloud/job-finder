@@ -21,6 +21,8 @@ export const darkTheme: Theme = {
   "--bg-solid-confirm": "rgb(22, 101, 52)",
   "--bg-solid-confirm-hover": "rgb(22, 163, 74)",
   "--bg-scrim": "rgba(0, 0, 0, 0.40)",
+  "--bg-chip": "rgba(255, 255, 255, 0.03)",
+  "--bg-dot-active": "rgba(255, 255, 255, 0.60)",
 
   /* Text */
   "--text-empty": "rgba(255, 255, 255, 0.15)",
@@ -32,14 +34,17 @@ export const darkTheme: Theme = {
   "--text-primary": "rgba(255, 255, 255, 0.75)",
   "--text-strong": "rgba(255, 255, 255, 0.85)",
   "--text-success": "rgb(52, 211, 153)",
+  "--text-warning": "rgb(251, 191, 36)",
   "--text-destructive": "rgba(248, 113, 113, 0.65)",
   "--text-accent": "rgb(96, 165, 250)",
 
   /* Borders */
+  "--border-faint": "rgba(255, 255, 255, 0.06)",
   "--border-subtle": "rgba(255, 255, 255, 0.10)",
   "--border-soft": "rgba(255, 255, 255, 0.18)",
   "--border-default": "rgba(255, 255, 255, 0.25)",
   "--border-hover": "rgba(255, 255, 255, 0.40)",
+  "--border-active": "rgba(255, 255, 255, 0.50)",
 
   /* Focus rings */
   "--ring-default": "rgba(255, 255, 255, 0.30)",
