@@ -25,6 +25,7 @@ class OfferOut(BaseModel):
     """Job offer returned by the API."""
 
     id: uuid.UUID
+    ft_id: str
     title: str
     company: str
     location: str
@@ -32,6 +33,7 @@ class OfferOut(BaseModel):
     salary: str | None
     rome_code: str | None
     skills: list[str] = []
+    expires_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
