@@ -3210,3 +3210,41 @@ La bibliothèque affichait les CVs sous forme de grille mais ne permettait pas d
 - **`matchesError` explicite** : le `.catch()` original avalait silencieusement les erreurs, laissant `matches = null` et affichant "Aucun match trouvé". La gestion explicite de l'erreur permet de distinguer "pas de matchs" de "échec réseau".
 - **`forwardRef` sur `CVDetailSection`** : la ref est nécessaire pour que `HomeClient` puisse appeler `scrollIntoView` sur l'élément DOM. `displayName` défini pour les DevTools React.
 - **Thumbnail à faible résolution** : la constante `THUMBNAIL_SCALE = 0.4` dans `shared/constants.py` génère des miniatures à ~29 DPI — résolution intentionnellement basse pour limiter la taille de stockage. Un endpoint `GET /cv/{cv_id}/pdf` existe pour le PDF haute qualité.
+
+---
+
+## PR #134 — feat: MatchItem — lien offre, label ROME, onglets, gestion expiration
+
+**Date :** 2026-07-01
+**Branche :** `feature/match-item-enhancements` → `dev`
+
+### Contexte
+
+La liste de matchs affichait les codes ROME bruts (ex. `M1805`), le titre des offres n'était pas cliquable, et la section dépliée n'avait pas de structure par onglet. Par ailleurs, le cleanup agent ignorait le champ `expires_at` des offres, laissant en base (et dans la liste des matchs) des offres dépubliées sur France Travail.
+
+### Ce qui a été fait
+
+**Backend :**
+- `schemas.py` : `ft_id: str` et `expires_at: datetime | None` ajoutés à `OfferOut` — ces champs existaient dans le modèle SQLAlchemy mais n'étaient pas exposés par l'API.
+- `agents/cleanup/main.py` : troisième critère ajouté au `or_()` — toute offre dont `expires_at` est non nul et dépassé est maintenant purgée lors du passage quotidien (02:00 UTC), indépendamment de son âge de collecte.
+
+**Types frontend :**
+- `lib/api/types.ts` : `ft_id: string` et `expires_at: string | null` ajoutés à `OfferOut`.
+
+**Nouveau token de thème :**
+- `lib/theme/types.ts`, `dark.ts`, `light.ts`, `tailwind.config.ts`, `app/globals.css` : token `border-accent` ajouté (`rgba(96, 165, 250, 0.35)` dark / `rgba(37, 99, 235, 0.35)` light) pour la bordure du chip ROME.
+
+**Mapping ROME :**
+- `lib/rome-codes.ts` : nouveau fichier — dictionnaire `ROME_LABELS` (domaines A à N, ~200 codes) + helper `getRomeLabel(code: string): string`. Retourne le code brut si inconnu — aucune valeur inventée.
+
+**`MatchItem.tsx` — refonte :**
+- Titre : balise `<a>` ouvrant l'offre sur `candidat.francetravail.fr/offres/recherche/detail/{ft_id}` dans un nouvel onglet. Hover : `text-accent` (bleu), actif : `text-strong`. Si `expires_at` est dépassé : titre affiché en texte simple (non cliquable) + badge "Expirée" (`bg-destructive-muted`).
+- Accordéon : chevron dissocié du titre — la structure `<a>` imbriquée dans un `<button>` (HTML invalide) est évitée.
+- Section dépliée avec deux onglets. **Offre** : chip ROME bleuté (`bg-accent-muted border-accent text-accent`) avec libellé complet, salaire, compétences. **Analyse** : placeholder "bientôt disponible".
+
+### Décisions techniques
+
+- **URL France Travail construite depuis `ft_id`** : le pattern `candidat.francetravail.fr/offres/recherche/detail/{id}` est le lien canonique public — `ft_id` correspond au champ `id` de l'API France Travail.
+- **`active:text-strong` plutôt que `active:text-white`** : `text-white` codé en dur casse en thème clair. `text-strong` produit l'effet "flash au clic" dans les deux thèmes sans sortir du système de tokens.
+- **Mapping ROME en frontend, pas en base** : stocker les libellés nécessiterait migration Alembic + modification du collecteur + re-collection. La map frontend couvre les codes effectivement utilisés sans impacter le schéma.
+- **`expires_at` dans le cleanup** : la purge basée uniquement sur `ft_updated_at`/`collected_at` laissait des offres dépubliées en base pendant des semaines. Ajouter `expires_at < now` comme critère supplémentaire garantit la cohérence entre base et plateforme France Travail.
