@@ -16,7 +16,7 @@ from azure.servicebus.exceptions import ServiceBusError
 from azure.storage.blob import BlobServiceClient
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from pdfminer.pdfparser import PDFSyntaxError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -336,12 +336,20 @@ def list_cvs(
     logger.info("cv_list_started", user_id=user_id)
     try:
         match_count_sq = (
-            select(Match.cv_id, func.count(Match.id).label("match_count"))
+            select(
+                Match.cv_id,
+                func.count(Match.id).label("match_count"),
+                func.count(Match.id).filter(Match.seen_at.is_(None)).label("unseen_count"),
+            )
             .group_by(Match.cv_id)
             .subquery()
         )
         rows = session.execute(
-            select(CV, func.coalesce(match_count_sq.c.match_count, 0).label("match_count"))
+            select(
+                CV,
+                func.coalesce(match_count_sq.c.match_count, 0).label("match_count"),
+                func.coalesce(match_count_sq.c.unseen_count, 0).label("unseen_count"),
+            )
             .outerjoin(match_count_sq, CV.id == match_count_sq.c.cv_id)
             .where(CV.user_id == user_id)
             .order_by(CV.uploaded_at.desc())
@@ -357,9 +365,10 @@ def list_cvs(
             status=cv.status,
             uploaded_at=cv.uploaded_at,
             match_count=match_count,
+            unseen_count=unseen_count,
             has_thumbnail=cv.thumbnail_url is not None,
         )
-        for cv, match_count in rows
+        for cv, match_count, unseen_count in rows
     ]
     logger.info("cv_list_done", user_id=user_id, count=len(result))
     return result
@@ -458,6 +467,44 @@ def get_cv_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"},
     )
+
+
+@router.patch("/{cv_id}/mark-all-seen", status_code=status.HTTP_204_NO_CONTENT)
+def mark_all_seen(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Mark all unseen matches for a CV as seen.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+    """
+    logger.info("mark_all_seen_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+
+        if cv is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+        session.execute(
+            update(Match)
+            .where(Match.cv_id == cv_id, Match.seen_at.is_(None))
+            .values(seen_at=datetime.now(timezone.utc))
+        )
+        session.commit()
+    except SQLAlchemyError:
+        logger.error("mark_all_seen_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    logger.info("mark_all_seen_done", user_id=user_id, cv_id=str(cv_id))
 
 
 @router.delete("/{cv_id}", status_code=status.HTTP_204_NO_CONTENT)

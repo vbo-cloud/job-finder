@@ -6,6 +6,7 @@ export interface CVData {
   status: CVStatus;
   uploaded_at: string;
   match_count: number;
+  unseen_count: number;
   has_thumbnail: boolean;
 }
 

@@ -2986,3 +2986,34 @@ Le polling par intervalle (`setInterval`) appelle `fetchCvs()` directement, sans
 ### Décision technique
 
 Les conventions restent dans des fichiers dédiés consultés à la demande (avant d'écrire du code dans la technologie concernée). `CLAUDE.md` conserve uniquement le contexte projet stable : workflow collaboratif, stack, structure repo, CI/CD, git flow, code review standards.
+
+---
+
+## PR #125 — feat(frontend): badge nouveaux matchs non vus sur les cartes CV
+
+**Date :** 2026-06-30
+
+### Contexte
+
+Le nombre de matches s'affichait sur chaque carte CV, mais sans distinction entre les offres déjà consultées et les nouvelles depuis le dernier lancement. L'utilisateur n'avait aucun moyen de savoir si de nouvelles offres pertinentes étaient apparues.
+
+### Ce qui a été fait
+
+**Backend :**
+- Migration `007_add_seen_at_to_matches.py` : ajout de la colonne `seen_at TIMESTAMPTZ NULL` à la table `matches`. `NULL` = non vu, timestamp = vu à cet instant.
+- `shared/models.py` : champ `seen_at` ajouté au modèle `Match`.
+- `schemas.py` : champ `unseen_count: int` ajouté à `CVListItemOut`.
+- `routers/cv.py` — deux changements :
+  - `list_cvs` : la subquery agrège maintenant `match_count` et `unseen_count` (via `COUNT(...) FILTER (WHERE seen_at IS NULL)`) en un seul scan, sans jointure supplémentaire.
+  - Nouvel endpoint `PATCH /cv/{cv_id}/mark-all-seen` : vérifie l'ownership du CV, met à jour en masse tous les matches non vus (`seen_at IS NULL → now()`).
+
+**Frontend :**
+- `lib/api/types.ts` : `unseen_count: number` ajouté à `CVData`.
+- `CVCard.tsx` : état local `unseenCount` (synchronisé sur `cv.unseen_count` via `useEffect`). Quand `unseenCount > 0`, un texte vert `+N nouveaux` apparaît au-dessus du compteur de matches. Un clic déclenche l'appel `PATCH /cv/{cv_id}/mark-all-seen` et remet le badge à 0 en optimiste (revert si l'API échoue).
+
+### Décisions techniques
+
+- `seen_at` nullable plutôt qu'un booléen `is_seen` : le timestamp permet de tracer quand la consultation a eu lieu, et préserve la possibilité de filtrer par période plus tard.
+- `COUNT FILTER (WHERE seen_at IS NULL)` dans la subquery existante : un seul GROUP BY pour `match_count` et `unseen_count` — même scan, même jointure que l'existant.
+- Le décrément individuel (une offre vue → `unseen_count -= 1`) est volontairement absent : il n'existe pas encore de vue liste-des-offres dans le frontend. L'infra est en place (`seen_at` en base, le champ exposé dans l'API), le câblage UI se fera quand la page matches sera construite.
+- Si des offres expirent et sont supprimées par le cleanup agent, leurs matches disparaissent → l'`unseen_count` baisse automatiquement sur le prochain fetch, sans logique spéciale.

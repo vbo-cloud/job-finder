@@ -96,6 +96,7 @@ class Match(Base):
         nullable=False,
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     cv: Mapped["CV"] = relationship("CV", back_populates="matches")
