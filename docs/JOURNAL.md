@@ -3143,6 +3143,10 @@ Suite à la mise en place de la grille 5 colonnes (PR #127), deux problèmes res
 
 ---
 
+## PR #131 — error : cancelled
+
+---
+
 ## PR #132 — fix(frontend): replace hardcoded colors with theme tokens + enforce color convention
 
 **Date :** 2026-06-30
