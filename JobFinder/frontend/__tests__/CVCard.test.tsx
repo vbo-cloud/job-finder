@@ -16,7 +16,7 @@ import type { CVData } from "@/lib/api/types";
 const baseCV: CVData = {
   id: "cv-uuid-1",
   name: "Mon CV.pdf",
-  status: "done",
+  status: "matched",
   uploaded_at: "2024-06-01T10:00:00.000Z",
   match_count: 5,
   unseen_count: 2,
@@ -56,9 +56,16 @@ describe("CVCard", () => {
       expect(screen.getByText("Erreur")).toBeInTheDocument();
     });
 
-    it("shows match count when status is done", () => {
+    it("shows match count when status is matched", () => {
       render(<CVCard cv={baseCV} onDeleted={jest.fn()} />);
       expect(screen.getByText("5 matchs")).toBeInTheDocument();
+    });
+
+    it("shows searching label when status is done", () => {
+      render(
+        <CVCard cv={{ ...baseCV, status: "done" }} onDeleted={jest.fn()} />
+      );
+      expect(screen.getByText(/Recherche en cours/)).toBeInTheDocument();
     });
 
     it("uses singular match when count is 1", () => {

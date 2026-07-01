@@ -104,7 +104,10 @@ export default function LibrarySection({
   useEffect(() => {
     if (!isAuthenticated) return;
     const hasPending = cvs.some(
-      (cv) => cv.status === "pending" || cv.status === "processing",
+      (cv) =>
+        cv.status === "pending" ||
+        cv.status === "processing" ||
+        cv.status === "done",
     );
     if (!hasPending) return;
 

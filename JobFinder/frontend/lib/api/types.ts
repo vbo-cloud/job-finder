@@ -1,4 +1,4 @@
-export type CVStatus = "pending" | "processing" | "done" | "error";
+export type CVStatus = "pending" | "processing" | "done" | "matched" | "error";
 
 export interface CVData {
   id: string;

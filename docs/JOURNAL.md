@@ -3277,6 +3277,36 @@ Environ 50 % des liens de matchs ouvrerts depuis le site menaient sur "L'offre n
 
 ---
 
+## PR #139 — feat(frontend): progression matching sur les cartes CV
+
+**Date :** 2026-07-01
+**Branche :** `feature/cv-card-match-status-ux` → `dev`
+
+### Contexte
+
+Après l'upload d'un CV, la carte affichait immédiatement `0 matchs` alors que l'agent de matching n'avait pas encore tourné. L'utilisateur n'avait aucun retour visuel sur l'état réel de la recherche. Par ailleurs, la transition de la carte optimiste vers la vraie `CVCard` provoquait un bref flash du texte `"PDF"` pendant le chargement de la miniature depuis le blob storage.
+
+### Ce qui a été fait
+
+**`agents/matching/main.py`** : après chaque run, les CVs en statut `"done"` (analyse terminée, matching non encore passé) sont avancés à `"matched"`. Le frontend dispose ainsi d'un signal non ambigu distinguant « matching en cours » (0 résultats connus) de « matching terminé avec 0 correspondances réelles ».
+
+**`lib/api/types.ts`** : `"matched"` ajouté à `CVStatus`.
+
+**`CVCard.tsx`** :
+- Statut `"done"` + `match_count === 0` → spinner + `"Recherche en cours..."` avec ellipse animée (cycles `.` → `..` → `...` toutes les 500 ms via `AnimatedEllipsis`).
+- Statut `"matched"` (ou `"done"` + `match_count > 0` pour les CVs antérieurs) → affichage du compte.
+- `has_thumbnail && !thumbnailSrc` (fetch blob en cours) → spinner au lieu du texte `"PDF"`, éliminant le flash.
+
+**`LibrarySection.tsx`** : le polling est étendu aux CVs `"done"` + `match_count === 0` afin que la carte se mette à jour automatiquement à la fin du matching.
+
+### Décisions techniques
+
+- **`"done"` + `match_count === 0` comme heuristic de searching** : introduire un état `"done"` + `match_count === 0` comme proxy de « matching pas encore passé » est rétro-compatible — les CVs existants en `"done"` avec `match_count > 0` affichent leur compte immédiatement sans attendre un passage du matching agent.
+- **Nouveau statut `"matched"`** : sans ce statut, il est impossible de distinguer `match_count === 0` parce que le matching n'a pas tourné de `match_count === 0` parce qu'aucune offre ne correspond. La colonne `status` est un `String` sans CHECK constraint en base — aucune migration nécessaire.
+- **Ellipse animée en React plutôt que CSS keyframes** : le cycle `.` → `..` → `...` est contrôlé par un `setInterval` dans `AnimatedEllipsis`, colocalisé dans `CVCard.tsx`. Évite d'étendre `tailwind.config.ts` pour une animation ponctuelle.
+
+---
+
 ## PR #135 — refactor: ROME codes — migration ARRAY vers JSONB, labels depuis le référentiel FT
 
 **Date :** 2026-07-01

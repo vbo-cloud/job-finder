@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import func, literal_column, select, text
+from sqlalchemy import func, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from shared.bus import receive_message, send_message
 from shared.config import MATCHING_SCORE_THRESHOLD
 from shared.db import get_session, run_migrations
-from shared.models import Match, Offer
+from shared.models import CV, Match, Offer
 from shared.telemetry import configure_telemetry
 
 OFFER_READY_QUEUE = "offer-ready"
@@ -122,6 +122,11 @@ def main() -> None:
                 all_matches = _get_all_matches(session)
                 if all_matches:
                     new_matches = _upsert_matches(all_matches, session)
+                # Advance CVs whose analysis is complete ("done") to "matched" so the
+                # frontend can distinguish "matching in progress" from "0 real results".
+                session.execute(
+                    update(CV).where(CV.status == "done").values(status="matched")
+                )
                 session.commit()
         except SQLAlchemyError:
             logger.error("matching_failed", exc_info=True)

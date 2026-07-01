@@ -16,9 +16,22 @@ interface CVCardProps {
 
 const delay = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
+function AnimatedEllipsis() {
+  const [step, setStep] = useState(1);
+  useEffect(() => {
+    const id = setInterval(() => setStep((n) => (n % 3) + 1), 500);
+    return () => clearInterval(id);
+  }, []);
+  return <span aria-hidden="true">{".".repeat(step)}</span>;
+}
+
 export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
   const isPending   = cv.status === "pending" || cv.status === "processing";
+  const isSearching = cv.status === "done";
+  const isMatched   = cv.status === "matched";
   const isError     = cv.status === "error";
+  const showSpinner = isPending || isSearching;
+
   const displayName = cv.name ?? "CV sans nom";
   const date = new Date(cv.uploaded_at).toLocaleDateString("fr-FR", {
     day: "numeric",
@@ -30,6 +43,10 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
   const [isHovered, setIsHovered]         = useState(false);
   const [deleteState, setDeleteState]     = useState<DeleteState>("idle");
   const [unseenCount, setUnseenCount] = useState(cv.unseen_count);
+
+  // Thumbnail loading: has_thumbnail is set on the CV but blob fetch not complete yet.
+  const isThumbnailLoading = cv.has_thumbnail && !thumbnailSrc;
+  const showImageSpinner   = showSpinner || isThumbnailLoading;
 
   useEffect(() => {
     setUnseenCount(cv.unseen_count);
@@ -124,12 +141,17 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
         className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4 cursor-pointer hover:border-soft transition-colors"
       >
         <div
-          role={isPending ? "status" : undefined}
-          aria-label={isPending ? "Analyse en cours" : undefined}
+          role={showImageSpinner ? "status" : undefined}
+          aria-label={
+            isPending ? "Analyse en cours" :
+            isSearching ? "Recherche en cours" :
+            isThumbnailLoading ? "Chargement" :
+            undefined
+          }
           className={cn(
             "relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg",
-            !thumbnailSrc && isPending && "bg-card",
-            !thumbnailSrc && !isPending && !isError && "bg-card-hover",
+            !thumbnailSrc && showImageSpinner && "bg-card",
+            !thumbnailSrc && !showImageSpinner && !isError && "bg-card-hover",
             isError && "bg-destructive-muted",
           )}
         >
@@ -140,16 +162,16 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
               alt=""
               className={cn(
                 "absolute inset-0 h-full w-full object-cover",
-                isPending && "grayscale opacity-50",
+                showSpinner && "grayscale opacity-50",
               )}
             />
           )}
 
-          {thumbnailSrc && isPending && (
+          {thumbnailSrc && showSpinner && (
             <div className="absolute inset-0 bg-scrim" />
           )}
 
-          {isPending && (
+          {showImageSpinner && (
             <svg
               aria-hidden="true"
               className="relative h-5 w-5 animate-spin text-muted"
@@ -163,7 +185,7 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
           )}
 
           {isError && <span className="text-xs text-destructive">Erreur</span>}
-          {!isPending && !isError && !thumbnailSrc && (
+          {!showImageSpinner && !isError && !thumbnailSrc && (
             <span className="text-xs text-label">PDF</span>
           )}
         </div>
@@ -174,7 +196,12 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
         {isPending && (
           <p className="text-[10px] text-hint">Analyse en cours…</p>
         )}
-        {!isPending && !isError && (
+        {isSearching && (
+          <p className="text-[10px] text-hint">
+            Recherche en cours<AnimatedEllipsis />
+          </p>
+        )}
+        {!showSpinner && !isError && (
           <p className="text-[10px] text-muted">
             {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
             {unseenCount > 0 && (
