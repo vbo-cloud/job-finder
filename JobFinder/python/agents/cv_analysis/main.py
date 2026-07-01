@@ -48,7 +48,6 @@ ROME_REFERENTIEL: dict[str, str] = json.loads(
 )
 
 logger = structlog.get_logger()
-logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))
 
 _openai_client = AzureOpenAI(
     api_key=AZURE_OPENAI_API_KEY,
@@ -260,6 +259,7 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
 def main() -> None:
     """Consume one cv-analysis message, extract ROME codes, and dispatch offer-ready."""
     configure_telemetry("cv-analysis")
+    logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))
 
     try:
         run_migrations()
