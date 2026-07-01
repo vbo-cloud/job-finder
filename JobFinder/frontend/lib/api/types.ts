@@ -15,9 +15,14 @@ export interface CVUploadResponse {
   message: string;
 }
 
+export interface RomeCodeEntry {
+  cv_ids: string[];
+  label: string;
+}
+
 export interface ProfileData {
   user_id: string;
-  rome_codes: string[];
+  rome_codes: Record<string, RomeCodeEntry>;
   job_categories: string[];
   location: string | null;
   contract_types: string[];
@@ -42,6 +47,6 @@ export interface MatchOut {
 }
 
 export interface CVMatchesOut {
-  rome_codes: string[];
+  rome_codes: Record<string, RomeCodeEntry>;
   matches: MatchOut[];
 }

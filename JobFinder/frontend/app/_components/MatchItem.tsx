@@ -2,17 +2,19 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { getRomeLabel } from "@/lib/rome-codes";
-import type { MatchOut } from "@/lib/api/types";
+import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
 
 const FT_OFFER_URL = "https://candidat.francetravail.fr/offres/recherche/detail";
 
 type Tab = "offre" | "analyse";
 const TAB_LABELS: Record<Tab, string> = { offre: "Offre", analyse: "Analyse" };
 
-interface Props { match: MatchOut; }
+interface Props {
+  match: MatchOut;
+  romeCodesDict: Record<string, RomeCodeEntry>;
+}
 
-export default function MatchItem({ match }: Props) {
+export default function MatchItem({ match, romeCodesDict }: Props) {
   const [open, setOpen]           = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("offre");
   const scorePercent = Math.round(match.score * 100);
@@ -97,7 +99,7 @@ export default function MatchItem({ match }: Props) {
               <>
                 {match.offer.rome_code && (
                   <span className="self-start text-[9px] px-2 py-0.5 rounded-full bg-accent-muted border border-accent text-accent">
-                    {getRomeLabel(match.offer.rome_code)}
+                    {romeCodesDict[match.offer.rome_code]?.label ?? match.offer.rome_code}
                   </span>
                 )}
                 {match.offer.salary && (
