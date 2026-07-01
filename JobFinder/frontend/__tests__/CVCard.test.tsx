@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
@@ -116,6 +116,25 @@ describe("CVCard", () => {
       expect(
         screen.getByRole("button", { name: "Annuler la suppression" })
       ).toBeInTheDocument();
+    });
+
+    it("confirms delete: calls apiClient.delete and fires onDeleted callback", async () => {
+      jest.useFakeTimers();
+      const onDeleted = jest.fn();
+      const { container } = render(<CVCard cv={baseCV} onDeleted={onDeleted} />);
+
+      fireEvent.mouseEnter(container.firstChild as HTMLElement);
+      fireEvent.click(screen.getByRole("button", { name: "Supprimer ce CV" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirmer la suppression" }));
+
+      // runAllTimersAsync fires the 400ms animation delay and flushes the
+      // promise chain that follows (apiClient.delete → onDeleted).
+      await act(async () => jest.runAllTimersAsync());
+
+      expect((apiClient.delete as jest.Mock)).toHaveBeenCalledWith(`/cv/${baseCV.id}`);
+      expect(onDeleted).toHaveBeenCalledWith(baseCV.id);
+
+      jest.useRealTimers();
     });
 
     it("clicking cancel returns to idle state without calling delete", () => {
