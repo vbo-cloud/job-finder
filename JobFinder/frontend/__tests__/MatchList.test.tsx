@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import MatchList from "@/app/_components/MatchList";
+import MatchList, { SKELETON_COUNT } from "@/app/_components/MatchList";
 import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
 
 const emptyRomeCodes: Record<string, RomeCodeEntry> = {};
@@ -28,9 +28,8 @@ describe("MatchList", () => {
     const { container } = render(
       <MatchList matches={[]} loading={true} romeCodesDict={emptyRomeCodes} />
     );
-    // 5 skeleton divs with animate-pulse class
     const skeletons = container.querySelectorAll(".animate-pulse");
-    expect(skeletons).toHaveLength(5);
+    expect(skeletons).toHaveLength(SKELETON_COUNT);
   });
 
   it("shows empty state message when no matches and not loading", () => {

@@ -7,11 +7,13 @@ interface Props {
   romeCodesDict: Record<string, RomeCodeEntry>;
 }
 
+export const SKELETON_COUNT = 5;
+
 export default function MatchList({ matches, loading, romeCodesDict }: Props) {
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
-        {[0, 1, 2, 3, 4].map((i) => (
+        {Array.from({ length: SKELETON_COUNT }, (_, i) => (
           <div key={i} className="h-16 rounded-xl bg-card animate-pulse" />
         ))}
       </div>

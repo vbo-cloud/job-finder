@@ -16,9 +16,11 @@ beforeEach(() => {
 });
 
 describe("useTheme", () => {
-  it("initialises to dark theme by default", () => {
+  it("initialises to dark theme by default without calling applyTheme", () => {
     const { result } = renderHook(() => useTheme());
     expect(result.current.themeId).toBe("dark");
+    // dark is the globals.css default — no JS apply needed on initial mount
+    expect(mockedApplyTheme).not.toHaveBeenCalled();
   });
 
   it("reads light theme from localStorage on mount", () => {

@@ -2,12 +2,14 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 jest.mock("@/lib/api/client", () => ({
+  __esModule: true,
   default: {
     get: jest.fn().mockResolvedValue({ data: new Blob() }),
     delete: jest.fn().mockResolvedValue({}),
   },
 }));
 
+import apiClient from "@/lib/api/client";
 import CVCard from "@/app/_components/CVCard";
 import type { CVData } from "@/lib/api/types";
 
@@ -87,6 +89,10 @@ describe("CVCard", () => {
   });
 
   describe("delete flow", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
     it("shows delete button on hover (via mouse enter)", () => {
       const { container } = render(
         <CVCard cv={baseCV} onDeleted={jest.fn()} />
@@ -112,7 +118,7 @@ describe("CVCard", () => {
       ).toBeInTheDocument();
     });
 
-    it("clicking cancel returns to idle state", () => {
+    it("clicking cancel returns to idle state without calling delete", () => {
       const { container } = render(
         <CVCard cv={baseCV} onDeleted={jest.fn()} />
       );
@@ -124,6 +130,7 @@ describe("CVCard", () => {
       expect(
         screen.queryByRole("button", { name: "Confirmer la suppression" })
       ).not.toBeInTheDocument();
+      expect((apiClient.delete as jest.Mock)).not.toHaveBeenCalled();
     });
   });
 

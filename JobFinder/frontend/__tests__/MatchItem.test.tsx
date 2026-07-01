@@ -9,8 +9,10 @@ const romeCodesDict: Record<string, RomeCodeEntry> = {
   M1805: { cv_ids: ["cv1"], label: "Études et développement informatique" },
 };
 
-function makeMatch(overrides: Partial<MatchOut["offer"]> & { score?: number } = {}): MatchOut {
-  const { score = 0.85, ...offerOverrides } = overrides;
+function makeMatch(
+  score = 0.85,
+  offerOverrides: Partial<MatchOut["offer"]> = {},
+): MatchOut {
   return {
     score,
     offer: {
@@ -32,24 +34,24 @@ function makeMatch(overrides: Partial<MatchOut["offer"]> & { score?: number } = 
 describe("MatchItem", () => {
   describe("score display", () => {
     it("renders score as percentage", () => {
-      render(<MatchItem match={makeMatch({ score: 0.85 })} romeCodesDict={emptyRomeCodes} />);
+      render(<MatchItem match={makeMatch(0.85)} romeCodesDict={emptyRomeCodes} />);
       expect(screen.getByText("85%")).toBeInTheDocument();
     });
 
     it("applies success color for score >= 75%", () => {
-      render(<MatchItem match={makeMatch({ score: 0.80 })} romeCodesDict={emptyRomeCodes} />);
+      render(<MatchItem match={makeMatch(0.80)} romeCodesDict={emptyRomeCodes} />);
       const scoreEl = screen.getByText("80%");
       expect(scoreEl).toHaveClass("text-success");
     });
 
     it("applies warning color for score >= 50% but < 75%", () => {
-      render(<MatchItem match={makeMatch({ score: 0.60 })} romeCodesDict={emptyRomeCodes} />);
+      render(<MatchItem match={makeMatch(0.60)} romeCodesDict={emptyRomeCodes} />);
       const scoreEl = screen.getByText("60%");
       expect(scoreEl).toHaveClass("text-warning");
     });
 
     it("applies muted color for score < 50%", () => {
-      render(<MatchItem match={makeMatch({ score: 0.40 })} romeCodesDict={emptyRomeCodes} />);
+      render(<MatchItem match={makeMatch(0.40)} romeCodesDict={emptyRomeCodes} />);
       const scoreEl = screen.getByText("40%");
       expect(scoreEl).toHaveClass("text-muted");
     });
@@ -59,7 +61,7 @@ describe("MatchItem", () => {
     it("shows 'Expirée' badge when expires_at is in the past", () => {
       render(
         <MatchItem
-          match={makeMatch({ expires_at: "2020-01-01T00:00:00Z" })}
+          match={makeMatch(0.85, { expires_at: "2020-01-01T00:00:00Z" })}
           romeCodesDict={emptyRomeCodes}
         />
       );
@@ -69,7 +71,7 @@ describe("MatchItem", () => {
     it("does not show expired badge for future offers", () => {
       render(
         <MatchItem
-          match={makeMatch({ expires_at: "2099-01-01T00:00:00Z" })}
+          match={makeMatch(0.85, { expires_at: "2099-01-01T00:00:00Z" })}
           romeCodesDict={emptyRomeCodes}
         />
       );
@@ -86,7 +88,7 @@ describe("MatchItem", () => {
     it("renders offer title as plain text when expired", () => {
       render(
         <MatchItem
-          match={makeMatch({ expires_at: "2020-01-01T00:00:00Z" })}
+          match={makeMatch(0.85, { expires_at: "2020-01-01T00:00:00Z" })}
           romeCodesDict={emptyRomeCodes}
         />
       );
