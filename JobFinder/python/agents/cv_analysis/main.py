@@ -5,6 +5,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import structlog
 from openai import AzureOpenAI
@@ -40,6 +41,11 @@ AZURE_OPENAI_ROME_DEPLOYMENT = os.environ.get("AZURE_OPENAI_ROME_DEPLOYMENT", "g
 MAX_ATTEMPTS = 2
 
 ROME_CODE_PATTERN = re.compile(r"^[A-Z]\d{4}$")
+
+_REFERENTIEL_PATH = Path(__file__).parent.parent.parent / "shared" / "rome_referentiel.json"
+ROME_REFERENTIEL: dict[str, str] = json.loads(
+    _REFERENTIEL_PATH.read_text(encoding="utf-8")
+)
 
 logger = structlog.get_logger()
 
@@ -116,7 +122,12 @@ def _set_cv_status(cv_id: str, status: str) -> None:
 
 
 def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
-    """Extract ROME occupation codes and their labels from CV text using GPT-4o-mini.
+    """Extract ROME occupation codes from CV text using GPT-4o-mini.
+
+    GPT-4o-mini identifies candidate codes only — no labels. Each code is
+    validated against ROME_REFERENTIEL: codes that fail the regex or are absent
+    from the referential are silently rejected (hallucination protection). The
+    label is always sourced from the referential, never from GPT output.
 
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
@@ -145,11 +156,9 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
                         "content": (
                             "Tu es un expert en classification des métiers français. "
                             "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide "
-                            'de la forme {"rome_codes": [{"code": "M1805", "label": "Études et développement informatique"}, ...]} '
-                            "contenant entre 3 et 5 codes ROME pertinents. "
-                            "Chaque entrée doit avoir : "
-                            "\"code\" (format : lettre + 4 chiffres, ex: M1805) et "
-                            "\"label\" (intitulé officiel ROME en français). "
+                            'de la forme {"rome_codes": ["M1805", "M1802", ...]} '
+                            "contenant entre 3 et 5 codes ROME pertinents "
+                            "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
                             "Ne retourne rien d'autre que le JSON."
                         ),
                     },
@@ -159,17 +168,20 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
                     },
                 ],
             )
-            raw_items: list[dict] = json.loads(
-                response.choices[0].message.content
-            )["rome_codes"]
-            valid_items = [
-                item for item in raw_items
-                if isinstance(item, dict)
-                and ROME_CODE_PATTERN.match(item.get("code", ""))
-                and item.get("label")
-            ]
+            raw_codes: list = json.loads(response.choices[0].message.content)["rome_codes"]
+            valid_items = []
+            for code in raw_codes:
+                if not isinstance(code, str):
+                    continue
+                code = code.upper().strip()
+                if not ROME_CODE_PATTERN.match(code):
+                    continue
+                if code not in ROME_REFERENTIEL:
+                    logger.warning("rome_code_not_in_referentiel", code=code)
+                    continue
+                valid_items.append({"code": code, "label": ROME_REFERENTIEL[code]})
             if not valid_items:
-                raise ValueError(f"No valid ROME items in GPT response: {raw_items}")
+                raise ValueError(f"No valid ROME codes after referential lookup: {raw_codes}")
             logger.info("rome_extraction_succeeded", attempt=attempt, codes=[i["code"] for i in valid_items])
             return valid_items
         except (json.JSONDecodeError, KeyError, ValueError) as e:
@@ -194,7 +206,7 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
 
     Each item in rome_items must have "code" and "label" keys. The cv_id is
     appended to the code's cv_ids list if not already present. The label is
-    always updated to the latest value returned by GPT-4o-mini.
+    always updated to the latest value from the ROME referential.
 
     Uses SELECT ... FOR UPDATE to prevent concurrent analyses from overwriting
     each other's data.
