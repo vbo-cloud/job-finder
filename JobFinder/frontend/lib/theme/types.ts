@@ -48,6 +48,7 @@ export type Theme = {
   "--border-default": string;
   "--border-hover": string;
   "--border-active": string;
+  "--border-accent": string;
 
   /* Focus rings */
   "--ring-default": string;

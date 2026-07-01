@@ -52,6 +52,7 @@ const config: Config = {
         default: "var(--border-default)",
         hover:   "var(--border-hover)",
         active:  "var(--border-active)",
+        accent:  "var(--border-accent)",
       },
       ringColor: {
         subtle:      "var(--border-subtle)",
