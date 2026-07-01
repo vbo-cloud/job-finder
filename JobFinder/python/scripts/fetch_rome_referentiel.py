@@ -3,7 +3,7 @@
 Usage:
     FT_CLIENT_ID=... FT_CLIENT_SECRET=... python scripts/fetch_rome_referentiel.py
 
-Requires FT application credentials with the api_rome-metierv1 scope enabled.
+Uses the same FT credentials as the offer_fetching agent (api_offresdemploiv2 scope).
 Run from the JobFinder/python/ directory. Saves to shared/rome_referentiel.json.
 
 The generated file is committed to the repo so agents can load it at startup
@@ -13,18 +13,15 @@ when France Travail publishes a new ROME version.
 
 import json
 import os
-import time
 from pathlib import Path
 
 import requests
 import structlog
 
 FT_TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
-FT_ROME_URL = "https://api.francetravail.io/partenaire/rome/v1/metier"
-FT_ROME_SCOPE = "api_rome-metierv1"
+FT_ROME_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/referentiel/metiers"
+FT_SCOPE = "api_offresdemploiv2 o2dsoffre"
 OUTPUT_PATH = Path(__file__).parent.parent / "shared" / "rome_referentiel.json"
-PAGE_SIZE = 150
-INTER_PAGE_SLEEP = 0.3
 MIN_EXPECTED_CODES = 400
 
 logger = structlog.get_logger()
@@ -39,14 +36,13 @@ if not _ft_client_secret:
 
 
 def _get_access_token() -> str:
-    """Obtain an OAuth2 access token with the ROME API scope.
+    """Obtain an OAuth2 access token for the FT offers API.
 
     Returns:
         The access token string.
 
     Raises:
-        ValueError: If the token request fails (e.g. scope not enabled on the application).
-        requests.RequestException: On network error.
+        requests.RequestException: If the token request fails.
     """
     try:
         response = requests.post(
@@ -56,20 +52,21 @@ def _get_access_token() -> str:
                 "grant_type": "client_credentials",
                 "client_id": _ft_client_id,
                 "client_secret": _ft_client_secret,
-                "scope": FT_ROME_SCOPE,
+                "scope": FT_SCOPE,
             },
         )
         response.raise_for_status()
-    except requests.HTTPError as e:
-        raise ValueError(
-            f"Token request failed ({response.status_code}). "
-            "Ensure the FT application has the api_rome-metierv1 scope enabled."
-        ) from e
+    except requests.RequestException:
+        logger.error("token_request_failed", exc_info=True)
+        raise
     return response.json()["access_token"]
 
 
 def _fetch_all_metiers(token: str) -> dict[str, str]:
-    """Fetch all ROME métiers from the FT API using range-based pagination.
+    """Fetch all ROME métiers from the FT v2 referentiel endpoint.
+
+    The /referentiel/metiers endpoint returns the complete list in a single
+    response — no pagination required.
 
     Args:
         token: A valid OAuth2 access token.
@@ -78,39 +75,25 @@ def _fetch_all_metiers(token: str) -> dict[str, str]:
         Dict mapping each ROME code to its official French label.
 
     Raises:
-        requests.RequestException: If any page request fails.
+        requests.RequestException: If the request fails.
     """
-    referentiel: dict[str, str] = {}
-    start = 0
+    logger.info("rome_fetch_started")
+    try:
+        response = requests.get(
+            FT_ROME_URL,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.error("rome_fetch_failed", exc_info=True)
+        raise
 
-    with requests.Session() as http:
-        http.headers.update({"Authorization": f"Bearer {token}"})
-        while True:
-            end = start + PAGE_SIZE - 1
-            logger.info("rome_fetch_page", range=f"{start}-{end}", total_so_far=len(referentiel))
-            try:
-                response = http.get(FT_ROME_URL, headers={"Range": f"{start}-{end}"})
-                response.raise_for_status()
-            except requests.RequestException:
-                logger.error("rome_fetch_page_failed", range=f"{start}-{end}", exc_info=True)
-                raise
-
-            items: list[dict] = response.json()
-            for item in items:
-                code: str = item.get("code", "")
-                label: str = item.get("libelle", "")
-                if code and label:
-                    referentiel[code] = label
-
-            content_range = response.headers.get("Content-Range", "")
-            total = int(content_range.split("/")[-1]) if "/" in content_range else None
-
-            if len(items) < PAGE_SIZE or (total is not None and len(referentiel) >= total):
-                break
-
-            start += PAGE_SIZE
-            time.sleep(INTER_PAGE_SLEEP)
-
+    items: list[dict] = response.json()
+    referentiel: dict[str, str] = {
+        item["code"]: item["libelle"]
+        for item in items
+        if item.get("code") and item.get("libelle")
+    }
     return referentiel
 
 
