@@ -10,14 +10,23 @@ SQLAlchemy's SQLite DateTime bind-parameter representation, ensuring correct
 string-based chronological comparison.
 """
 
+import importlib.util
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from main import _cleanup
+_CLEANUP_DIR = Path(__file__).parent.parent
+_spec = importlib.util.spec_from_file_location("cleanup_main", _CLEANUP_DIR / "main.py")
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["cleanup_main"] = _mod
+_spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+
+_cleanup = _mod._cleanup
 
 
 def _utcstr(dt: datetime) -> str:

@@ -201,3 +201,80 @@ class TestDeleteCv:
         resp = test_client.delete(f"/cv/{uuid.uuid4()}")
 
         assert resp.status_code == 404
+
+    def test_deletes_cv_and_returns_204(
+        self, test_client, mock_session, mock_blob_client
+    ):
+        cv = MagicMock()
+        cv.blob_url = "https://account.blob.core.windows.net/cvs/user/cv.pdf"
+        cv.thumbnail_url = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),   # select CV
+            MagicMock(),                                              # delete(Match)
+            MagicMock(**{"scalar_one_or_none.return_value": None}),  # select UserProfile
+        ]
+
+        resp = test_client.delete(f"/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 204
+        mock_session.delete.assert_called_once_with(cv)
+        mock_session.commit.assert_called_once()
+
+    def test_also_deletes_thumbnail_blob_when_present(
+        self, test_client, mock_session, mock_blob_client
+    ):
+        cv = MagicMock()
+        cv.blob_url = "https://account.blob.core.windows.net/cvs/user/cv.pdf"
+        cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+        ]
+
+        resp = test_client.delete(f"/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 204
+        blob_container = mock_blob_client.get_blob_client.return_value
+        assert blob_container.delete_blob.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# _remove_cv_from_rome_codes (helper)
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveCvFromRomeCodes:
+    def test_removes_cv_id_and_prunes_empty_entry(self):
+        cv_id = uuid.uuid4()
+        other_cv_id = str(uuid.uuid4())
+        profile = MagicMock()
+        profile.rome_codes = {
+            "M1805": {"cv_ids": [str(cv_id), other_cv_id], "label": "Dev info"},
+            "M1802": {"cv_ids": [str(cv_id)], "label": "BI"},
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        cv_router_module._remove_cv_from_rome_codes(mock_session, cv_id, "user-1")
+
+        assert "M1802" not in profile.rome_codes
+        assert profile.rome_codes["M1805"]["cv_ids"] == [other_cv_id]
+
+    def test_noop_when_no_profile(self):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        cv_router_module._remove_cv_from_rome_codes(mock_session, uuid.uuid4(), "user-1")
+
+        mock_session.commit.assert_not_called()
+
+    def test_noop_when_rome_codes_empty(self):
+        profile = MagicMock()
+        profile.rome_codes = {}
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        cv_router_module._remove_cv_from_rome_codes(mock_session, uuid.uuid4(), "user-1")
+
+        assert profile.rome_codes == {}
