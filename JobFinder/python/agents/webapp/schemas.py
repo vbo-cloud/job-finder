@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-CVStatus = Literal["pending", "processing", "done", "error"]
+CVStatus = Literal["pending", "processing", "done", "matched", "error"]
 
 
 class ProfileUpdate(BaseModel):
