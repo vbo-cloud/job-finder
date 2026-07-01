@@ -3252,3 +3252,25 @@ La liste de matchs affichait les codes ROME bruts (ex. `M1805`), le titre des of
 - **`active:text-strong` plutôt que `active:text-white`** : `text-white` codé en dur casse en thème clair. `text-strong` produit l'effet "flash au clic" dans les deux thèmes sans sortir du système de tokens.
 - **Mapping ROME en frontend, pas en base** : stocker les libellés nécessiterait migration Alembic + modification du collecteur + re-collection. La map frontend couvre les codes effectivement utilisés sans impacter le schéma.
 - **`expires_at` dans le cleanup** : la purge basée uniquement sur `ft_updated_at`/`collected_at` laissait des offres dépubliées en base pendant des semaines. Ajouter `expires_at < now` comme critère supplémentaire garantit la cohérence entre base et plateforme France Travail.
+
+---
+
+## PR #135 — fix: purger les offres clôturées via collected_at
+
+**Date :** 2026-07-01
+**Branche :** `feature/cleanup-closed-offers` → `dev`
+
+### Contexte
+
+Environ 50 % des liens de matchs ouvrerts depuis le site menaient sur "L'offre n'est plus en ligne (offre clôturée)". Une offre clôturée disparaît des résultats de l'API France Travail, mais restait en base jusqu'à ce que son `ft_updated_at` dépasse 60 jours — soit jusqu'à 60 jours de liens morts dans la liste des matchs.
+
+### Ce qui a été fait
+
+- `agents/cleanup/main.py` : le prédicat de suppression multi-critères (`ft_updated_at`, `expires_at`) est remplacé par un unique `collected_at < now - 2j`. L'agent offer-fetching met `collected_at` à jour à chaque fetch pour toutes les offres retournées ; une offre absente des résultats API (clôturée) voit son `collected_at` se figer et est purgée en 2 jours maximum.
+- `shared/config.py` : nouvelle constante `CLEANUP_COLLECTED_AGE_DAYS` (défaut 2, configurable via env var `CLEANUP_COLLECTED_AGE_DAYS`).
+
+### Décisions techniques
+
+- **`collected_at` comme seul critère** : `ft_updated_at` reflète la date de dernière modification *côté France Travail*, pas la dernière confirmation d'activité côté applicatif. `collected_at` est l'unique signal fiable — rafraîchi à chaque fetch, figé dès que l'offre disparaît de l'API.
+- **Fenêtre de 2 jours** : l'agent fetch tourne 2×/jour (12:00 et 20:00 UTC), soit 4 cycles de grâce avant suppression. C'est suffisant pour absorber un incident passager sur l'agent de collecte.
+- **Suppression du critère `expires_at`** : `expires_at` n'est jamais renseigné par le collecteur (placeholder non alimenté) — le critère n'avait aucun effet en pratique.
