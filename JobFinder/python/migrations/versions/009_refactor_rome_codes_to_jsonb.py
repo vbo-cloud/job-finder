@@ -25,6 +25,10 @@ def upgrade() -> None:
     )
     op.execute(
         "ALTER TABLE user_profiles "
+        "ALTER COLUMN rome_codes SET NOT NULL"
+    )
+    op.execute(
+        "ALTER TABLE user_profiles "
         "ALTER COLUMN rome_codes SET DEFAULT '{}'::jsonb"
     )
 
@@ -35,6 +39,10 @@ def downgrade() -> None:
         "ALTER TABLE user_profiles "
         "ALTER COLUMN rome_codes TYPE text[] "
         "USING '{}'::text[]"
+    )
+    op.execute(
+        "ALTER TABLE user_profiles "
+        "ALTER COLUMN rome_codes SET NOT NULL"
     )
     op.execute(
         "ALTER TABLE user_profiles "
