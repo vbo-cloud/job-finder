@@ -47,11 +47,18 @@ class MatchOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RomeCodeEntry(BaseModel):
+    """One ROME code entry in a user profile — tracks contributing CVs and label."""
+
+    cv_ids: list[str]
+    label: str
+
+
 class ProfileOut(BaseModel):
     """User job search profile returned by the API."""
 
     user_id: str
-    rome_codes: list[str]
+    rome_codes: dict[str, RomeCodeEntry]
     job_categories: list[str]
     location: str | None
     contract_types: list[str]
@@ -70,7 +77,7 @@ class CVUploadOut(BaseModel):
 class MatchesOut(BaseModel):
     """GET /matches response — user's ROME codes plus ranked offer matches."""
 
-    rome_codes: list[str]
+    rome_codes: dict[str, RomeCodeEntry]
     matches: list[MatchOut]
 
 

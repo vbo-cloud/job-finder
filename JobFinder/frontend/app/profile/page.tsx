@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import apiClient from "@/lib/api/client";
-import type { ProfileData } from "@/lib/api/types";
+import type { ProfileData, RomeCodeEntry } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +23,7 @@ export default function ProfilePage() {
   const [contractTypes, setContractTypes] = useState<string[]>([]);
   const [jobCategories, setJobCategories] = useState<string[]>([]);
   const [jobCategoryInput, setJobCategoryInput] = useState("");
-  const [romeCodes, setRomeCodes] = useState<string[]>([]);
+  const [romeCodes, setRomeCodes] = useState<Record<string, RomeCodeEntry>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -202,19 +202,19 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {romeCodes.length > 0 && (
+        {Object.keys(romeCodes).length > 0 && (
           <div>
             <p className="mb-2 text-sm font-medium text-primary">
               Codes ROME{" "}
               <span className="font-normal text-muted">(détectés depuis votre CV)</span>
             </p>
             <div className="flex flex-wrap gap-2">
-              {romeCodes.map((code) => (
+              {Object.entries(romeCodes).map(([code, entry]) => (
                 <span
                   key={code}
-                  className="rounded-full bg-card px-3 py-1 text-xs text-body"
+                  className="rounded-full bg-accent-muted border border-accent px-3 py-1 text-xs text-accent"
                 >
-                  {code}
+                  {entry.label}
                 </span>
               ))}
             </div>

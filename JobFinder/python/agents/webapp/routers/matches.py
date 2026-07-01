@@ -51,14 +51,13 @@ def get_matches(
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
         ).scalars().all()
+        rome_codes = dict(profile.rome_codes) if profile else {}
+        matches = [MatchOut.model_validate(m) for m in results]
     except SQLAlchemyError:
         # Base class is intentional — any DB error (connection lost, timeout)
         # should abort the response and return 500.
         logger.error("matches_fetch_failed", user_id=user_id, exc_info=True)
         raise
-
-    rome_codes = list(profile.rome_codes) if profile else []
-    matches = [MatchOut.model_validate(m) for m in results]
     logger.info("matches_fetch_completed", user_id=user_id, count=len(matches))
     return MatchesOut(rome_codes=rome_codes, matches=matches)
 
@@ -77,7 +76,7 @@ def get_matches_for_cv(
         session: Active database session.
 
     Returns:
-        MatchesOut with an empty rome_codes list and matches sorted by descending score.
+        MatchesOut with the user's rome_codes and matches sorted by descending score.
 
     Raises:
         HTTPException 404: If the CV does not exist or is not owned by the user.
@@ -91,18 +90,22 @@ def get_matches_for_cv(
         if cv is None:
             raise HTTPException(status_code=404, detail="CV not found")
 
+        profile = session.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        ).scalar_one_or_none()
+
         results = session.execute(
             select(Match)
             .where(Match.cv_id == cv_id)
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
         ).scalars().all()
+        rome_codes = dict(profile.rome_codes) if profile else {}
+        matches = [MatchOut.model_validate(m) for m in results]
     except HTTPException:
         raise
     except SQLAlchemyError:
         logger.error("cv_matches_fetch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
         raise
-
-    matches = [MatchOut.model_validate(m) for m in results]
     logger.info("cv_matches_fetch_done", user_id=user_id, cv_id=str(cv_id), count=len(matches))
-    return MatchesOut(rome_codes=[], matches=matches)
+    return MatchesOut(rome_codes=rome_codes, matches=matches)

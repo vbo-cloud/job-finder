@@ -3274,3 +3274,51 @@ Environ 50 % des liens de matchs ouvrerts depuis le site menaient sur "L'offre n
 - **`collected_at` comme seul critère** : `ft_updated_at` reflète la date de dernière modification *côté France Travail*, pas la dernière confirmation d'activité côté applicatif. `collected_at` est l'unique signal fiable — rafraîchi à chaque fetch, figé dès que l'offre disparaît de l'API.
 - **Fenêtre de 2 jours** : l'agent fetch tourne 2×/jour (12:00 et 20:00 UTC), soit 4 cycles de grâce avant suppression. C'est suffisant pour absorber un incident passager sur l'agent de collecte.
 - **Suppression du critère `expires_at`** : `expires_at` n'est jamais renseigné par le collecteur (placeholder non alimenté) — le critère n'avait aucun effet en pratique.
+
+---
+
+## PR #135 — refactor: ROME codes — migration ARRAY vers JSONB, labels depuis le référentiel FT
+
+**Date :** 2026-07-01
+**Branche :** `feature/rome-codes-refactor` → `dev`
+
+### Contexte
+
+Les codes ROME étaient stockés en `text[]` dans `user_profiles.rome_codes`, sans libellés. Le frontend compensait avec un dictionnaire statique de ~200 entrées (`rome-codes.ts`). Cette approche ne permettait pas de savoir quels CVs avaient contribué à un code donné, ni de supprimer proprement un code lors de la suppression d'un CV.
+
+### Ce qui a été fait
+
+**Migration Alembic :**
+- `migrations/versions/009_refactor_rome_codes_to_jsonb.py` : conversion de la colonne `rome_codes` de `text[]` vers `jsonb`, avec structure `{"M1805": {"cv_ids": [...], "label": "..."}}`.
+
+**Modèle SQLAlchemy :**
+- `shared/models.py` : `UserProfile.rome_codes` passe de `ARRAY(String)` à `JSONB`, valeur par défaut `{}`.
+
+**Agent cv-analysis :**
+- `shared/rome_referentiel.json` : 1 911 appellations officielles FT (codes `[A-Z]\d{4}`) générées via `scripts/fetch_rome_referentiel.py` depuis l'endpoint `/offresdemploi/v2/referentiel/metiers`. Fichier versionné dans le repo pour éviter toute dépendance réseau au démarrage du service.
+- `_extract_rome_codes` : GPT-4o-mini identifie uniquement des codes — format simplifié `{"rome_codes": ["M1805", ...]}`. Chaque code est validé par regex puis vérifié dans `ROME_REFERENTIEL` (chargé au démarrage du module). Les codes absents du référentiel sont rejetés silencieusement. Le label est toujours résolu depuis le référentiel, jamais inféré par GPT.
+- `_merge_rome_codes` : utilise `SELECT ... FOR UPDATE` pour éviter les écritures concurrentes. Chaque analyse ajoute `cv_id` à la liste `cv_ids` du code, sans doublon.
+
+**Agent offer-fetching :**
+- `_get_active_rome_codes` : `func.unnest()` (valide pour `text[]`) remplacé par `jsonb_object_keys()` via SQL brut — seule façon d'utiliser cette fonction set-returning dans SQLAlchemy.
+
+**Webapp — schemas et routes :**
+- `schemas.py` : `RomeCodeEntry` (Pydantic) ajouté ; `ProfileOut` et `MatchesOut` exposent `dict[str, RomeCodeEntry]` au lieu de `list[str]`.
+- `routers/cv.py` : `_remove_cv_from_rome_codes` — lors de la suppression d'un CV, `cv_id` est retiré de chaque entrée du dict, et les entrées dont `cv_ids` devient vide sont supprimées. `SELECT ... FOR UPDATE` pour la cohérence.
+- `routers/matches.py` : `rome_codes` casté en `dict` (au lieu de `list`) dans les deux endpoints.
+
+**Frontend :**
+- `lib/api/types.ts` : interface `RomeCodeEntry` ajoutée ; `ProfileData.rome_codes` et `CVMatchesOut.rome_codes` passent à `Record<string, RomeCodeEntry>`.
+- `MatchItem.tsx` : `getRomeLabel()` remplacé par `romeCodesDict[code]?.label ?? code` — le label vient maintenant de l'API, pas du fichier statique.
+- `MatchList.tsx` : prop `romeCodesDict` ajoutée et propagée à chaque `MatchItem`.
+- `CVDetailSection.tsx` : `matches.rome_codes` passé à `MatchList`.
+- `profile/page.tsx` : état `romeCodes` migré vers `Record<string, RomeCodeEntry>` — les chips affichent `entry.label` au lieu du code brut.
+- `lib/rome-codes.ts` supprimé.
+
+### Décisions techniques
+
+- **Labels depuis le référentiel, pas depuis GPT** : GPT ne retourne que des codes. Le label est résolu depuis `rome_referentiel.json` chargé au démarrage — source autoritaire FT. Les codes absents du référentiel (hallucinations ou codes hors nomenclature) sont rejetés structurellement. Le risque d'hallucination sur le label disparaît.
+- **`rome_referentiel.json` versionné dans le repo** : évite une dépendance réseau au boot. Le script `scripts/fetch_rome_referentiel.py` utilise le scope `api_offresdemploiv2` (déjà activé sur l'application FT) via l'endpoint `/referentiel/metiers`. À relancer si France Travail publie une nouvelle version du ROME.
+- **`SELECT ... FOR UPDATE` dans `_merge_rome_codes` et `_remove_cv_from_rome_codes`** : JSONB est une valeur opaque pour PostgreSQL — un read-modify-write sans verrou en contexte concurrent (plusieurs CV analysés en parallèle) provoquerait des writes perdus.
+- **`jsonb_object_keys` via `text()`** : SQLAlchemy `func.jsonb_object_keys()` ne se comporte pas comme une SRF dans `select()`. La requête SQL brute est plus lisible et garantit le bon comportement.
+- **Labels en base plutôt qu'en frontend** : le libellé ROME est stocké en base avec le code et renvoyé par l'API — plus besoin du fichier statique `rome-codes.ts`. Le fallback `?? code` dans `MatchItem` couvre les offres dont le code ROME n'est pas dans le profil de l'utilisateur courant.

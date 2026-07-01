@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import case, func, literal_column, select, update
+from sqlalchemy import case, func, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -47,8 +47,14 @@ def _get_active_rome_codes() -> list[str]:
     logger.info("rome_codes_query_started")
     try:
         with get_session() as session:
+            # jsonb_object_keys is a set-returning function — use raw SQL to extract
+            # distinct keys from the JSONB rome_codes column across all profiles.
             result = session.execute(
-                select(func.unnest(UserProfile.rome_codes).distinct())
+                text(
+                    "SELECT DISTINCT jsonb_object_keys(rome_codes) "
+                    "FROM user_profiles "
+                    "WHERE rome_codes != '{}'::jsonb"
+                )
             )
             codes = [row[0] for row in result if row[0] is not None]
     except SQLAlchemyError:

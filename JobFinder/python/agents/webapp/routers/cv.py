@@ -287,7 +287,7 @@ async def upload_cv(
             pg_insert(UserProfile).values(
                 id=uuid.uuid4(),
                 user_id=user_id,
-                rome_codes=[],
+                rome_codes={},
                 job_categories=[],
                 location=None,
                 contract_types=[],
@@ -507,6 +507,39 @@ def mark_all_seen(
     logger.info("mark_all_seen_done", user_id=user_id, cv_id=str(cv_id))
 
 
+def _remove_cv_from_rome_codes(session: Session, cv_id: uuid.UUID, user_id: str) -> None:
+    """Remove a CV's contribution from the user's rome_codes dict.
+
+    For each ROME code entry, removes cv_id from cv_ids. Entries whose cv_ids
+    list becomes empty are pruned entirely. No-ops if the user has no profile.
+
+    Uses SELECT ... FOR UPDATE to prevent concurrent writes from racing.
+
+    Args:
+        session: Active database session (caller owns commit).
+        cv_id: UUID of the CV being deleted.
+        user_id: Owner of the profile to update.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    profile = session.execute(
+        select(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not profile or not profile.rome_codes:
+        return
+
+    cv_id_str = str(cv_id)
+    updated = {
+        code: {**data, "cv_ids": [cid for cid in data["cv_ids"] if cid != cv_id_str]}
+        for code, data in profile.rome_codes.items()
+    }
+    profile.rome_codes = {code: data for code, data in updated.items() if data["cv_ids"]}
+
+
 @router.delete("/{cv_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_cv(
     cv_id: uuid.UUID,
@@ -558,6 +591,7 @@ def delete_cv(
         # Delete matches first — FK constraint on matches.cv_id has no CASCADE.
         session.execute(delete(Match).where(Match.cv_id == cv_id))
         session.delete(cv)
+        _remove_cv_from_rome_codes(session, cv_id, user_id)
         session.commit()
     except SQLAlchemyError:
         logger.error("cv_delete_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)

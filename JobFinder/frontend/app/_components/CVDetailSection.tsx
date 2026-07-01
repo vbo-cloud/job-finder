@@ -160,7 +160,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               {activeTab === "matches" && (
                 matchesError
                   ? <p className="text-xs text-destructive mt-8 text-center">{matchesError} — impossible de charger les matchs</p>
-                  : <MatchList matches={matches?.matches ?? []} loading={loadingMatches} />
+                  : <MatchList matches={matches?.matches ?? []} loading={loadingMatches} romeCodesDict={matches?.rome_codes ?? {}} />
               )}
               {activeTab === "review" && (
                 <p className="text-xs text-label mt-8 text-center">Bientôt disponible</p>

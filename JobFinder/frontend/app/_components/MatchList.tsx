@@ -1,12 +1,13 @@
-import type { MatchOut } from "@/lib/api/types";
+import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
 import MatchItem from "./MatchItem";
 
 interface Props {
   matches: MatchOut[];
   loading: boolean;
+  romeCodesDict: Record<string, RomeCodeEntry>;
 }
 
-export default function MatchList({ matches, loading }: Props) {
+export default function MatchList({ matches, loading, romeCodesDict }: Props) {
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
@@ -24,7 +25,7 @@ export default function MatchList({ matches, loading }: Props) {
   return (
     <div className="flex flex-col gap-2">
       {matches.map((match, i) => (
-        <MatchItem key={match.offer.id ?? i} match={match} />
+        <MatchItem key={match.offer.id ?? i} match={match} romeCodesDict={romeCodesDict} />
       ))}
     </div>
   );

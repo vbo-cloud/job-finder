@@ -5,6 +5,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import structlog
 from openai import AzureOpenAI
@@ -40,6 +41,11 @@ AZURE_OPENAI_ROME_DEPLOYMENT = os.environ.get("AZURE_OPENAI_ROME_DEPLOYMENT", "g
 MAX_ATTEMPTS = 2
 
 ROME_CODE_PATTERN = re.compile(r"^[A-Z]\d{4}$")
+
+_REFERENTIEL_PATH = Path(__file__).parent.parent.parent / "shared" / "rome_referentiel.json"
+ROME_REFERENTIEL: dict[str, str] = json.loads(
+    _REFERENTIEL_PATH.read_text(encoding="utf-8")
+)
 
 logger = structlog.get_logger()
 
@@ -115,8 +121,13 @@ def _set_cv_status(cv_id: str, status: str) -> None:
 # ==============================================================================
 
 
-def _extract_rome_codes(raw_text: str) -> list[str]:
+def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
     """Extract ROME occupation codes from CV text using GPT-4o-mini.
+
+    GPT-4o-mini identifies candidate codes only — no labels. Each code is
+    validated against ROME_REFERENTIEL: codes that fail the regex or are absent
+    from the referential are silently rejected (hallucination protection). The
+    label is always sourced from the referential, never from GPT output.
 
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
@@ -125,7 +136,8 @@ def _extract_rome_codes(raw_text: str) -> list[str]:
         raw_text: Plain text content of the CV.
 
     Returns:
-        A list of 3–5 valid ROME codes (letter + 4 digits, e.g. "M1805").
+        A list of 3–5 dicts, each with "code" and "label" keys,
+        e.g. [{"code": "M1805", "label": "Études et développement informatique"}].
 
     Raises:
         OpenAIError: If the API call fails.
@@ -142,10 +154,11 @@ def _extract_rome_codes(raw_text: str) -> list[str]:
                     {
                         "role": "system",
                         "content": (
-                            "Tu es un expert en classification des métiers. "
+                            "Tu es un expert en classification des métiers français. "
                             "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide "
-                            'de la forme {"rome_codes": ["XXXXX", ...]} contenant entre 3 et 5 '
-                            "codes ROME pertinents (format : lettre + 4 chiffres, ex: M1805). "
+                            'de la forme {"rome_codes": ["M1805", "M1802", ...]} '
+                            "contenant entre 3 et 5 codes ROME pertinents "
+                            "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
                             "Ne retourne rien d'autre que le JSON."
                         ),
                     },
@@ -155,14 +168,22 @@ def _extract_rome_codes(raw_text: str) -> list[str]:
                     },
                 ],
             )
-            raw_codes: list[str] = json.loads(
-                response.choices[0].message.content
-            )["rome_codes"]
-            valid_codes = [c for c in raw_codes if ROME_CODE_PATTERN.match(c)]
-            if not valid_codes:
-                raise ValueError(f"No valid ROME codes in GPT response: {raw_codes}")
-            logger.info("rome_extraction_succeeded", attempt=attempt, codes=valid_codes)
-            return valid_codes
+            raw_codes: list = json.loads(response.choices[0].message.content)["rome_codes"]
+            valid_items = []
+            for code in raw_codes:
+                if not isinstance(code, str):
+                    continue
+                code = code.upper().strip()
+                if not ROME_CODE_PATTERN.match(code):
+                    continue
+                if code not in ROME_REFERENTIEL:
+                    logger.warning("rome_code_not_in_referentiel", code=code)
+                    continue
+                valid_items.append({"code": code, "label": ROME_REFERENTIEL[code]})
+            if not valid_items:
+                raise ValueError(f"No valid ROME codes after referential lookup: {raw_codes}")
+            logger.info("rome_extraction_succeeded", attempt=attempt, codes=[i["code"] for i in valid_items])
+            return valid_items
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.warning("rome_extraction_attempt_failed", attempt=attempt, exc_info=True)
             last_error = e
@@ -180,32 +201,54 @@ def _extract_rome_codes(raw_text: str) -> list[str]:
 # ==============================================================================
 
 
-def _update_rome_codes(user_id: str, rome_codes: list[str]) -> None:
-    """Update rome_codes on the user profile.
+def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]) -> None:
+    """Merge extracted ROME codes into the user profile dict with row-level locking.
+
+    Each item in rome_items must have "code" and "label" keys. The cv_id is
+    appended to the code's cv_ids list if not already present. The label is
+    always updated to the latest value from the ROME referential.
+
+    Uses SELECT ... FOR UPDATE to prevent concurrent analyses from overwriting
+    each other's data.
 
     Args:
         user_id: The user whose profile to update.
-        rome_codes: Validated ROME codes extracted from the CV.
+        cv_id: UUID string of the CV being analysed.
+        rome_items: List of dicts with "code" and "label" keys.
 
     Raises:
+        ValueError: If no UserProfile exists for user_id.
         SQLAlchemyError: On any database error.
     """
-    logger.info("rome_update_started", user_id=user_id, rome_codes=rome_codes)
+    codes_log = [item["code"] for item in rome_items]
+    logger.info("rome_merge_started", user_id=user_id, cv_id=cv_id, codes=codes_log)
     try:
         with get_session() as session:
-            now = datetime.now(timezone.utc)
-            result = session.execute(
-                update(UserProfile)
+            profile = session.execute(
+                select(UserProfile)
                 .where(UserProfile.user_id == user_id)
-                .values(rome_codes=rome_codes, updated_at=now)
-            )
-            if result.rowcount == 0:
+                .with_for_update()
+            ).scalar_one_or_none()
+            if profile is None:
                 raise ValueError(f"UserProfile not found for user_id={user_id}")
+
+            current: dict = dict(profile.rome_codes or {})
+            for item in rome_items:
+                code = item["code"]
+                label = item["label"]
+                if code not in current:
+                    current[code] = {"cv_ids": [], "label": label}
+                if cv_id not in current[code]["cv_ids"]:
+                    current[code]["cv_ids"].append(cv_id)
+                current[code]["label"] = label
+
+            profile.rome_codes = current
+            profile.updated_at = datetime.now(timezone.utc)
             session.commit()
     except SQLAlchemyError:
-        logger.error("rome_update_failed", user_id=user_id, exc_info=True)
+        logger.error("rome_merge_failed", user_id=user_id, cv_id=cv_id, exc_info=True)
         raise
-    logger.info("rome_update_done", user_id=user_id)
+    logger.info("rome_merge_done", user_id=user_id, cv_id=cv_id)
 
 
 # ==============================================================================
@@ -216,6 +259,7 @@ def _update_rome_codes(user_id: str, rome_codes: list[str]) -> None:
 def main() -> None:
     """Consume one cv-analysis message, extract ROME codes, and dispatch offer-ready."""
     configure_telemetry("cv-analysis")
+    logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))
 
     try:
         run_migrations()
@@ -242,13 +286,13 @@ def main() -> None:
                 return
 
             try:
-                rome_codes = _extract_rome_codes(raw_text)
-                _update_rome_codes(user_id, rome_codes)
+                rome_items = _extract_rome_codes(raw_text)
+                _merge_rome_codes(user_id, cv_id, rome_items)
             except (OpenAIError, SQLAlchemyError, ValueError):
                 # OpenAIError  — API failure or all ROME extraction retries exhausted.
-                # SQLAlchemyError — DB failure in _update_rome_codes.
+                # SQLAlchemyError — DB failure in _merge_rome_codes.
                 # ValueError — _extract_rome_codes found no valid codes after MAX_ATTEMPTS,
-                #              or _update_rome_codes found no matching UserProfile.
+                #              or _merge_rome_codes found no matching UserProfile.
                 # All three must mark the CV as errored before re-raising so the UI
                 # reflects the failure instead of staying stuck in "processing".
                 _set_cv_status(cv_id, "error")
@@ -256,6 +300,7 @@ def main() -> None:
 
             _set_cv_status(cv_id, "done")
 
+            rome_codes = [item["code"] for item in rome_items]
             try:
                 send_message(
                     OFFER_READY_QUEUE,
