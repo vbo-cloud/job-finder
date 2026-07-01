@@ -9,11 +9,11 @@ Expected environment variables:
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from shared.config import OFFER_MAX_AGE_DAYS
+from shared.config import CLEANUP_COLLECTED_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.models import Match, Offer
 from shared.telemetry import configure_telemetry
@@ -23,6 +23,11 @@ logger = structlog.get_logger()
 
 def _cleanup(session: Session) -> tuple[int, int]:
     """Delete stale offers and their associated matches atomically.
+
+    An offer is considered stale when collected_at has not been refreshed within
+    CLEANUP_COLLECTED_AGE_DAYS. The offer-fetching agent updates collected_at on
+    every successful fetch; an offer absent from recent results has been closed on
+    France Travail and will never be refreshed again.
 
     Steps:
         1. Delete matches whose offer_id is in the stale subquery.
@@ -39,24 +44,11 @@ def _cleanup(session: Session) -> tuple[int, int]:
     Raises:
         SQLAlchemyError: If any database operation fails.
     """
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=OFFER_MAX_AGE_DAYS)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=CLEANUP_COLLECTED_AGE_DAYS)
 
     logger.info("cleanup_started", cutoff=cutoff.isoformat())
 
-    stale_subquery = select(Offer.id).where(
-        or_(
-            Offer.ft_updated_at < cutoff,
-            and_(
-                Offer.ft_updated_at.is_(None),
-                Offer.collected_at < cutoff,
-            ),
-            and_(
-                Offer.expires_at.isnot(None),
-                Offer.expires_at < now,
-            ),
-        )
-    )
+    stale_subquery = select(Offer.id).where(Offer.collected_at < cutoff)
 
     match_result = session.execute(
         delete(Match).where(Match.offer_id.in_(stale_subquery))
