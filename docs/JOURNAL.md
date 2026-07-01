@@ -3255,7 +3255,7 @@ La liste de matchs affichait les codes ROME bruts (ex. `M1805`), le titre des of
 
 ---
 
-## PR #135 — fix: purger les offres clôturées via collected_at
+## PR #136 — fix: purger les offres clôturées via collected_at
 
 **Date :** 2026-07-01
 **Branche :** `feature/cleanup-closed-offers` → `dev`

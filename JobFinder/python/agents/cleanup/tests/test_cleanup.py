@@ -136,4 +136,4 @@ def test_only_stale_deleted_in_mixed_set(db_session: Session) -> None:
     remaining = db_session.execute(
         sa.text("SELECT id FROM offers")
     ).scalars().all()
-    assert remaining == [fresh_id]
+    assert set(remaining) == {fresh_id}
