@@ -3277,7 +3277,7 @@ Environ 50 % des liens de matchs ouvrerts depuis le site menaient sur "L'offre n
 
 ---
 
-## PR #135 — refactor: ROME codes — migration ARRAY vers JSONB, labels depuis l'API
+## PR #135 — refactor: ROME codes — migration ARRAY vers JSONB, labels depuis le référentiel FT
 
 **Date :** 2026-07-01
 **Branche :** `feature/rome-codes-refactor` → `dev`
@@ -3295,8 +3295,9 @@ Les codes ROME étaient stockés en `text[]` dans `user_profiles.rome_codes`, sa
 - `shared/models.py` : `UserProfile.rome_codes` passe de `ARRAY(String)` à `JSONB`, valeur par défaut `{}`.
 
 **Agent cv-analysis :**
-- `_extract_rome_codes` : le prompt GPT-4o-mini retourne désormais des objets `{"code": "...", "label": "..."}` au lieu de codes bruts.
-- `_update_rome_codes` renommé `_merge_rome_codes` : utilise `SELECT ... FOR UPDATE` pour éviter les écritures concurrentes. Chaque analyse ajoute `cv_id` à la liste `cv_ids` du code, sans doublon. Le `label` est toujours mis à jour avec la valeur la plus récente.
+- `shared/rome_referentiel.json` : 1 911 appellations officielles FT (codes `[A-Z]\d{4}`) générées via `scripts/fetch_rome_referentiel.py` depuis l'endpoint `/offresdemploi/v2/referentiel/metiers`. Fichier versionné dans le repo pour éviter toute dépendance réseau au démarrage du service.
+- `_extract_rome_codes` : GPT-4o-mini identifie uniquement des codes — format simplifié `{"rome_codes": ["M1805", ...]}`. Chaque code est validé par regex puis vérifié dans `ROME_REFERENTIEL` (chargé au démarrage du module). Les codes absents du référentiel sont rejetés silencieusement. Le label est toujours résolu depuis le référentiel, jamais inféré par GPT.
+- `_merge_rome_codes` : utilise `SELECT ... FOR UPDATE` pour éviter les écritures concurrentes. Chaque analyse ajoute `cv_id` à la liste `cv_ids` du code, sans doublon.
 
 **Agent offer-fetching :**
 - `_get_active_rome_codes` : `func.unnest()` (valide pour `text[]`) remplacé par `jsonb_object_keys()` via SQL brut — seule façon d'utiliser cette fonction set-returning dans SQLAlchemy.
@@ -3316,6 +3317,8 @@ Les codes ROME étaient stockés en `text[]` dans `user_profiles.rome_codes`, sa
 
 ### Décisions techniques
 
-- **`SELECT ... FOR UPDATE` dans `_merge_rome_codes` et `_remove_cv_from_rome_codes`** : JSONB est une valeur opaque pour PostgreSQL — un read-modify-write sans verrou en context concurrent (plusieurs CV analysés en parallèle) provoquerait des writes perdus.
+- **Labels depuis le référentiel, pas depuis GPT** : GPT ne retourne que des codes. Le label est résolu depuis `rome_referentiel.json` chargé au démarrage — source autoritaire FT. Les codes absents du référentiel (hallucinations ou codes hors nomenclature) sont rejetés structurellement. Le risque d'hallucination sur le label disparaît.
+- **`rome_referentiel.json` versionné dans le repo** : évite une dépendance réseau au boot. Le script `scripts/fetch_rome_referentiel.py` utilise le scope `api_offresdemploiv2` (déjà activé sur l'application FT) via l'endpoint `/referentiel/metiers`. À relancer si France Travail publie une nouvelle version du ROME.
+- **`SELECT ... FOR UPDATE` dans `_merge_rome_codes` et `_remove_cv_from_rome_codes`** : JSONB est une valeur opaque pour PostgreSQL — un read-modify-write sans verrou en contexte concurrent (plusieurs CV analysés en parallèle) provoquerait des writes perdus.
 - **`jsonb_object_keys` via `text()`** : SQLAlchemy `func.jsonb_object_keys()` ne se comporte pas comme une SRF dans `select()`. La requête SQL brute est plus lisible et garantit le bon comportement.
-- **Labels en base plutôt qu'en frontend** : le libellé ROME est maintenant extrait par GPT-4o-mini à l'analyse, stocké en base, et renvoyé par l'API — plus besoin du fichier statique. Le fallback `?? code` dans `MatchItem` couvre les offres dont le code ROME n'est pas dans le profil de l'utilisateur courant.
+- **Labels en base plutôt qu'en frontend** : le libellé ROME est stocké en base avec le code et renvoyé par l'API — plus besoin du fichier statique `rome-codes.ts`. Le fallback `?? code` dans `MatchItem` couvre les offres dont le code ROME n'est pas dans le profil de l'utilisateur courant.
