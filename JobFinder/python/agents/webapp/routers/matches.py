@@ -57,7 +57,7 @@ def get_matches(
         logger.error("matches_fetch_failed", user_id=user_id, exc_info=True)
         raise
 
-    rome_codes = list(profile.rome_codes) if profile else []
+    rome_codes = dict(profile.rome_codes) if profile else {}
     matches = [MatchOut.model_validate(m) for m in results]
     logger.info("matches_fetch_completed", user_id=user_id, count=len(matches))
     return MatchesOut(rome_codes=rome_codes, matches=matches)
@@ -105,4 +105,4 @@ def get_matches_for_cv(
 
     matches = [MatchOut.model_validate(m) for m in results]
     logger.info("cv_matches_fetch_done", user_id=user_id, cv_id=str(cv_id), count=len(matches))
-    return MatchesOut(rome_codes=[], matches=matches)
+    return MatchesOut(rome_codes={}, matches=matches)
