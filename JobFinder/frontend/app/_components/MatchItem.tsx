@@ -8,6 +8,7 @@ import type { MatchOut } from "@/lib/api/types";
 const FT_OFFER_URL = "https://candidat.francetravail.fr/offres/recherche/detail";
 
 type Tab = "offre" | "analyse";
+const TAB_LABELS: Record<Tab, string> = { offre: "Offre", analyse: "Analyse" };
 
 interface Props { match: MatchOut; }
 
@@ -85,7 +86,7 @@ export default function MatchItem({ match }: Props) {
                     : "text-hint border-transparent hover:text-muted",
                 )}
               >
-                {tab === "offre" ? "Offre" : "Analyse"}
+                {TAB_LABELS[tab]}
               </button>
             ))}
           </div>
