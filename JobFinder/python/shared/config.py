@@ -3,6 +3,7 @@
 import os
 
 # 60 jours : fenêtre de fetch France Travail (minDateActualisation).
+# Consommé par offer_fetching/main.py uniquement — cleanup n'utilise plus cette valeur.
 # Configurable via CLEANUP_OFFER_MAX_AGE_DAYS pour ajuster sans redéploiement du code.
 OFFER_MAX_AGE_DAYS = int(os.getenv("CLEANUP_OFFER_MAX_AGE_DAYS", "60"))
 MATCHING_SCORE_THRESHOLD = float(os.getenv("MATCHING_SCORE_THRESHOLD", "0.5"))
