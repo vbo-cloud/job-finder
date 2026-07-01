@@ -107,7 +107,7 @@ export default function LibrarySection({
       (cv) =>
         cv.status === "pending" ||
         cv.status === "processing" ||
-        (cv.status === "done" && cv.match_count === 0),
+        cv.status === "done",
     );
     if (!hasPending) return;
 

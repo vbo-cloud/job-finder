@@ -27,9 +27,8 @@ function AnimatedEllipsis() {
 
 export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
   const isPending   = cv.status === "pending" || cv.status === "processing";
-  // "done" + match_count=0 means analysis is complete but matching hasn't run yet.
-  // "done" + match_count>0 means an older CV already matched under the previous flow.
-  const isSearching = cv.status === "done" && cv.match_count === 0;
+  const isSearching = cv.status === "done";
+  const isMatched   = cv.status === "matched";
   const isError     = cv.status === "error";
   const showSpinner = isPending || isSearching;
 
