@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped, relationship
 
 
@@ -65,7 +65,7 @@ class UserProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
-    rome_codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    rome_codes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     job_categories: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     contract_types: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
