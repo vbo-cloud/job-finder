@@ -3354,3 +3354,25 @@ Les codes ROME étaient stockés en `text[]` dans `user_profiles.rome_codes`, sa
 - **`SELECT ... FOR UPDATE` dans `_merge_rome_codes` et `_remove_cv_from_rome_codes`** : JSONB est une valeur opaque pour PostgreSQL — un read-modify-write sans verrou en contexte concurrent (plusieurs CV analysés en parallèle) provoquerait des writes perdus.
 - **`jsonb_object_keys` via `text()`** : SQLAlchemy `func.jsonb_object_keys()` ne se comporte pas comme une SRF dans `select()`. La requête SQL brute est plus lisible et garantit le bon comportement.
 - **Labels en base plutôt qu'en frontend** : le libellé ROME est stocké en base avec le code et renvoyé par l'API — plus besoin du fichier statique `rome-codes.ts`. Le fallback `?? code` dans `MatchItem` couvre les offres dont le code ROME n'est pas dans le profil de l'utilisateur courant.
+
+---
+
+## PR #144 — feat(frontend): bouton connexion épinglé au viewport
+
+**Date :** 2026-07-02
+**Branche :** `feature/sticky-auth-button` → `dev`
+
+### Contexte
+
+`AuthButton` était positionné en `absolute` dans `UploadSection` (première section snap). Il disparaissait dès que l'utilisateur scrollait vers `LibrarySection` ou `CVDetailSection`.
+
+### Ce qui a été fait
+
+**`layout.tsx`** : `AuthButton` déplacé dans `RootLayout`, à l'intérieur de `AuthProvider`, avec `fixed right-3 top-2 z-50`. Il est désormais présent sur toutes les pages (accueil et profil) et reste ancré au viewport indépendamment du scroll.
+
+**`UploadSection.tsx`** : import `AuthButton` et le `<div absolute>` local supprimés.
+
+### Décisions techniques
+
+- **Placement dans `layout.tsx` plutôt que `HomeClient.tsx`** : le bouton est utile sur toutes les pages. Le mettre dans le layout évite de le dupliquer et le rend cohérent globalement.
+- **`AuthProvider` comme parent** : `AuthButton` consomme les hooks MSAL (`useIsAuthenticated`, `useMsal`). Il doit impérativement être rendu à l'intérieur de `MsalProvider`, fourni par `AuthProvider`.
