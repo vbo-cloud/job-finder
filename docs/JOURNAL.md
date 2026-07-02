@@ -3435,3 +3435,30 @@ Un utilisateur non connecté pouvait cliquer sur l'icône CV, sélectionner un f
 
 - **Check dans `handleClick` et non dans `handleFile`** : `handleFile` est le point d'entrée commun au clic et au drag-and-drop. Le retirer de `handleFile` aurait laissé le drag-and-drop non protégé. Les deux paths ont maintenant leur propre gate au plus tôt dans leur flux respectif.
 - **`loginRedirect` et non `loginPopup`** : cohérent avec le reste de l'app — la popup est bloquée par défaut sur certains navigateurs et nécessite un geste utilisateur explicite dans le même tick.
+
+---
+
+## PR #147 — feat(frontend): section CV toujours disponible au scroll
+
+**Date :** 2026-07-02
+**Branche :** `feature/cv-auto-select` → `dev`
+
+### Contexte
+
+`CVDetailSection` n'était montée que lorsque `selectedCvId` était non-null, ce qui n'arrivait qu'après un clic explicite sur une carte. La section disparaissait également quand l'utilisateur cliquait sur "BIBLIOTHÈQUE" (`setSelectedCvId(null)`). Le résultat : la troisième section snap n'existait pas dans le DOM au chargement — le scroll vers la vue détail était impossible sans interaction préalable.
+
+### Ce qui a été fait
+
+**`HomeClient.tsx`** — seul fichier modifié :
+
+- **Auto-sélection** : un `useEffect([cvList, selectedCvId])` sélectionne automatiquement `cvList[0]` (le CV le plus récent) dès que la bibliothèque contient au moins un CV et qu'aucune sélection valide n'est active. Si la liste se vide, `selectedCvId` repasse à `null`.
+- **`handleCvSelect`** : remplace `setSelectedCvId` en tant que `onCvSelect` de `LibrarySection`. Sélectionne le CV ET scrolle explicitement vers `CVDetailSection` (via `requestAnimationFrame` pour laisser le snap container enregistrer la cible avant le scroll).
+- **`handleCloseDetail`** : remplace `() => setSelectedCvId(null)` en tant que `onClose` de `CVDetailSection`. Scrolle vers `#library` via `scrollIntoView` sans démonter la section.
+
+Grâce à l'auto-sélection, `selectedCvId` est toujours non-null dès que la bibliothèque est accessible — `CVDetailSection` reste donc montée en permanence comme troisième cible snap.
+
+### Décisions techniques
+
+- **Guard `selectedCvId && cvList.some(...)`** : le poll de 3 s dans `LibrarySection` produit un nouveau tableau à chaque cycle. Sans guard, l'effet remplacerait la sélection de l'utilisateur (navigation aux flèches) à chaque poll. Le guard préserve la sélection tant que le CV existe encore dans la liste.
+- **Pas de scroll au montage** : l'ancien `useEffect([selectedCvId])` scrollait à chaque changement, y compris lors de l'auto-sélection initiale. Le nouveau design dissocie "sélection silencieuse" (auto-select) et "scroll explicite" (clic carte). L'utilisateur reste sur `UploadSection` au chargement.
+- **`document.getElementById("library")`** : `LibrarySection` expose déjà `id="library"`. Évite d'ajouter un `forwardRef` au composant pour un simple scroll de retour.
