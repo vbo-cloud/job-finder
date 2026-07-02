@@ -3415,3 +3415,23 @@ La miniature affichée dans `CVDetailSection` était floue : générée à `scal
 - **`scale=2.0` choisi délibérément** : à `scale=0.4`, une page A4 (~595 pt) donne 238 px. À `scale=2.0`, on obtient ~1 190 px — suffisant pour couvrir 665 px CSS × 2 (Retina 1440 px). `scale=1.5` aurait été insuffisant sur grands écrans Retina.
 - **Fallback sm transparent** : les CVs existants continuent de fonctionner sans backfill immédiat. Le backfill peut être lancé à la main après la migration.
 - **Pas de `has_thumbnail_lg` dans le schéma** : le flag `has_thumbnail` existant reste suffisant. Le frontend ne distingue pas les tailles disponibles — le backend gère le fallback de façon transparente.
+
+---
+
+## PR #146 — feat(ux): redirection login au clic sur l'icône CV
+
+**Date :** 2026-07-02
+**Branche :** `feature/ux-auth-gate-on-upload-click` → `dev`
+
+### Contexte
+
+Un utilisateur non connecté pouvait cliquer sur l'icône CV, sélectionner un fichier via l'explorateur OS, et ce n'est qu'après la sélection que la redirection Azure AD se déclenchait (dans `handleFile`). L'ordre était contre-intuitif : la demande de connexion devait arriver avant d'ouvrir le sélecteur de fichier.
+
+### Ce qui a été fait
+
+**`UploadSection.tsx`** : le check `isAuthenticated` est déplacé de `handleFile` vers `handleClick`, juste avant l'appel à `fileInputRef.current?.click()`. Si l'utilisateur n'est pas connecté, `loginRedirect` est déclenché immédiatement et le sélecteur de fichier n'est jamais ouvert. Le check dans `handleFile` est conservé pour couvrir le chemin drag-and-drop.
+
+### Décisions techniques
+
+- **Check dans `handleClick` et non dans `handleFile`** : `handleFile` est le point d'entrée commun au clic et au drag-and-drop. Le retirer de `handleFile` aurait laissé le drag-and-drop non protégé. Les deux paths ont maintenant leur propre gate au plus tôt dans leur flux respectif.
+- **`loginRedirect` et non `loginPopup`** : cohérent avec le reste de l'app — la popup est bloquée par défaut sur certains navigateurs et nécessite un geste utilisateur explicite dans le même tick.
