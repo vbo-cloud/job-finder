@@ -7,7 +7,6 @@ import apiClient from "@/lib/api/client";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
 
-import AuthButton from "./AuthButton";
 import OrbitAnimation from "./OrbitAnimation";
 
 type AnimState = "idle" | "uploaded" | "done";
@@ -100,10 +99,6 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
         mousePosRef={mousePosRef}
         clickFlashRef={clickFlashRef}
       />
-
-      <div className="absolute right-3 top-2 z-10">
-        <AuthButton />
-      </div>
 
       <div
         onClick={handleClick}
