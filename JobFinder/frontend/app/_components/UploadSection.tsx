@@ -77,10 +77,14 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
     const cy = rect.height / 2;
     if (Math.abs(x - cx) > 28 || Math.abs(y - cy) > 34) return;
     if (animState === "idle") {
+      if (!isAuthenticated) {
+        void instance.loginRedirect(loginRequest);
+        return;
+      }
       clickFlashRef.current = 1.0;
       fileInputRef.current?.click();
     }
-  }, [animState]);
+  }, [animState, isAuthenticated, instance]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
