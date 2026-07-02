@@ -23,8 +23,10 @@ export default function RootLayout({
     <html lang="fr">
       <body className={cn(inter.className, "min-h-screen bg-page text-strong antialiased")}>
         <AuthProvider>
-          <div className="fixed right-3 top-2 z-50">
-            <AuthButton />
+          <div className="pointer-events-none fixed right-3 top-2 z-50">
+            <div className="pointer-events-auto">
+              <AuthButton />
+            </div>
           </div>
           {children}
         </AuthProvider>
