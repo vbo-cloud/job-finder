@@ -23,39 +23,49 @@ export default function HomeClient() {
   // entry even if the POST response arrives before the animation ends.
   const uploadedCvIdRef = useRef<string | null>(null);
 
+  // Keep CVDetailSection pre-mounted: auto-select cvList[0] when no valid
+  // selection exists, clear to null only when the library is empty.
   useEffect(() => {
-    if (!selectedCvId || !detailRef.current) return;
-    const el = detailRef.current;
-    // Defer one frame so the snap container registers the newly-mounted snap
-    // target before we scroll — without this, snap-mandatory can snap back.
-    requestAnimationFrame(() => {
-      el.scrollIntoView({ behavior: "smooth" });
-    });
-  }, [selectedCvId]);
+    if (cvList.length === 0) {
+      setSelectedCvId(null);
+      return;
+    }
+    if (selectedCvId && cvList.some((cv) => cv.id === selectedCvId)) return;
+    setSelectedCvId(cvList[0].id);
+  }, [cvList, selectedCvId]);
 
-  // Fires when the upload HTTP response comes back (with the new cv_id).
   const handleUploadComplete = useCallback((cvId: string) => {
     uploadedCvIdRef.current = cvId;
     setOptimisticUpload((prev) => (prev ? { ...prev, cvId } : null));
     setUploadCount((n) => n + 1);
   }, []);
 
-  // Fires when the descend animation finishes — thumbnail objectURL still alive.
   const handleAnimationComplete = useCallback((thumbnailUrl: string) => {
     if (!thumbnailUrl) return;
-    // If the POST already responded, attach its cv_id immediately so the
-    // LibrarySection effect can resolve the optimistic in the first render.
     const cvId = uploadedCvIdRef.current;
     uploadedCvIdRef.current = null;
     setOptimisticUpload({ thumbnailUrl, cvId });
   }, []);
 
-  // Called by LibrarySection once the real CV is confirmed in the list.
   const handleOptimisticConsumed = useCallback(() => {
     setOptimisticUpload((prev) => {
       if (prev?.thumbnailUrl) URL.revokeObjectURL(prev.thumbnailUrl);
       return null;
     });
+  }, []);
+
+  // Explicit card click: select a CV and scroll into the detail section.
+  const handleCvSelect = useCallback((id: string) => {
+    setSelectedCvId(id);
+    // Defer one frame so snap-mandatory has registered the section before scrolling.
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, []);
+
+  // Back action from CVDetailSection: scroll to library without unmounting the section.
+  const handleCloseDetail = useCallback(() => {
+    document.getElementById("library")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   return (
@@ -70,7 +80,7 @@ export default function HomeClient() {
         onAccessibilityChange={setLibraryAccessible}
         optimisticUpload={optimisticUpload}
         onOptimisticConsumed={handleOptimisticConsumed}
-        onCvSelect={setSelectedCvId}
+        onCvSelect={handleCvSelect}
         onCvsChange={setCvList}
       />
       {selectedCvId && (
@@ -78,8 +88,8 @@ export default function HomeClient() {
           ref={detailRef}
           cvs={cvList}
           selectedCvId={selectedCvId}
-          onCvChange={setSelectedCvId}
-          onClose={() => setSelectedCvId(null)}
+          onCvChange={setSelectedCvId} // arrow nav: already on section, no scroll needed
+          onClose={handleCloseDetail}
         />
       )}
     </main>
