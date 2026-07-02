@@ -43,7 +43,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
       let objectUrl: string | null = null;
       let cancelled = false;
       apiClient
-        .get<Blob>(`/cv/${selectedCvId}/thumbnail`, { responseType: "blob" })
+        .get<Blob>(`/cv/${selectedCvId}/thumbnail?size=lg`, { responseType: "blob" })
         .then((res) => {
           if (cancelled) return;
           objectUrl = URL.createObjectURL(res.data);

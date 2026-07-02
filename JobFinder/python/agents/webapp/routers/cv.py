@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Literal
 from urllib.parse import quote, urlparse
 
 import pdfplumber
@@ -22,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import send_message
-from shared.constants import THUMBNAIL_SCALE
+from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
 from shared.models import CV, Match, UserProfile
 from auth import get_current_user
@@ -48,13 +49,14 @@ _blob_service_client = BlobServiceClient(
 )
 
 
-def _generate_cv_thumbnail(contents: bytes) -> bytes | None:
-    """Render the first PDF page as a JPEG thumbnail. Returns None on failure.
+def _generate_cv_thumbnail(contents: bytes, scale: float) -> bytes | None:
+    """Render the first PDF page as a JPEG thumbnail at the given scale. Returns None on failure.
 
     Non-critical — a failed thumbnail must not abort the upload.
 
     Args:
         contents: Raw PDF bytes.
+        scale: pypdfium2 render scale (e.g. 0.4 for a small card, 2.0 for the detail view).
 
     Returns:
         JPEG image bytes, or None if rendering failed.
@@ -63,7 +65,7 @@ def _generate_cv_thumbnail(contents: bytes) -> bytes | None:
         pdf = pdfium.PdfDocument(contents)
         try:
             page = pdf[0]
-            bitmap = page.render(scale=THUMBNAIL_SCALE)
+            bitmap = page.render(scale=scale)
             image = bitmap.to_pil()
             if image.mode != "RGB":
                 image = image.convert("RGB")
@@ -77,15 +79,18 @@ def _generate_cv_thumbnail(contents: bytes) -> bytes | None:
         return None
 
 
-def _upload_thumbnail_blob(contents: bytes, user_id: str, cv_id: uuid.UUID) -> str:
+def _upload_thumbnail_blob(
+    contents: bytes, user_id: str, cv_id: uuid.UUID, suffix: str = "_thumb"
+) -> str:
     """Upload a JPEG thumbnail to blob storage and return its URL.
 
-    Blob name is ``{user_id}/{cv_id}_thumb.jpg``.
+    Blob name is ``{user_id}/{cv_id}{suffix}.jpg``.
 
     Args:
         contents: JPEG thumbnail bytes.
         user_id: Authenticated user ID, used as the blob path prefix.
         cv_id: CV UUID, used to build a deterministic blob name.
+        suffix: Blob name suffix before the extension (default ``_thumb``).
 
     Returns:
         The full URL of the uploaded thumbnail blob.
@@ -93,7 +98,7 @@ def _upload_thumbnail_blob(contents: bytes, user_id: str, cv_id: uuid.UUID) -> s
     Raises:
         AzureError: If the upload fails for any storage-level reason.
     """
-    blob_name = f"{user_id}/{cv_id}_thumb.jpg"
+    blob_name = f"{user_id}/{cv_id}{suffix}.jpg"
     blob_client = _blob_service_client.get_blob_client(
         container=CV_BLOB_CONTAINER,
         blob=blob_name,
@@ -256,13 +261,21 @@ async def upload_cv(
     # distinct entry visible in the library.
     cv_id = uuid.uuid4()
 
-    # Generate and upload thumbnail (non-critical — failure does not abort the upload).
+    # Generate and upload thumbnails (non-critical — failure does not abort the upload).
     thumbnail_url: str | None = None
-    thumb_bytes = _generate_cv_thumbnail(contents)
+    thumbnail_url_lg: str | None = None
+    thumb_bytes = _generate_cv_thumbnail(contents, THUMBNAIL_SCALE)
     if thumb_bytes:
         try:
             thumbnail_url = _upload_thumbnail_blob(thumb_bytes, user_id, cv_id)
             logger.info("cv_thumbnail_uploaded", user_id=user_id, cv_id=str(cv_id))
+        except AzureError:
+            pass  # already logged in _upload_thumbnail_blob
+    thumb_bytes_lg = _generate_cv_thumbnail(contents, THUMBNAIL_SCALE_LG)
+    if thumb_bytes_lg:
+        try:
+            thumbnail_url_lg = _upload_thumbnail_blob(thumb_bytes_lg, user_id, cv_id, suffix="_thumb_lg")
+            logger.info("cv_thumbnail_lg_uploaded", user_id=user_id, cv_id=str(cv_id))
         except AzureError:
             pass  # already logged in _upload_thumbnail_blob
 
@@ -276,6 +289,7 @@ async def upload_cv(
             raw_text=raw_text,
             blob_url=blob_url,
             thumbnail_url=thumbnail_url,
+            thumbnail_url_lg=thumbnail_url_lg,
             embedding=embedding,
             uploaded_at=now,
             created_at=now,
@@ -377,6 +391,7 @@ def list_cvs(
 @router.get("/{cv_id}/thumbnail", response_class=Response)
 def get_cv_thumbnail(
     cv_id: uuid.UUID,
+    size: Literal["sm", "lg"] = "sm",
     user_id: str = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> Response:
@@ -384,6 +399,8 @@ def get_cv_thumbnail(
 
     Args:
         cv_id: UUID of the CV.
+        size: Thumbnail size — ``sm`` (default) for CVCards, ``lg`` for the detail view.
+            Falls back to ``sm`` if ``lg`` has not been generated yet (pre-backfill CVs).
         user_id: Authenticated user ID from the JWT sub claim.
         session: Active database session.
 
@@ -395,7 +412,7 @@ def get_cv_thumbnail(
             or has no thumbnail.
         HTTPException 503: If Azure Blob Storage is unavailable.
     """
-    logger.info("cv_thumbnail_fetch_started", user_id=user_id, cv_id=str(cv_id))
+    logger.info("cv_thumbnail_fetch_started", user_id=user_id, cv_id=str(cv_id), size=size)
     try:
         cv = session.execute(
             select(CV).where(CV.id == cv_id, CV.user_id == user_id)
@@ -407,15 +424,16 @@ def get_cv_thumbnail(
     if cv is None or cv.thumbnail_url is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
 
+    url = cv.thumbnail_url_lg if (size == "lg" and cv.thumbnail_url_lg) else cv.thumbnail_url
     try:
-        data = _download_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
+        data = _download_blob(url, CV_BLOB_CONTAINER)
     except AzureError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Storage unavailable",
         ) from e
 
-    logger.info("cv_thumbnail_fetch_done", user_id=user_id, cv_id=str(cv_id))
+    logger.info("cv_thumbnail_fetch_done", user_id=user_id, cv_id=str(cv_id), size=size)
     return Response(content=data, media_type="image/jpeg")
 
 
@@ -581,6 +599,8 @@ def delete_cv(
         _delete_blob(cv.blob_url, CV_BLOB_CONTAINER)
         if cv.thumbnail_url:
             _delete_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
+        if cv.thumbnail_url_lg:
+            _delete_blob(cv.thumbnail_url_lg, CV_BLOB_CONTAINER)
     except AzureError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

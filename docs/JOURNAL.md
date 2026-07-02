@@ -3376,3 +3376,42 @@ Les codes ROME étaient stockés en `text[]` dans `user_profiles.rome_codes`, sa
 
 - **Placement dans `layout.tsx` plutôt que `HomeClient.tsx`** : le bouton est utile sur toutes les pages. Le mettre dans le layout évite de le dupliquer et le rend cohérent globalement.
 - **`AuthProvider` comme parent** : `AuthButton` consomme les hooks MSAL (`useIsAuthenticated`, `useMsal`). Il doit impérativement être rendu à l'intérieur de `MsalProvider`, fourni par `AuthProvider`.
+
+---
+
+## PR #145 — feat(ux): miniature haute résolution dans la vue détail CV
+
+**Date :** 2026-07-02
+**Branche :** `feature/ux-cv-thumbnail-lg` → `dev`
+
+### Contexte
+
+La miniature affichée dans `CVDetailSection` était floue : générée à `scale=0.4` (~238 × 337 px), elle était upscalée à ×2 dans un panneau de ~480 px. La cause est structurelle — une seule taille de miniature couvrait à la fois les cartes de bibliothèque (176 px) et la vue détail (jusqu'à 665 px CSS, ×2 sur écran Retina).
+
+### Ce qui a été fait
+
+**`shared/constants.py`** : ajout de `THUMBNAIL_SCALE_LG = 2.0` (~1 190 px de large, couvre un panneau de 665 px CSS sur écran Retina 1440 px).
+
+**`shared/models.py`** : ajout de la colonne `thumbnail_url_lg: Mapped[str | None]` sur le modèle `CV`.
+
+**`migrations/versions/011_add_cv_thumbnail_url_lg.py`** : migration Alembic ajoutant `thumbnail_url_lg VARCHAR(2048) NULL` à la table `cvs`.
+
+**`agents/webapp/routers/cv.py`** :
+- `_generate_cv_thumbnail(contents, scale)` — paramètre `scale` explicite au lieu de la constante globale.
+- `_upload_thumbnail_blob(contents, user_id, cv_id, suffix="_thumb")` — paramètre `suffix` pour distinguer sm et lg.
+- Endpoint `POST /cv/upload` : génère et stocke les deux tailles (`_thumb.jpg` et `_thumb_lg.jpg`) indépendamment — l'échec de l'une n'interrompt pas l'upload.
+- Endpoint `GET /cv/{id}/thumbnail?size=sm|lg` : paramètre `size` (défaut `sm`). Si `size=lg` et `thumbnail_url_lg` est `NULL` (CV antérieur au backfill), retombe sur `thumbnail_url`.
+- Endpoint `DELETE /cv/{id}` : supprime également `thumbnail_url_lg` si présent.
+
+**`scripts/backfill_thumbnails.py`** : deux passages — passage 1 génère sm + lg pour les CVs sans miniature ; passage 2 génère lg seul pour les CVs qui n'ont que sm.
+
+**`tests/test_webapp_cv.py`** : 4 nouveaux tests (happy path sm, happy path lg, fallback lg→sm, suppression des 3 blobs). Tests existants de suppression mis à jour (`thumbnail_url_lg = None` explicite). 20/20 au total.
+
+**`CVDetailSection.tsx`** : fetch modifié de `/thumbnail` vers `/thumbnail?size=lg`.
+
+### Décisions techniques
+
+- **Deux tailles en blob, un seul endpoint** : évite de dupliquer la logique d'auth et de téléchargement. Le paramètre `?size` est transparent pour les CVCards (qui ne passent aucun paramètre et obtiennent `sm` par défaut).
+- **`scale=2.0` choisi délibérément** : à `scale=0.4`, une page A4 (~595 pt) donne 238 px. À `scale=2.0`, on obtient ~1 190 px — suffisant pour couvrir 665 px CSS × 2 (Retina 1440 px). `scale=1.5` aurait été insuffisant sur grands écrans Retina.
+- **Fallback sm transparent** : les CVs existants continuent de fonctionner sans backfill immédiat. Le backfill peut être lancé à la main après la migration.
+- **Pas de `has_thumbnail_lg` dans le schéma** : le flag `has_thumbnail` existant reste suffisant. Le frontend ne distingue pas les tailles disponibles — le backend gère le fallback de façon transparente.

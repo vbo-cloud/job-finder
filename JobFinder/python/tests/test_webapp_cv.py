@@ -148,6 +148,45 @@ class TestGetCvThumbnail:
 
         assert resp.status_code == 404
 
+    def test_returns_sm_thumbnail_by_default(self, test_client, mock_session, mock_blob_client):
+        cv = MagicMock()
+        cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        cv.thumbnail_url_lg = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+        fake_bytes = b"fake_sm_jpeg"
+        mock_blob_client.get_blob_client.return_value.download_blob.return_value.readall.return_value = fake_bytes
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/thumbnail")
+
+        assert resp.status_code == 200
+        assert resp.content == fake_bytes
+
+    def test_returns_lg_thumbnail_when_requested(self, test_client, mock_session, mock_blob_client):
+        cv = MagicMock()
+        cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        cv.thumbnail_url_lg = "https://account.blob.core.windows.net/cvs/user/cv_thumb_lg.jpg"
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+        fake_bytes = b"fake_lg_jpeg"
+        mock_blob_client.get_blob_client.return_value.download_blob.return_value.readall.return_value = fake_bytes
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/thumbnail?size=lg")
+
+        assert resp.status_code == 200
+        assert resp.content == fake_bytes
+
+    def test_falls_back_to_sm_when_lg_not_available(self, test_client, mock_session, mock_blob_client):
+        cv = MagicMock()
+        cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        cv.thumbnail_url_lg = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+        fake_bytes = b"fake_sm_jpeg_fallback"
+        mock_blob_client.get_blob_client.return_value.download_blob.return_value.readall.return_value = fake_bytes
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/thumbnail?size=lg")
+
+        assert resp.status_code == 200
+        assert resp.content == fake_bytes
+
 
 # ---------------------------------------------------------------------------
 # GET /cv/{cv_id}/pdf
@@ -208,6 +247,7 @@ class TestDeleteCv:
         cv = MagicMock()
         cv.blob_url = "https://account.blob.core.windows.net/cvs/user/cv.pdf"
         cv.thumbnail_url = None
+        cv.thumbnail_url_lg = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),   # select CV
             MagicMock(),                                              # delete(Match)
@@ -226,6 +266,7 @@ class TestDeleteCv:
         cv = MagicMock()
         cv.blob_url = "https://account.blob.core.windows.net/cvs/user/cv.pdf"
         cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        cv.thumbnail_url_lg = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),
             MagicMock(),
@@ -237,6 +278,25 @@ class TestDeleteCv:
         assert resp.status_code == 204
         blob_container = mock_blob_client.get_blob_client.return_value
         assert blob_container.delete_blob.call_count == 2
+
+    def test_also_deletes_both_thumbnail_blobs_when_present(
+        self, test_client, mock_session, mock_blob_client
+    ):
+        cv = MagicMock()
+        cv.blob_url = "https://account.blob.core.windows.net/cvs/user/cv.pdf"
+        cv.thumbnail_url = "https://account.blob.core.windows.net/cvs/user/cv_thumb.jpg"
+        cv.thumbnail_url_lg = "https://account.blob.core.windows.net/cvs/user/cv_thumb_lg.jpg"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+        ]
+
+        resp = test_client.delete(f"/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 204
+        blob_container = mock_blob_client.get_blob_client.return_value
+        assert blob_container.delete_blob.call_count == 3
 
 
 # ---------------------------------------------------------------------------
