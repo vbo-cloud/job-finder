@@ -229,6 +229,41 @@ class TestMarkAllSeen:
 
 
 # ---------------------------------------------------------------------------
+# PATCH /cv/{cv_id}/matches/{offer_id}/seen
+# ---------------------------------------------------------------------------
+
+
+class TestMarkMatchSeen:
+    def test_returns_204_and_commits_when_unseen(self, test_client, mock_session):
+        match = MagicMock()
+        match.seen_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = match
+
+        resp = test_client.patch(f"/cv/{TEST_CV_ID}/matches/{uuid.uuid4()}/seen")
+
+        assert resp.status_code == 204
+        assert match.seen_at is not None
+        mock_session.commit.assert_called_once()
+
+    def test_skips_commit_when_already_seen(self, test_client, mock_session):
+        match = MagicMock()
+        match.seen_at = "2024-01-01T00:00:00+00:00"
+        mock_session.execute.return_value.scalar_one_or_none.return_value = match
+
+        resp = test_client.patch(f"/cv/{TEST_CV_ID}/matches/{uuid.uuid4()}/seen")
+
+        assert resp.status_code == 204
+        mock_session.commit.assert_not_called()
+
+    def test_returns_404_when_match_not_found(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.patch(f"/cv/{uuid.uuid4()}/matches/{uuid.uuid4()}/seen")
+
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # DELETE /cv/{cv_id}
 # ---------------------------------------------------------------------------
 

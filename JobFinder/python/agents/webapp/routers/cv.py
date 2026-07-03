@@ -525,6 +525,48 @@ def mark_all_seen(
     logger.info("mark_all_seen_done", user_id=user_id, cv_id=str(cv_id))
 
 
+@router.patch("/{cv_id}/matches/{offer_id}/seen", status_code=status.HTTP_204_NO_CONTENT)
+def mark_match_seen(
+    cv_id: uuid.UUID,
+    offer_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Mark a single match as seen.
+
+    Args:
+        cv_id: UUID of the CV that owns this match.
+        offer_id: UUID of the offer (identifies the match uniquely within a CV).
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the CV does not exist, is not owned by the user, or
+            no match exists for this CV/offer pair.
+    """
+    logger.info("mark_match_seen_started", user_id=user_id, cv_id=str(cv_id), offer_id=str(offer_id))
+    try:
+        match = session.execute(
+            select(Match)
+            .join(CV, Match.cv_id == CV.id)
+            .where(Match.cv_id == cv_id, Match.offer_id == offer_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+
+        if match is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
+
+        if match.seen_at is None:
+            match.seen_at = datetime.now(timezone.utc)
+            session.commit()
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        logger.error("mark_match_seen_db_failed", user_id=user_id, cv_id=str(cv_id), offer_id=str(offer_id), exc_info=True)
+        raise
+
+    logger.info("mark_match_seen_done", user_id=user_id, cv_id=str(cv_id), offer_id=str(offer_id))
+
+
 def _remove_cv_from_rome_codes(session: Session, cv_id: uuid.UUID, user_id: str) -> None:
     """Remove a CV's contribution from the user's rome_codes dict.
 
