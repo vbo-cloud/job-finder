@@ -129,15 +129,14 @@ describe("MatchItem", () => {
       expect(screen.getByRole("button", { name: "Retirer des favoris" })).toBeInTheDocument();
     });
 
-    it("shows description text in offre tab", () => {
+    it("shows salary in expanded view", () => {
       render(
-        <MatchItem
-          match={makeMatch(0.85, { description: "Texte complet\nde l'offre." })}
-          romeCodesDict={emptyRomeCodes}
-        />
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, { salary: "40 000 € brut" }),
+        })} />
       );
-      fireEvent.click(screen.getByRole("button", { name: "Développer" }));
-      expect(screen.getByText(/Texte complet/)).toBeInTheDocument();
+      expect(screen.getByText("40 000 € brut")).toBeInTheDocument();
     });
   });
 });

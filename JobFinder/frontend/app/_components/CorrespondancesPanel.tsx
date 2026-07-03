@@ -68,7 +68,7 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
     isExpanded: selectedId === m.offer.id,
     onSelect:   () => toggleExpand(m.offer.id),
     onSave:     () => toggleSaved(m.offer.id),
-    onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)),
+    onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)), // TODO: persist applied state to backend
     onReject:   () => {
       setRejected((s) => new Set(s).add(m.offer.id));
       if (selectedId === m.offer.id) setSelectedId(null);
@@ -182,6 +182,8 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
           </div>
         ) : error ? (
           <p className="text-xs text-destructive mt-8 text-center">{error} — impossible de charger les matchs</p>
+        ) : !filters.nouvelle && !filters.vue ? (
+          <p className="text-sm text-muted text-center mt-12">Tous les filtres sont désactivés — activez au moins un filtre.</p>
         ) : (
           <MatchList
             items={items}

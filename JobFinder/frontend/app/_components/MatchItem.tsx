@@ -47,6 +47,7 @@ function brandHue(name: string): number {
   return h;
 }
 
+// "use client" — runs in the browser only (one instance per page load), so a module-level cache is safe and never leaks between users.
 const logoBadgeCache = new Map<string, { mono: string; bg: string; fg: string }>();
 
 function logoBadge(company: string): { mono: string; bg: string; fg: string } {
