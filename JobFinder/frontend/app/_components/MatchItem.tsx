@@ -1,134 +1,281 @@
 "use client";
 
-import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
+import type { MatchOut } from "@/lib/api/types";
+
+export interface MatchItemData {
+  match: MatchOut;
+  isNew: boolean;
+  isSaved: boolean;
+  isApplied: boolean;
+  isExpanded: boolean;
+  onSelect: () => void;
+  onSave: () => void;
+  onApply: () => void;
+  onReject: () => void;
+}
 
 const FT_OFFER_URL = "https://candidat.francetravail.fr/offres/recherche/detail";
 
-type Tab = "offre" | "analyse";
-const TAB_LABELS: Record<Tab, string> = { offre: "Offre", analyse: "Analyse" };
-
-interface Props {
-  match: MatchOut;
-  romeCodesDict: Record<string, RomeCodeEntry>;
+function scoreTheme(pct: number): { color: string; barBg: string; golden: boolean } {
+  if (pct > 90) return {
+    color: "#a9791f",
+    barBg: "linear-gradient(90deg,#d4af37,#f6d879)",
+    golden: true,
+  };
+  const h = Math.round((pct / 100) * 132);
+  const c = `hsl(${h} 60% 37%)`;
+  return { color: c, barBg: c, golden: false };
 }
 
-export default function MatchItem({ match, romeCodesDict }: Props) {
-  const [open, setOpen]           = useState(false);
-  const [activeTab, setActiveTab] = useState<Tab>("offre");
-  const scorePercent = Math.round(match.score * 100);
+function parseLocation(location: string): { city: string; dept: string } {
+  const m = /^([^(]+)\s*\((\w+)\)/.exec(location);
+  if (m) return { city: m[1].trim(), dept: m[2] };
+  return { city: location, dept: "" };
+}
 
-  const expired = match.offer.expires_at !== null && new Date(match.offer.expires_at) < new Date();
-  const offerUrl = `${FT_OFFER_URL}/${match.offer.ft_id}`;
+function contractShort(title: string, contractType: string): string {
+  const t = title.toLowerCase();
+  if (t.includes("altern")) return "ALT";
+  if (t.includes("stage") || t.includes("stagiaire")) return "STA";
+  return contractType.slice(0, 3).toUpperCase();
+}
+
+function brandHue(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+function logoBadge(company: string): { mono: string; bg: string; fg: string } {
+  if (company) {
+    const words = company.trim().split(/\s+/);
+    const mono = (words.length > 1
+      ? words[0][0] + words[1][0]
+      : company.slice(0, 2)
+    ).toUpperCase();
+    return { mono, bg: `hsl(${brandHue(company)} 38% 42%)`, fg: "#fff" };
+  }
+  return { mono: "?", bg: "var(--bg-badge)", fg: "var(--text-muted)" };
+}
+
+export default function MatchItem({
+  match, isNew, isSaved, isApplied, isExpanded,
+  onSelect, onSave, onApply, onReject,
+}: MatchItemData) {
+  const { offer } = match;
+  const pct = Math.round(match.score * 100);
+  const { color, barBg, golden } = scoreTheme(pct);
+  const { city, dept } = parseLocation(offer.location);
+  const meta = [city, dept, offer.contract_type].filter(Boolean).join(" · ");
+  const badge = logoBadge(offer.company || "");
+  const short = contractShort(offer.title, offer.contract_type);
 
   return (
-    <div className="rounded-xl border border-faint bg-chip overflow-hidden">
-      {/* Row — score | title + meta | expand toggle */}
-      <div className="flex items-center gap-4 px-4 py-3">
-        <span className={cn(
-          "text-[11px] font-medium tabular-nums w-10 shrink-0",
-          scorePercent >= 75 ? "text-success" : scorePercent >= 50 ? "text-warning" : "text-muted",
-        )}>
-          {scorePercent}%
-        </span>
+    <div
+      className={cn(
+        "relative rounded-[13px] overflow-hidden border transition-[border-color,box-shadow] duration-150",
+        isExpanded
+          ? "shadow-[0_6px_22px_rgba(0,0,0,.10)] border-match bg-page"
+          : "bg-page border-faint",
+      )}
+    >
+      {/* Bookmark — absolute top-right, above the clickable row */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onSave(); }}
+        aria-label={isSaved ? "Retirer des favoris" : "Sauvegarder"}
+        className={cn(
+          "absolute top-3 right-3.5 z-10 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
+          isSaved ? "border-match bg-match-skill text-match-skill" : "border-faint bg-page text-muted hover:border-subtle",
+        )}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill={isSaved ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      </button>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {expired ? (
-              <span className="text-[12px] text-muted truncate">{match.offer.title}</span>
-            ) : (
-              <a
-                href={offerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[12px] text-body hover:text-accent active:text-strong transition-colors truncate focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default rounded"
-              >
-                {match.offer.title}
-              </a>
-            )}
-            {expired && (
-              <span className="shrink-0 text-[8px] px-1.5 py-0.5 rounded-full bg-destructive-muted text-destructive border border-destructive/20">
-                Expirée
-              </span>
-            )}
+      {/* Clickable header row */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onSelect}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
+        className="flex items-stretch cursor-pointer hover:bg-overlay rounded-[13px] transition-colors"
+      >
+        {/* Score column */}
+        <div className="relative flex flex-none w-[70px] flex-col items-center justify-center gap-2 py-4 px-2 bg-chip border-r border-faint">
+          <span className="absolute top-3 left-0 right-0 text-center text-[10.5px] font-bold tracking-[.05em] text-muted">
+            {short}
+          </span>
+          {golden ? (
+            <span
+              className="font-mono text-[20px] font-bold tabular-nums"
+              style={{
+                background: "linear-gradient(95deg,#b8860b,#f6d879,#fff3c4,#f6d879,#b8860b)",
+                backgroundSize: "200% 100%",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+                animation: "shine 2.5s linear infinite",
+              }}
+            >
+              {pct}%
+            </span>
+          ) : (
+            <span className="font-mono text-[20px] font-bold tabular-nums" style={{ color }}>
+              {pct}%
+            </span>
+          )}
+          <div className="h-[5px] w-11 rounded-full bg-interactive overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-300" style={{ width: `${pct}%`, background: barBg }} />
           </div>
-          <p className="text-[10px] text-muted truncate">
-            {match.offer.company} · {match.offer.location} · {match.offer.contract_type}
-          </p>
         </div>
 
-        <button
-          onClick={() => setOpen((o) => !o)}
-          aria-label={open ? "Réduire" : "Développer"}
-          className="shrink-0 p-1 text-label hover:text-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default rounded"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" strokeWidth="1.5" width="12" height="12"
-            className={cn("transition-transform", open && "rotate-180")}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-          </svg>
-        </button>
-      </div>
-
-      {open && (
-        <div className="border-t border-faint">
-          {/* Tab header */}
-          <div className="flex gap-5 px-4 pt-3 pb-0 border-b border-faint">
-            {(["offre", "analyse"] as Tab[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={cn(
-                  "pb-2 text-[10px] tracking-wide transition-colors capitalize border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default",
-                  activeTab === tab
-                    ? "text-primary border-active"
-                    : "text-hint border-transparent hover:text-muted",
-                )}
-              >
-                {TAB_LABELS[tab]}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab content */}
-          <div className="px-4 py-3 flex flex-col gap-2">
-            {activeTab === "offre" && (
-              <>
-                {match.offer.rome_code && (
-                  <span className="self-start text-[9px] px-2 py-0.5 rounded-full bg-accent-muted border border-accent text-accent">
-                    {romeCodesDict[match.offer.rome_code]?.label ?? match.offer.rome_code}
+        {/* Content column */}
+        <div className="flex flex-1 min-w-0 flex-col gap-[9px] py-4 px-[18px]">
+          <div className="flex items-center gap-3">
+            <div
+              className="flex flex-none h-[42px] w-[42px] items-center justify-center rounded-xl text-sm font-bold"
+              style={{ background: badge.bg, color: badge.fg }}
+            >
+              {badge.mono}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <a
+                  href={`${FT_OFFER_URL}/${offer.ft_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="font-bold text-[15px] text-strong leading-tight hover:text-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default rounded"
+                >
+                  {offer.title}
+                </a>
+                {isNew && (
+                  <span className="text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-new-offer text-new-offer tracking-[.02em]">
+                    Nouveau
                   </span>
                 )}
-                {match.offer.salary && (
-                  <p className="text-[10px] text-muted">Salaire : {match.offer.salary}</p>
-                )}
-                {match.offer.skills.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {match.offer.skills.map((skill) => (
-                      <span
-                        key={skill}
-                        className="text-[9px] px-2 py-0.5 rounded-full bg-overlay text-muted"
-                      >
-                        {skill}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {match.offer.description && (
-                  <p className="text-[10px] text-body whitespace-pre-line">
-                    {match.offer.description}
-                  </p>
-                )}
-              </>
-            )}
-
-            {activeTab === "analyse" && (
-              <p className="text-[10px] text-empty italic mt-1">
-                Analyse IA spécifique — bientôt disponible
+              </div>
+              <p className="text-[12.5px] font-medium text-muted mt-0.5">
+                {offer.company || "Entreprise non précisée"}
               </p>
+            </div>
+          </div>
+
+          <p className="text-[12.5px] text-secondary">{meta}</p>
+
+          {offer.skills.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {offer.skills.slice(0, 5).map((s) => (
+                <span key={s} className="text-[11.5px] font-medium px-[9px] py-1 rounded-[6px] bg-overlay text-muted">
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-[7px] text-[12px] text-muted leading-snug">
+            <span className="text-hint">—</span>
+            <span>Analyse IA — bientôt disponible.</span>
+          </div>
+        </div>
+
+        {/* Chevron */}
+        <div className="flex flex-none items-center justify-center px-3.5 self-center">
+          <span className={cn("flex h-8 w-8 items-center justify-center text-muted transition-transform duration-200", isExpanded && "rotate-180")}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </span>
+        </div>
+      </div>
+
+      {/* Accordion panel */}
+      {isExpanded && (
+        <div className="border-t border-faint px-5 py-5 grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-5 [animation:expandIn_.2s_ease]">
+          {/* Offer column */}
+          <div>
+            <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-3">Descriptif de l&apos;offre</p>
+            <div className="flex items-center gap-2 text-sm font-semibold text-strong">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-success shrink-0">
+                <path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+              {offer.salary ?? "Salaire non communiqué"}
+            </div>
+            {offer.rome_code && (
+              <div className="mt-3">
+                <span className="inline-flex px-2.5 py-1 rounded-[7px] bg-accent-muted text-accent text-[12px] font-semibold">
+                  {offer.rome_code}
+                </span>
+              </div>
+            )}
+            <div className="flex flex-col gap-[9px] mt-3.5 text-[13px] text-body leading-relaxed">
+              <div className="flex gap-[9px]">
+                <span className="text-success flex-none pt-px">•</span>
+                <span>Poste en {offer.contract_type}, basé à {city}{dept ? ` (${dept})` : ""}.</span>
+              </div>
+              {offer.skills.length > 0 && (
+                <div className="flex gap-[9px]">
+                  <span className="text-success flex-none pt-px">•</span>
+                  <span>Compétences requises : {offer.skills.slice(0, 3).join(", ")}.</span>
+                </div>
+              )}
+              <div className="flex gap-[9px]">
+                <span className="text-success flex-none pt-px">•</span>
+                <span>Collaborer avec les équipes techniques, produit et design.</span>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-[18px] flex-wrap">
+              <button
+                onClick={onApply}
+                disabled={isApplied}
+                className={cn(
+                  "flex-1 min-w-[130px] px-4 py-3 rounded-[10px] font-semibold text-[13.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm",
+                  isApplied
+                    ? "border border-match bg-match-skill text-match-skill cursor-default"
+                    : "bg-solid-confirm text-on-solid hover:bg-solid-confirm-hover cursor-pointer",
+                )}
+              >
+                {isApplied ? "Candidature envoyée ✓" : "Postuler"}
+              </button>
+              <button
+                onClick={onSave}
+                className={cn(
+                  "px-4 py-3 rounded-[10px] font-semibold text-[13.5px] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
+                  isSaved
+                    ? "border-match bg-match-skill text-match-skill"
+                    : "border-soft bg-page text-strong hover:border-default",
+                )}
+              >
+                {isSaved ? "Sauvegardée ✓" : "Sauvegarder"}
+              </button>
+              <button
+                onClick={onReject}
+                className="px-4 py-3 rounded-[10px] font-semibold text-[13.5px] border border-soft bg-page text-muted transition-colors hover:border-destructive hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive"
+              >
+                Rejeter
+              </button>
+            </div>
+          </div>
+
+          {/* Agent review column */}
+          <div className="rounded-xl border border-faint bg-chip p-[18px]">
+            <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-3.5">Review de l&apos;agent</p>
+            <div className="text-[13px] text-body leading-relaxed p-3 bg-card border border-faint rounded-[10px]">
+              Analyse IA approfondie — bientôt disponible. Les scores de compétences, correspondances et lacunes seront affichés ici une fois le module déployé.
+            </div>
+            {offer.skills.length > 0 && (
+              <>
+                <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mt-[18px] mb-2.5">Compétences détectées</p>
+                <div className="flex flex-wrap gap-[7px]">
+                  {offer.skills.slice(0, 5).map((s) => (
+                    <span key={s} className="inline-flex items-center gap-[5px] px-[10px] py-[5px] rounded-[7px] bg-match-skill text-match-skill text-[12.5px] font-semibold">
+                      <span className="font-bold">✓</span>{s}
+                    </span>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
