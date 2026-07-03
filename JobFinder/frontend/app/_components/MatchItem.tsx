@@ -228,11 +228,12 @@ export default function MatchItem({
                   <span>Compétences requises : {offer.skills.slice(0, 3).join(", ")}.</span>
                 </div>
               )}
-              <div className="flex gap-[9px]">
-                <span className="text-success flex-none pt-px">•</span>
-                <span>Collaborer avec les équipes techniques, produit et design.</span>
-              </div>
             </div>
+            {offer.description && (
+              <p className="mt-4 text-[12.5px] text-body leading-relaxed whitespace-pre-line">
+                {offer.description}
+              </p>
+            )}
             <div className="flex gap-2 mt-[18px] flex-wrap">
               <button
                 onClick={onApply}
