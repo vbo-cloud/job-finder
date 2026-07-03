@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import apiClient from "@/lib/api/client";
 import type { MatchOut } from "@/lib/api/types";
 import MatchList from "./MatchList";
 import { type MatchItemData } from "./MatchItem";
@@ -17,13 +18,30 @@ function parseSalaryMax(salary: string | null): number {
   return digits ? parseInt(digits, 10) : 0;
 }
 
+function loadSeenIds(cvId: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(`jf_seen_${cvId}`);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSeenId(cvId: string, ids: Set<string>) {
+  try {
+    localStorage.setItem(`jf_seen_${cvId}`, JSON.stringify([...ids]));
+  } catch { /* localStorage unavailable */ }
+}
+
+
 interface Props {
+  cvId: string;
   matches: MatchOut[];
   loading: boolean;
   error: string | null;
 }
 
-export default function CorrespondancesPanel({ matches, loading, error }: Props) {
+export default function CorrespondancesPanel({ cvId, matches, loading, error }: Props) {
   const [tab, setTab]               = useState<"Matchs" | "Review">("Matchs");
   const [query, setQuery]           = useState("");
   const [sort, setSort]             = useState<SortKey>("score");
@@ -35,9 +53,24 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
   const [saved, setSaved]           = useState(new Set<string>());
   const [applied, setApplied]       = useState(new Set<string>());
   const [rejected, setRejected]     = useState(new Set<string>());
+  const [seenIds, setSeenIds] = useState<Set<string>>(() => loadSeenIds(cvId));
+  const seenIdsRef = useRef(seenIds);
+  seenIdsRef.current = seenIds;
 
   function toggleExpand(id: string) {
-    setSelectedId((prev) => (prev === id ? null : id));
+    const opening = selectedId !== id;
+    setSelectedId(opening ? id : null);
+    if (opening && !seenIds.has(id)) {
+      setSeenIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        persistSeenId(cvId, next);
+        return next;
+      });
+      apiClient.patch(`/cv/${cvId}/matches/${id}/seen`).catch((err: unknown) => {
+        console.error("[jf] mark_match_seen failed:", err);
+      });
+    }
   }
   function toggleSaved(id: string) {
     setSaved((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -51,18 +84,22 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
     );
     if (contract !== "Tous") arr = arr.filter((m) => m.offer.contract_type === contract);
     if (minScore !== "Tous") arr = arr.filter((m) => Math.round(m.score * 100) >= +minScore);
-    arr = arr.filter((m) => m.is_new ? filters.nouvelle : filters.vue);
+    arr = arr.filter((m) => {
+      const novel = m.is_new && !seenIdsRef.current.has(m.offer.id);
+      return novel ? filters.nouvelle : filters.vue;
+    });
     return [...arr].sort((a, b) =>
       sort === "az"     ? a.offer.title.localeCompare(b.offer.title, "fr") :
       sort === "salary" ? parseSalaryMax(b.offer.salary) - parseSalaryMax(a.offer.salary) :
       b.score - a.score,
     );
     // `applied` is not a filter criterion today — add it here if "hide applied" is introduced
+    // seenIdsRef intentionally absent from deps — it's a ref, not reactive state
   }, [matches, rejected, query, contract, minScore, filters, sort]);
 
   const items: MatchItemData[] = filtered.map((m) => ({
     match:      m,
-    isNew:      m.is_new,
+    isNew:      m.is_new && !seenIds.has(m.offer.id),
     isSaved:    saved.has(m.offer.id),
     isApplied:  applied.has(m.offer.id),
     isExpanded: selectedId === m.offer.id,
@@ -154,7 +191,7 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
                   <p className="text-[10.5px] font-bold tracking-[.07em] uppercase text-muted px-2 pt-1.5 pb-2">Afficher</p>
                   {([
                     { key: "nouvelle" as const, label: "Nouvelles" },
-                    { key: "vue" as const, label: "Déjà vues" },
+                    { key: "vue" as const, label: "Vues" },
                   ]).map(({ key, label }) => (
                     <label key={key} className="flex items-center gap-[9px] px-2 py-2 rounded-[7px] text-[13px] text-body cursor-pointer hover:bg-overlay">
                       <input
