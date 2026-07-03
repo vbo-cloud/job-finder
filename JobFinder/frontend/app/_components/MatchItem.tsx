@@ -47,16 +47,22 @@ function brandHue(name: string): number {
   return h;
 }
 
+const logoBadgeCache = new Map<string, { mono: string; bg: string; fg: string }>();
+
 function logoBadge(company: string): { mono: string; bg: string; fg: string } {
-  if (company.trim()) {
-    const words = company.trim().split(/\s+/);
-    const mono = (words.length > 1
-      ? words[0][0] + words[1][0]
-      : company.slice(0, 2)
-    ).toUpperCase();
-    return { mono, bg: `hsl(${brandHue(company)} 38% 42%)`, fg: "#fff" };
+  const key = company.trim();
+  const cached = logoBadgeCache.get(key);
+  if (cached) return cached;
+  let result: { mono: string; bg: string; fg: string };
+  if (key) {
+    const words = key.split(/\s+/);
+    const mono = (words.length > 1 ? words[0][0] + words[1][0] : key.slice(0, 2)).toUpperCase();
+    result = { mono, bg: `hsl(${brandHue(key)} 38% 42%)`, fg: "#fff" };
+  } else {
+    result = { mono: "?", bg: "var(--bg-badge)", fg: "var(--text-muted)" };
   }
-  return { mono: "?", bg: "var(--bg-badge)", fg: "var(--text-muted)" };
+  logoBadgeCache.set(key, result);
+  return result;
 }
 
 export default function MatchItem({

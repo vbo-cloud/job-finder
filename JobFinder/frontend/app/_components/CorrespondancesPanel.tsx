@@ -8,7 +8,8 @@ import { type MatchItemData } from "./MatchItem";
 
 type SortKey = "score" | "salary" | "az";
 type ContractFilter = "Tous" | "CDI" | "CDD";
-type ScoreFilter = "Tous" | "60" | "70" | "80";
+const SCORE_THRESHOLDS = [60, 70, 80] as const;
+type ScoreFilter = "Tous" | `${typeof SCORE_THRESHOLDS[number]}`;
 
 function parseSalaryMax(salary: string | null): number {
   if (!salary) return 0;
@@ -128,9 +129,9 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
           </select>
           <select value={minScore} onChange={(e) => setMinScore(e.target.value as ScoreFilter)} className="border border-soft rounded-[9px] px-2.5 py-2 text-[12.5px] text-body bg-page cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default">
             <option value="Tous">Score : Tous</option>
-            <option value="60">Score ≥ 60 %</option>
-            <option value="70">Score ≥ 70 %</option>
-            <option value="80">Score ≥ 80 %</option>
+            {SCORE_THRESHOLDS.map((t) => (
+              <option key={t} value={t}>Score ≥ {t} %</option>
+            ))}
           </select>
           <div className="relative">
             <button
