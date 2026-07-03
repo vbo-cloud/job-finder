@@ -3521,3 +3521,45 @@ La page CV detail existante affichait les offres via un composant `MatchItem` sa
 - **Composant contrôlé pour `MatchItem`** : tout l'état (expanded, saved, applied, rejected, isNew) remonte dans `CorrespondancesPanel`. Évite la duplication d'état et facilite les interactions croisées (ex : rejeter ferme l'accordéon).
 - **`isNew` session-local supprimé** : l'ancien `Set<string> seen` marquait toutes les offres comme "Nouveau" au chargement. Branché sur `is_new` backend, le badge reflète correctement l'état persisté (`seen_at IS NULL`).
 - **BIBLIOTHÈQUE dans le flux flex** : l'ancienne version `absolute` survolait le panneau des correspondances. En tant qu'enfant `flex-none`, elle pousse naturellement le body en dessous sans z-index.
+
+---
+
+## PR #150 — fix: description offre, badge Nouveau et marquage vu à l'ouverture
+
+**Date :** 2026-07-03
+**Branche :** `feature/offer-seen-badge` → `dev`
+
+### Contexte
+
+Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 :
+
+1. **Description absente** : PR #148 avait ajouté le rendu de `offer.description` dans l'ancien `MatchItem`. Le redesign complet du composant dans PR #149 a écrasé ce rendu — la description revenait de l'API mais n'était plus affichée.
+2. **Badge "Nouveau" invisible en dark mode** : les tokens `--bg-new-offer` / `--text-new-offer` du thème sombre utilisaient `rgba(248,113,113,0.10)` (fond quasi transparent) et `rgb(248,113,113)` (texte seul, sans pastille visible). Le badge passait inaperçu.
+3. **Marquage "vu" uniquement côté client** : ouvrir une offre ne signalait pas la lecture en base. Au rechargement, toutes les offres ayant `seen_at IS NULL` réapparaissaient avec le badge "Nouveau".
+
+### Ce qui a été fait
+
+**`python/agents/webapp/routers/cv.py`** — nouvel endpoint `PATCH /cv/{cv_id}/matches/{offer_id}/seen` :
+- Cherche le `Match` par `(cv_id, offer_id)` avec vérification d'ownership via join sur `CV.user_id`
+- Idempotent : ne commit que si `seen_at` est `NULL`
+- 404 si le match n'existe pas ou n'appartient pas à l'utilisateur
+- Même pattern que `mark_all_seen` (logging structlog, guard `HTTPException`, guard `SQLAlchemyError`)
+
+**`python/tests/test_webapp_cv.py`** — classe `TestMarkMatchSeen` avec 3 cas : happy path unseen (commit appelé, `seen_at` non-null), already-seen (commit non appelé), not-found (404).
+
+**`frontend/lib/theme/themes/dark.ts`** — tokens corrigés vers les valeurs exactes du design handoff (`#fdeaea` / `#c8102e`). Ces couleurs restent lisibles sur fond sombre et cohérentes avec le light theme.
+
+**`frontend/app/_components/MatchItem.tsx`** — `offer.description` rendu dans le panneau accordéon (colonne "Descriptif de l'offre"), en `whitespace-pre-line`, après les bullets de compétences.
+
+**`frontend/app/_components/CorrespondancesPanel.tsx`** — reçoit `cvId: string` ; nouvel état `seenIds: Set<string>` ; `toggleExpand` appelle `PATCH /cv/{cvId}/matches/{offerId}/seen` au premier dépli et ajoute l'offre à `seenIds` immédiatement (mise à jour optimiste). `isNew` passé aux items devient `m.is_new && !seenIds.has(m.offer.id)` : le badge disparaît dès le clic, sans attendre la réponse réseau.
+
+**`frontend/app/_components/CVDetailSection.tsx`** — `cvId={selectedCvId}` propagé à `CorrespondancesPanel`.
+
+**`frontend/__tests__/MatchItem.test.tsx`** — test ajouté dans `describe("actions in accordion")` : vérifie que le texte de description est rendu quand `isExpanded: true`.
+
+### Décisions techniques
+
+- **Optimistic update plutôt qu'attendre la réponse** : l'expérience utilisateur prime — le badge doit disparaître instantanément au clic. Si l'API échoue (réseau), le badge reste absent en session mais réapparaîtra au prochain rechargement (données persistées en base). Acceptable pour ce cas d'usage.
+- **`seenIds` ne modifie pas le filtre Nouvelle/Vue** : l'offre reste dans le bucket "Nouvelle" côté filtre tant que la page n'est pas rechargée. Évite qu'une offre disparaisse de la liste sous le curseur de l'utilisateur au moment où il l'ouvre.
+- **Endpoint sur le router `/cv/` plutôt que `/matches/`** : cohérent avec `mark_all_seen` qui y est déjà défini. La route `/{cv_id}/matches/{offer_id}/seen` est claire et suit la hiérarchie ressource CV → Match.
+- **Même hex en dark et light** : `#fdeaea`/`#c8102e` proviennent directement du design handoff — une pastille rose clair sur fond sombre est plus lisible que la version quasi-transparente précédente et évite d'inventer des valeurs non validées.
