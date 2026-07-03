@@ -117,6 +117,11 @@ export default function MatchItem({ match, romeCodesDict }: Props) {
                     ))}
                   </div>
                 )}
+                {match.offer.description && (
+                  <p className="text-[10px] text-body whitespace-pre-line">
+                    {match.offer.description}
+                  </p>
+                )}
               </>
             )}
 

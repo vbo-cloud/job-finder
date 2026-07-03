@@ -35,6 +35,7 @@ export interface OfferOut {
   company: string;
   location: string;
   contract_type: string;
+  description: string;
   salary: string | null;
   rome_code: string | null;
   skills: string[];

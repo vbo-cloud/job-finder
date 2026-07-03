@@ -37,6 +37,7 @@ def _make_offer() -> MagicMock:
     offer.company = "ACME"
     offer.location = "Paris (75)"
     offer.contract_type = "CDI"
+    offer.description = "Description complète de l'offre de test."
     offer.salary = None
     offer.rome_code = "M1805"
     offer.skills = []
