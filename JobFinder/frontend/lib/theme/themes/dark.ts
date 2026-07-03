@@ -56,8 +56,8 @@ export const darkTheme: Theme = {
   /* Match / offer-card semantic */
   "--bg-match-skill":  "rgba(52, 211, 153, 0.12)",
   "--text-match-skill": "rgb(52, 211, 153)",
-  "--bg-new-offer":    "rgba(248, 113, 113, 0.10)",
-  "--text-new-offer":  "rgb(248, 113, 113)",
+  "--bg-new-offer":    "rgb(253, 234, 234)",
+  "--text-new-offer":  "rgb(200, 16, 46)",
   "--border-match":    "rgb(22, 163, 74)",
   "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
 
