@@ -48,7 +48,7 @@ function brandHue(name: string): number {
 }
 
 function logoBadge(company: string): { mono: string; bg: string; fg: string } {
-  if (company) {
+  if (company.trim()) {
     const words = company.trim().split(/\s+/);
     const mono = (words.length > 1
       ? words[0][0] + words[1][0]

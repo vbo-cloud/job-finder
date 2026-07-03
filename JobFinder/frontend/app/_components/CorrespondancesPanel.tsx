@@ -8,12 +8,12 @@ import { type MatchItemData } from "./MatchItem";
 
 type SortKey = "score" | "salary" | "az";
 type ContractFilter = "Tous" | "CDI" | "CDD";
-type ScoreFilter = "Tous" | "58" | "59" | "60";
+type ScoreFilter = "Tous" | "60" | "70" | "80";
 
 function parseSalaryMax(salary: string | null): number {
   if (!salary) return 0;
-  const m = /(\d[\d\s]+)/.exec(salary);
-  return m ? parseInt(m[1].replace(/\s/g, ""), 10) : 0;
+  const digits = salary.replace(/\D/g, "");
+  return digits ? parseInt(digits, 10) : 0;
 }
 
 interface Props {
@@ -56,7 +56,8 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
       sort === "salary" ? parseSalaryMax(b.offer.salary) - parseSalaryMax(a.offer.salary) :
       b.score - a.score,
     );
-  }, [matches, rejected, query, contract, minScore, applied, filters, sort]);
+    // `applied` is not a filter criterion today — add it here if "hide applied" is introduced
+  }, [matches, rejected, query, contract, minScore, filters, sort]);
 
   const items: MatchItemData[] = filtered.map((m) => ({
     match:      m,
@@ -127,9 +128,9 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
           </select>
           <select value={minScore} onChange={(e) => setMinScore(e.target.value as ScoreFilter)} className="border border-soft rounded-[9px] px-2.5 py-2 text-[12.5px] text-body bg-page cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default">
             <option value="Tous">Score : Tous</option>
-            <option value="58">Score ≥ 58 %</option>
-            <option value="59">Score ≥ 59 %</option>
             <option value="60">Score ≥ 60 %</option>
+            <option value="70">Score ≥ 70 %</option>
+            <option value="80">Score ≥ 80 %</option>
           </select>
           <div className="relative">
             <button
