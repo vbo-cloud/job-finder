@@ -53,6 +53,14 @@ export const darkTheme: Theme = {
   "--ring-destructive": "rgb(248, 113, 113)",
   "--ring-confirm": "rgb(34, 197, 94)",
 
+  /* Match / offer-card semantic */
+  "--bg-match-skill":  "rgba(52, 211, 153, 0.12)",
+  "--text-match-skill": "rgb(52, 211, 153)",
+  "--bg-new-offer":    "rgba(248, 113, 113, 0.10)",
+  "--text-new-offer":  "rgb(248, 113, 113)",
+  "--border-match":    "rgb(22, 163, 74)",
+  "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
+
   /* Canvas */
   "--canvas-ambient": "200, 210, 230",
   "--canvas-orbit": "170, 210, 255",

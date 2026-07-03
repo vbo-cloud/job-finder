@@ -53,6 +53,14 @@ export const lightTheme: Theme = {
   "--ring-destructive": "rgb(220, 38, 38)",
   "--ring-confirm": "rgb(22, 163, 74)",
 
+  /* Match / offer-card semantic */
+  "--bg-match-skill":  "#e6f2ec",
+  "--text-match-skill": "#12724e",
+  "--bg-new-offer":    "#fdeaea",
+  "--text-new-offer":  "#c8102e",
+  "--border-match":    "#1c7a56",
+  "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
+
   /* Canvas */
   "--canvas-ambient": "40, 60, 100",
   "--canvas-orbit": "20, 80, 200",
