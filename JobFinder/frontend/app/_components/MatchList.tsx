@@ -1,15 +1,17 @@
-import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
-import MatchItem from "./MatchItem";
+import MatchItem, { type MatchItemData } from "./MatchItem";
 
-interface Props {
-  matches: MatchOut[];
-  loading: boolean;
-  romeCodesDict: Record<string, RomeCodeEntry>;
-}
+export type { MatchItemData };
 
 export const SKELETON_COUNT = 5;
 
-export default function MatchList({ matches, loading, romeCodesDict }: Props) {
+interface Props {
+  items: MatchItemData[];
+  loading: boolean;
+  rejectedCount: number;
+  onRestoreAll: () => void;
+}
+
+export default function MatchList({ items, loading, rejectedCount, onRestoreAll }: Props) {
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
@@ -20,15 +22,29 @@ export default function MatchList({ matches, loading, romeCodesDict }: Props) {
     );
   }
 
-  if (matches.length === 0) {
-    return <p className="text-xs text-label mt-8 text-center">Aucun match trouvé</p>;
-  }
-
   return (
-    <div className="flex flex-col gap-2">
-      {matches.map((match, i) => (
-        <MatchItem key={match.offer.id ?? i} match={match} romeCodesDict={romeCodesDict} />
-      ))}
+    <div className="flex flex-col gap-[10px]">
+      {rejectedCount > 0 && (
+        <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-overlay border border-subtle rounded-[10px]">
+          <span className="text-[12.5px] text-muted">
+            {rejectedCount} offre{rejectedCount > 1 ? "s" : ""} masquée{rejectedCount > 1 ? "s" : ""}
+          </span>
+          <button
+            onClick={onRestoreAll}
+            className="text-[12.5px] font-semibold text-body underline hover:text-strong transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default rounded"
+          >
+            Réafficher
+          </button>
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <p className="text-xs text-label mt-8 text-center">Aucune offre ne correspond</p>
+      ) : (
+        items.map((item) => (
+          <MatchItem key={item.match.offer.id} {...item} />
+        ))
+      )}
     </div>
   );
 }

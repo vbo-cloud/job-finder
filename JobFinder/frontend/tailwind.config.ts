@@ -30,6 +30,8 @@ const config: Config = {
         scrim:                   "var(--bg-scrim)",
         chip:                    "var(--bg-chip)",
         "dot-active":            "var(--bg-dot-active)",
+        "match-skill":           "var(--bg-match-skill)",
+        "new-offer":             "var(--bg-new-offer)",
       },
       textColor: {
         empty:       "var(--text-empty)",
@@ -44,6 +46,9 @@ const config: Config = {
         warning:     "var(--text-warning)",
         destructive: "var(--text-destructive)",
         accent:      "var(--text-accent)",
+        "match-skill": "var(--text-match-skill)",
+        "new-offer":   "var(--text-new-offer)",
+        "on-solid":    "var(--text-on-solid)",
       },
       borderColor: {
         faint:   "var(--border-faint)",
@@ -53,6 +58,7 @@ const config: Config = {
         hover:   "var(--border-hover)",
         active:  "var(--border-active)",
         accent:  "var(--border-accent)",
+        match:   "var(--border-match)",
       },
       ringColor: {
         subtle:      "var(--border-subtle)",

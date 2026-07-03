@@ -3491,3 +3491,33 @@ Le champ `description` (texte intégral de l'annonce France Travail) était déj
 - **Pas de troncature** : l'annonce complète est affichée telle quelle. Une troncature avec "voir plus" serait plus élégante mais hors périmètre — la donnée brute est déjà utile et lisible.
 - **`whitespace-pre-line` plutôt que `whitespace-pre`** : préserve les sauts de ligne sans bloquer le retour à la ligne automatique sur petits écrans.
 - **Position après les compétences** : la description est le contenu long — la placer en dernier évite de pousser les métadonnées courtes (ROME, salaire, compétences) hors du premier écran.
+
+---
+
+## PR #149 — feat(frontend): redesign CV detail — CorrespondancesPanel, new nav and is_new
+
+**Date :** 2026-07-03
+**Branche :** `rework-cv-page` → `dev`
+
+### Contexte
+
+La page CV detail existante affichait les offres via un composant `MatchItem` sans état contrôlé, avec une navigation par flèches latérales et un header lourd (logo, nom d'utilisateur). Le design handoff demandait un panneau "Vos correspondances" complet à droite et une navigation plus légère à gauche.
+
+### Ce qui a été fait
+
+**Tokens CSS** (`lib/theme/`, `globals.css`, `tailwind.config.ts`) — 6 nouveaux custom properties : `--bg-match-skill`, `--text-match-skill`, `--bg-new-offer`, `--text-new-offer`, `--border-match`, `--text-on-solid`. Enregistrés dans les deux thèmes et en tant qu'utilitaires Tailwind.
+
+**Backend / API** (`schemas.py`, `lib/api/types.ts`) — `MatchOut` expose `is_new: bool` via `@computed_field` Pydantic calculé depuis `seen_at IS NULL` sur le modèle ORM `Match`. `seen_at` est exclu de la sérialisation JSON. Le type frontend `MatchOut` est mis à jour en conséquence.
+
+**`CorrespondancesPanel.tsx`** (nouveau composant) — possède tout l'état de filtrage et d'interaction : tabs Matchs/Review, barre de filtres (recherche texte, tri pertinence/salaire/A→Z, contrat, score minimum, popover Filtre nouvelle/vue), liste avec skeleton de chargement, bannière d'offres rejetées avec restauration globale.
+
+**`MatchItem.tsx`** — réécrit en composant entièrement contrôlé (`MatchItemData` interface). Colonne score 70px avec couleur HSL calculée et animation dorée au-delà de 90 %. Badge logo entreprise par hue déterministe depuis le nom. Accordéon avec descriptif de l'offre et colonne review agent (placeholder). `isNew` piloté par `MatchOut.is_new`.
+
+**`CVDetailSection.tsx`** — header supprimé (logo, avatar, nom utilisateur). BIBLIOTHÈQUE + flèche ⌃ animée en haut de la section (style identique à `UploadSection`), intégrée dans le flux flex pour ne pas survoler le contenu. Pill de navigation de document dans le panneau gauche, au-dessus de la miniature. Miniature CV contrainte avec `min-h-0 / max-h-full` pour être entièrement visible sans scrollbar.
+
+### Décisions techniques
+
+- **`@computed_field` avec `seen_at` exclu** : `seen_at` est nécessaire pour calculer `is_new` côté Pydantic mais ne doit pas apparaître dans la réponse JSON (redondant et potentiellement sensible). `Field(exclude=True)` + `@computed_field` est le pattern Pydantic v2 idiomatique pour ce cas.
+- **Composant contrôlé pour `MatchItem`** : tout l'état (expanded, saved, applied, rejected, isNew) remonte dans `CorrespondancesPanel`. Évite la duplication d'état et facilite les interactions croisées (ex : rejeter ferme l'accordéon).
+- **`isNew` session-local supprimé** : l'ancien `Set<string> seen` marquait toutes les offres comme "Nouveau" au chargement. Branché sur `is_new` backend, le badge reflète correctement l'état persisté (`seen_at IS NULL`).
+- **BIBLIOTHÈQUE dans le flux flex** : l'ancienne version `absolute` survolait le panneau des correspondances. En tant qu'enfant `flex-none`, elle pousse naturellement le body en dessous sans z-index.

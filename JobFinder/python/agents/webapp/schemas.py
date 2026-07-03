@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 CVStatus = Literal["pending", "processing", "done", "matched", "error"]
 
@@ -44,6 +44,12 @@ class MatchOut(BaseModel):
 
     score: float
     offer: OfferOut
+    seen_at: datetime | None = Field(default=None, exclude=True)
+
+    @computed_field
+    @property
+    def is_new(self) -> bool:
+        return self.seen_at is None
 
     model_config = ConfigDict(from_attributes=True)
 

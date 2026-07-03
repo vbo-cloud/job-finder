@@ -56,6 +56,14 @@ export type Theme = {
   "--ring-destructive": string;
   "--ring-confirm": string;
 
+  /* Match / offer-card semantic */
+  "--bg-match-skill": string;   /* background of matched-skill badges */
+  "--text-match-skill": string; /* text of matched-skill badges */
+  "--bg-new-offer": string;     /* background of "Nouveau" pill */
+  "--text-new-offer": string;   /* text of "Nouveau" pill */
+  "--border-match": string;     /* border of selected/expanded offer card */
+  "--text-on-solid": string;    /* text on solid-color buttons (bg-solid-* family) — always light */
+
   /* Canvas (OrbitAnimation — not usable as Tailwind utilities) */
   "--canvas-ambient": string;   /* RGB channels for ambient particle rgba() */
   "--canvas-orbit": string;     /* RGB channels for orbit particle rgba() */

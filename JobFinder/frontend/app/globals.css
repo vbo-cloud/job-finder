@@ -56,9 +56,26 @@
   --ring-destructive: rgb(248, 113, 113);
   --ring-confirm:     rgb(34, 197, 94);
 
+  /* Match / offer-card semantic */
+  --bg-match-skill:   rgba(52, 211, 153, 0.12);
+  --text-match-skill: rgb(52, 211, 153);
+  --bg-new-offer:     rgba(248, 113, 113, 0.10);
+  --text-new-offer:   rgb(248, 113, 113);
+  --border-match:     rgb(22, 163, 74);
+  --text-on-solid:    rgba(255, 255, 255, 0.95);
+
   /* Canvas (OrbitAnimation) */
   --canvas-ambient:   200, 210, 230;
   --canvas-orbit:     170, 210, 255;
   --canvas-icon:      #383838;
   --canvas-icon-text: 255, 255, 255;
+}
+
+@keyframes expandIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shine {
+  to { background-position: 200% 0; }
 }
