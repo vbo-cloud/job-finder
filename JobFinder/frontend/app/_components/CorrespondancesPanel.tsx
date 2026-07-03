@@ -29,7 +29,7 @@ function loadSeenIds(cvId: string): Set<string> {
 
 function persistSeenId(cvId: string, ids: Set<string>) {
   try {
-    localStorage.setItem(`jf_seen_${cvId}`, JSON.stringify([...ids]));
+    localStorage.setItem(`jf_seen_${cvId}`, JSON.stringify(Array.from(ids)));
   } catch { /* localStorage unavailable */ }
 }
 
@@ -55,7 +55,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error }: 
   const [rejected, setRejected]     = useState(new Set<string>());
   const [seenIds, setSeenIds] = useState<Set<string>>(() => loadSeenIds(cvId));
   const seenIdsRef = useRef(seenIds);
-  seenIdsRef.current = seenIds;
+  seenIdsRef.current = seenIds; // sync ref on every render — read in useMemo without declaring as dep
 
   function toggleExpand(id: string) {
     const opening = selectedId !== id;
