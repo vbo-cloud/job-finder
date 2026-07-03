@@ -22,6 +22,7 @@ function makeMatch(
       company: "ACME",
       location: "Paris (75)",
       contract_type: "CDI",
+      description: "Description complète de l'offre.",
       salary: null,
       rome_code: "M1805",
       skills: [],
@@ -123,6 +124,17 @@ describe("MatchItem", () => {
       fireEvent.click(screen.getByRole("button", { name: "Développer" }));
       fireEvent.click(screen.getByRole("button", { name: "Réduire" }));
       expect(screen.queryByText("Offre")).not.toBeInTheDocument();
+    });
+
+    it("shows description text in offre tab", () => {
+      render(
+        <MatchItem
+          match={makeMatch(0.85, { description: "Texte complet\nde l'offre." })}
+          romeCodesDict={emptyRomeCodes}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Développer" }));
+      expect(screen.getByText(/Texte complet/)).toBeInTheDocument();
     });
   });
 });

@@ -30,6 +30,7 @@ class OfferOut(BaseModel):
     company: str
     location: str
     contract_type: str
+    description: str
     salary: str | None
     rome_code: str | None
     skills: list[str] = []

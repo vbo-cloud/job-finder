@@ -15,6 +15,7 @@ function makeMatch(id: string, score = 0.8): MatchOut {
       company: "ACME",
       location: "Paris",
       contract_type: "CDI",
+      description: "",
       salary: null,
       rome_code: null,
       skills: [],
