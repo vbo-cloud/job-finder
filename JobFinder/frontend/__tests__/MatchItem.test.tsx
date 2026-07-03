@@ -1,13 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import MatchItem from "@/app/_components/MatchItem";
-import type { MatchOut, RomeCodeEntry } from "@/lib/api/types";
-
-const emptyRomeCodes: Record<string, RomeCodeEntry> = {};
-
-const romeCodesDict: Record<string, RomeCodeEntry> = {
-  M1805: { cv_ids: ["cv1"], label: "Études et développement informatique" },
-};
+import MatchItem, { type MatchItemData } from "@/app/_components/MatchItem";
+import type { MatchOut } from "@/lib/api/types";
 
 function makeMatch(
   score = 0.85,
@@ -15,6 +9,7 @@ function makeMatch(
 ): MatchOut {
   return {
     score,
+    is_new: false,
     offer: {
       id: "offer-uuid-1",
       ft_id: "FT-001",
@@ -32,98 +27,106 @@ function makeMatch(
   };
 }
 
+function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
+  return {
+    match: makeMatch(),
+    isNew: false,
+    isSaved: false,
+    isApplied: false,
+    isExpanded: false,
+    onSelect: jest.fn(),
+    onSave: jest.fn(),
+    onApply: jest.fn(),
+    onReject: jest.fn(),
+    ...overrides,
+  };
+}
+
 describe("MatchItem", () => {
   describe("score display", () => {
     it("renders score as percentage", () => {
-      render(<MatchItem match={makeMatch(0.85)} romeCodesDict={emptyRomeCodes} />);
+      render(<MatchItem {...makeProps({ match: makeMatch(0.85) })} />);
       expect(screen.getByText("85%")).toBeInTheDocument();
     });
 
-    it("applies success color for score >= 75%", () => {
-      render(<MatchItem match={makeMatch(0.80)} romeCodesDict={emptyRomeCodes} />);
-      const scoreEl = screen.getByText("80%");
-      expect(scoreEl).toHaveClass("text-success");
-    });
-
-    it("applies warning color for score >= 50% but < 75%", () => {
-      render(<MatchItem match={makeMatch(0.60)} romeCodesDict={emptyRomeCodes} />);
-      const scoreEl = screen.getByText("60%");
-      expect(scoreEl).toHaveClass("text-warning");
-    });
-
-    it("applies muted color for score < 50%", () => {
-      render(<MatchItem match={makeMatch(0.40)} romeCodesDict={emptyRomeCodes} />);
-      const scoreEl = screen.getByText("40%");
-      expect(scoreEl).toHaveClass("text-muted");
+    it("renders different score values correctly", () => {
+      render(<MatchItem {...makeProps({ match: makeMatch(0.60) })} />);
+      expect(screen.getByText("60%")).toBeInTheDocument();
     });
   });
 
-  describe("expired offer", () => {
-    it("shows 'Expirée' badge when expires_at is in the past", () => {
-      render(
-        <MatchItem
-          match={makeMatch(0.85, { expires_at: "2020-01-01T00:00:00Z" })}
-          romeCodesDict={emptyRomeCodes}
-        />
-      );
-      expect(screen.getByText("Expirée")).toBeInTheDocument();
-    });
-
-    it("does not show expired badge for future offers", () => {
-      render(
-        <MatchItem
-          match={makeMatch(0.85, { expires_at: "2099-01-01T00:00:00Z" })}
-          romeCodesDict={emptyRomeCodes}
-        />
-      );
-      expect(screen.queryByText("Expirée")).not.toBeInTheDocument();
-    });
-
-    it("renders offer title as link when not expired", () => {
-      render(<MatchItem match={makeMatch()} romeCodesDict={emptyRomeCodes} />);
+  describe("offer title", () => {
+    it("renders offer title as FT link", () => {
+      render(<MatchItem {...makeProps()} />);
       const link = screen.getByRole("link", { name: "Développeur Python" });
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute("href", expect.stringContaining("FT-001"));
     });
+  });
 
-    it("renders offer title as plain text when expired", () => {
-      render(
-        <MatchItem
-          match={makeMatch(0.85, { expires_at: "2020-01-01T00:00:00Z" })}
-          romeCodesDict={emptyRomeCodes}
-        />
-      );
-      expect(screen.queryByRole("link", { name: "Développeur Python" })).not.toBeInTheDocument();
-      expect(screen.getByText("Développeur Python")).toBeInTheDocument();
+  describe("Nouveau pill", () => {
+    it("shows Nouveau pill when isNew is true", () => {
+      render(<MatchItem {...makeProps({ isNew: true })} />);
+      expect(screen.getByText("Nouveau")).toBeInTheDocument();
+    });
+
+    it("hides Nouveau pill when isNew is false", () => {
+      render(<MatchItem {...makeProps({ isNew: false })} />);
+      expect(screen.queryByText("Nouveau")).not.toBeInTheDocument();
     });
   });
 
-  describe("expand / collapse", () => {
-    it("is collapsed by default (no tab content visible)", () => {
-      render(<MatchItem match={makeMatch()} romeCodesDict={emptyRomeCodes} />);
-      expect(screen.queryByText("Offre")).not.toBeInTheDocument();
+  describe("accordion", () => {
+    it("does not show accordion content when not expanded", () => {
+      render(<MatchItem {...makeProps({ isExpanded: false })} />);
+      expect(screen.queryByText(/Descriptif de l.offre/)).not.toBeInTheDocument();
     });
 
-    it("shows tabs after clicking expand button", () => {
-      render(<MatchItem match={makeMatch()} romeCodesDict={emptyRomeCodes} />);
-      fireEvent.click(screen.getByRole("button", { name: "Développer" }));
-      expect(screen.getByRole("button", { name: "Offre" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Analyse" })).toBeInTheDocument();
+    it("shows accordion content when expanded", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true })} />);
+      expect(screen.getByText(/Descriptif de l.offre/)).toBeInTheDocument();
+      expect(screen.getByText(/Review de l.agent/)).toBeInTheDocument();
     });
 
-    it("shows ROME label from romeCodesDict in offre tab", () => {
-      render(<MatchItem match={makeMatch()} romeCodesDict={romeCodesDict} />);
-      fireEvent.click(screen.getByRole("button", { name: "Développer" }));
-      expect(
-        screen.getByText("Études et développement informatique")
-      ).toBeInTheDocument();
+    it("calls onSelect when the card row is clicked", () => {
+      const onSelect = jest.fn();
+      render(<MatchItem {...makeProps({ onSelect })} />);
+      // company name is inside the clickable row (no stopPropagation there)
+      fireEvent.click(screen.getByText("ACME"));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("actions in accordion", () => {
+    it("shows Postuler when not applied", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true, isApplied: false })} />);
+      expect(screen.getByRole("button", { name: "Postuler" })).toBeInTheDocument();
     });
 
-    it("collapses when clicking expand button again", () => {
-      render(<MatchItem match={makeMatch()} romeCodesDict={emptyRomeCodes} />);
-      fireEvent.click(screen.getByRole("button", { name: "Développer" }));
-      fireEvent.click(screen.getByRole("button", { name: "Réduire" }));
-      expect(screen.queryByText("Offre")).not.toBeInTheDocument();
+    it("shows Candidature envoyée when applied", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true, isApplied: true })} />);
+      expect(screen.getByText("Candidature envoyée ✓")).toBeInTheDocument();
+    });
+
+    it("calls onReject when Rejeter is clicked", () => {
+      const onReject = jest.fn();
+      render(<MatchItem {...makeProps({ isExpanded: true, onReject })} />);
+      fireEvent.click(screen.getByRole("button", { name: "Rejeter" }));
+      expect(onReject).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("bookmark", () => {
+    it("calls onSave when bookmark is clicked", () => {
+      const onSave = jest.fn();
+      render(<MatchItem {...makeProps({ onSave })} />);
+      fireEvent.click(screen.getByRole("button", { name: "Sauvegarder" }));
+      expect(onSave).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows Retirer des favoris label when saved", () => {
+      render(<MatchItem {...makeProps({ isSaved: true })} />);
+      expect(screen.getByRole("button", { name: "Retirer des favoris" })).toBeInTheDocument();
     });
 
     it("shows description text in offre tab", () => {
