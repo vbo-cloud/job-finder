@@ -3462,3 +3462,32 @@ Grâce à l'auto-sélection, `selectedCvId` est toujours non-null dès que la bi
 - **Guard `selectedCvId && cvList.some(...)`** : le poll de 3 s dans `LibrarySection` produit un nouveau tableau à chaque cycle. Sans guard, l'effet remplacerait la sélection de l'utilisateur (navigation aux flèches) à chaque poll. Le guard préserve la sélection tant que le CV existe encore dans la liste.
 - **Pas de scroll au montage** : l'ancien `useEffect([selectedCvId])` scrollait à chaque changement, y compris lors de l'auto-sélection initiale. Le nouveau design dissocie "sélection silencieuse" (auto-select) et "scroll explicite" (clic carte). L'utilisateur reste sur `UploadSection` au chargement.
 - **`document.getElementById("library")`** : `LibrarySection` expose déjà `id="library"`. Évite d'ajouter un `forwardRef` au composant pour un simple scroll de retour.
+
+---
+
+## PR #148 — feat: affichage de la description complète dans le détail d'une offre
+
+**Date :** 2026-07-03
+**Branche :** `feature/offer-description-display` → `dev`
+
+### Contexte
+
+Le champ `description` (texte intégral de l'annonce France Travail) était déjà stocké en base depuis le fetch initial. Il n'était cependant jamais exposé au frontend : absent du schéma Pydantic `OfferOut`, de l'interface TypeScript correspondante, et du composant `MatchItem`. L'onglet "Offre" affichait uniquement le badge ROME, le salaire et les compétences — très peu de contenu visible au dépli d'une offre.
+
+### Ce qui a été fait
+
+**`python/agents/webapp/schemas.py`** : ajout de `description: str` dans `OfferOut`, positionné après `contract_type` (cohérent avec l'ordre de `models.py`). Aucune modification de router nécessaire — `model_validate` sérialise le champ automatiquement via `from_attributes=True`.
+
+**`frontend/lib/api/types.ts`** : ajout de `description: string;` dans l'interface `OfferOut` à la même position relative.
+
+**`frontend/app/_components/MatchItem.tsx`** : dans le bloc `activeTab === "offre"`, ajout d'un `<p>` avec `whitespace-pre-line` après les chips de compétences. La classe `whitespace-pre-line` est requise car le texte source contient des `\n` réels — sans elle, le contenu s'affiche en un seul bloc illisible.
+
+**`python/tests/test_webapp_matches.py`** : `_make_offer()` reçoit `offer.description = "Description complète de l'offre de test."` pour éviter un `ValidationError` Pydantic sur le mock.
+
+**`frontend/__tests__/MatchItem.test.tsx`** : `description` ajouté aux valeurs par défaut de `makeMatch()` ; nouveau test dans `describe("expand / collapse")` qui vérifie que le texte de description est rendu dans l'onglet "Offre" après dépli.
+
+### Décisions techniques
+
+- **Pas de troncature** : l'annonce complète est affichée telle quelle. Une troncature avec "voir plus" serait plus élégante mais hors périmètre — la donnée brute est déjà utile et lisible.
+- **`whitespace-pre-line` plutôt que `whitespace-pre`** : préserve les sauts de ligne sans bloquer le retour à la ligne automatique sur petits écrans.
+- **Position après les compétences** : la description est le contenu long — la placer en dernier évite de pousser les métadonnées courtes (ROME, salaire, compétences) hors du premier écran.
