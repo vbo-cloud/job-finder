@@ -3521,3 +3521,50 @@ La page CV detail existante affichait les offres via un composant `MatchItem` sa
 - **Composant contrôlé pour `MatchItem`** : tout l'état (expanded, saved, applied, rejected, isNew) remonte dans `CorrespondancesPanel`. Évite la duplication d'état et facilite les interactions croisées (ex : rejeter ferme l'accordéon).
 - **`isNew` session-local supprimé** : l'ancien `Set<string> seen` marquait toutes les offres comme "Nouveau" au chargement. Branché sur `is_new` backend, le badge reflète correctement l'état persisté (`seen_at IS NULL`).
 - **BIBLIOTHÈQUE dans le flux flex** : l'ancienne version `absolute` survolait le panneau des correspondances. En tant qu'enfant `flex-none`, elle pousse naturellement le body en dessous sans z-index.
+
+---
+
+## PR #151 — fix: description offre, badge Nouveau, marquage vu et filtre Nouvelles/Vues
+
+**Date :** 2026-07-03
+**Branche :** `feature/offer-seen-badge` → `dev`
+
+### Contexte
+
+Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 :
+
+1. **Description absente** : PR #148 avait ajouté le rendu de `offer.description` dans l'ancien `MatchItem`. Le redesign complet du composant dans PR #149 a écrasé ce rendu — la description revenait de l'API mais n'était plus affichée.
+2. **Badge "Nouveau" invisible en dark mode** : les tokens `--bg-new-offer` / `--text-new-offer` du thème sombre utilisaient `rgba(248,113,113,0.10)` (fond quasi transparent) et `rgb(248,113,113)` (texte seul, sans pastille visible). Le badge passait inaperçu.
+3. **Marquage "vu" non persisté** : ouvrir une offre ne signalait pas la lecture en base. Au rechargement, toutes les offres avec `seen_at IS NULL` réapparaissaient avec le badge "Nouveau". Cause identifiée : le nouvel endpoint `PATCH /cv/{cv_id}/matches/{offer_id}/seen` n'était pas encore déployé sur l'Azure Container App (503), et les erreurs étaient silencieusement avalées.
+
+### Ce qui a été fait
+
+**`python/agents/webapp/routers/cv.py`** — nouvel endpoint `PATCH /cv/{cv_id}/matches/{offer_id}/seen` :
+- Cherche le `Match` par `(cv_id, offer_id)` avec vérification d'ownership via join sur `CV.user_id`
+- Idempotent : ne commit que si `seen_at` est `NULL`
+- 404 si le match n'existe pas ou n'appartient pas à l'utilisateur
+- Même pattern que `mark_all_seen` (logging structlog, guard `HTTPException`, guard `SQLAlchemyError`)
+
+**`python/tests/test_webapp_cv.py`** — classe `TestMarkMatchSeen` avec 3 cas : happy path unseen (commit appelé, `seen_at` non-null), already-seen (commit non appelé), not-found (404).
+
+**`frontend/app/globals.css`** + **`dark.ts`** + **`light.ts`** — tokens `--bg-new-offer` et `--text-new-offer` corrigés vers les valeurs exactes du design handoff : `rgb(253, 234, 234)` / `rgb(200, 16, 46)`. Les trois fichiers synchronisés en `rgb()` pour cohérence.
+
+**`frontend/app/_components/MatchItem.tsx`** — `offer.description` rendu dans le panneau accordéon en `whitespace-pre-line` après les bullets de compétences. Badge `isNew` affiché dans l'en-tête de carte.
+
+**`frontend/__tests__/MatchItem.test.tsx`** — test vérifiant que la description est rendue quand `isExpanded: true`.
+
+**`frontend/app/_components/CorrespondancesPanel.tsx`** :
+- Reçoit `cvId: string` ; état `seenIds: Set<string>` initialisé depuis `localStorage` (`jf_seen_<cvId>`)
+- `toggleExpand` ajoute l'offre à `seenIds` (optimiste) + persiste en `localStorage` + appelle `PATCH .../seen` en fire-and-forget (erreur loggée en console, non bloquante)
+- `isNew` passé aux items : `m.is_new && !seenIds.has(m.offer.id)` — badge disparaît dès le clic, sans attendre la réponse réseau
+- **Filtre Nouvelles/Vues** : `seenIdsRef = useRef(seenIds)` mis à jour à chaque render (`ref.current = seenIds`). Le `useMemo` lit `seenIdsRef.current` sans l'avoir dans ses deps — la ref est exclue de `exhaustive-deps`, aucun `eslint-disable` nécessaire. Résultat : ouvrir une carte ne déclenche pas de recalcul du filtre ; modifier un vrai contrôle de filtre (query, tri, contrat, score, cases Nouvelles/Vues) recalcule avec les `seenIds` à jour
+- Filtre renommé "Déjà vues" → "Vues"
+
+**`frontend/app/_components/CVDetailSection.tsx`** — `cvId={selectedCvId}` propagé à `CorrespondancesPanel` ; `key={selectedCvId}` ajouté pour forcer un remontage lors du changement de CV (charge la bonne tranche `localStorage` et réinitialise tout l'état local).
+
+### Décisions techniques
+
+- **localStorage comme fallback au backend** : le PATCH retournait 503 (endpoint non déployé sur l'Azure Container App — feature branch pas encore mergée). Plutôt que d'attendre le déploiement, `seenIds` est persisté dans `localStorage` keyed par CV. Quand le backend sera disponible, les deux mécanismes coexistent : `is_new=false` (backend) OU `seenIds.has(id)` (localStorage) suppriment le badge.
+- **Pattern "latest ref" plutôt que snapshot** : une première implémentation utilisait un état `seenIdsSnapshot` mis à jour via un helper `withSnapshot()` sur chaque handler de filtre — fonctionnel mais dupliquait la donnée et nécessitait de câbler chaque nouveau filtre. Remplacé par `useRef` inliné : la ref reflète `seenIds` sans condition à chaque render, le `useMemo` la lit sans la déclarer dans ses deps, ESLint accepte sans désactivation.
+- **`key={selectedCvId}` sur `CorrespondancesPanel`** : garantit que chaque CV démarre avec un état propre (seenIds, filtre, carte ouverte). Sans la key, React réutilise l'instance et les états d'un CV précédent restent visibles le temps que les données se rechargent.
+- **Endpoint sur le router `/cv/`** : cohérent avec `mark_all_seen` qui y est déjà défini. La route `/{cv_id}/matches/{offer_id}/seen` suit la hiérarchie ressource CV → Match.
