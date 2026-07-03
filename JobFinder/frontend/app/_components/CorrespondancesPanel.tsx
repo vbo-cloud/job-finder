@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import apiClient from "@/lib/api/client";
 import type { MatchOut } from "@/lib/api/types";
 import MatchList from "./MatchList";
 import { type MatchItemData } from "./MatchItem";
@@ -18,12 +19,13 @@ function parseSalaryMax(salary: string | null): number {
 }
 
 interface Props {
+  cvId: string;
   matches: MatchOut[];
   loading: boolean;
   error: string | null;
 }
 
-export default function CorrespondancesPanel({ matches, loading, error }: Props) {
+export default function CorrespondancesPanel({ cvId, matches, loading, error }: Props) {
   const [tab, setTab]               = useState<"Matchs" | "Review">("Matchs");
   const [query, setQuery]           = useState("");
   const [sort, setSort]             = useState<SortKey>("score");
@@ -35,9 +37,15 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
   const [saved, setSaved]           = useState(new Set<string>());
   const [applied, setApplied]       = useState(new Set<string>());
   const [rejected, setRejected]     = useState(new Set<string>());
+  const [seenIds, setSeenIds]       = useState(new Set<string>());
 
   function toggleExpand(id: string) {
-    setSelectedId((prev) => (prev === id ? null : id));
+    const opening = selectedId !== id;
+    setSelectedId(opening ? id : null);
+    if (opening && !seenIds.has(id)) {
+      setSeenIds((prev) => { const next = new Set(prev); next.add(id); return next; });
+      apiClient.patch(`/cv/${cvId}/matches/${id}/seen`).catch(() => {});
+    }
   }
   function toggleSaved(id: string) {
     setSaved((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -62,7 +70,7 @@ export default function CorrespondancesPanel({ matches, loading, error }: Props)
 
   const items: MatchItemData[] = filtered.map((m) => ({
     match:      m,
-    isNew:      m.is_new,
+    isNew:      m.is_new && !seenIds.has(m.offer.id),
     isSaved:    saved.has(m.offer.id),
     isApplied:  applied.has(m.offer.id),
     isExpanded: selectedId === m.offer.id,
