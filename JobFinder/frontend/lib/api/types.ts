@@ -45,6 +45,7 @@ export interface OfferOut {
 export interface MatchOut {
   score: number;
   offer: OfferOut;
+  is_new: boolean;
 }
 
 export interface CVMatchesOut {
