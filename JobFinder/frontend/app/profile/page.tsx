@@ -1,6 +1,7 @@
 "use client";
 
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -8,6 +9,12 @@ import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
+
+// Leaflet touches window/document at import time — client-only.
+const CommuneZonePicker = dynamic(() => import("./_components/CommuneZonePicker"), {
+  ssr: false,
+  loading: () => <div className="h-96 w-full animate-pulse rounded bg-card" />,
+});
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
@@ -17,7 +24,7 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
-  const [location, setLocation] = useState("");
+  const [communeCodes, setCommuneCodes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -29,7 +36,7 @@ export default function ProfilePage() {
     apiClient
       .get<ProfileData>("/profile")
       .then((res) => {
-        setLocation(res.data.location ?? "");
+        setCommuneCodes(res.data.commune_codes ?? []);
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } }).response?.status;
@@ -45,7 +52,7 @@ export default function ProfilePage() {
     setFeedback(null);
     try {
       await apiClient.put("/profile", {
-        location: location.trim() || null,
+        commune_codes: communeCodes,
       });
       setFeedback({ type: "success", message: "Profil enregistré." });
     } catch {
@@ -88,7 +95,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="mx-auto max-w-xl px-6 py-12">
+    <main className="mx-auto max-w-3xl px-6 py-12">
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-strong">Mon profil</h1>
         <Link href="/" className="text-sm text-accent hover:underline">
@@ -99,15 +106,9 @@ export default function ProfilePage() {
       <div className="flex flex-col gap-6">
         <div>
           <label className="mb-1 block text-sm font-medium text-primary">
-            Localisation
+            Zone de recherche
           </label>
-          <input
-            type="text"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="ex. Paris, Télétravail…"
-            className="w-full rounded border border-default bg-card px-3 py-2 text-sm text-strong placeholder:text-hint focus:outline-none focus:ring-2 focus:ring-primary"
-          />
+          <CommuneZonePicker value={communeCodes} onChange={setCommuneCodes} />
         </div>
 
         {feedback && (

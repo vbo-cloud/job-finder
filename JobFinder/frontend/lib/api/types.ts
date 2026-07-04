@@ -23,7 +23,7 @@ export interface RomeCodeEntry {
 export interface ProfileData {
   user_id: string;
   rome_codes: Record<string, RomeCodeEntry>;
-  location: string | null;
+  commune_codes: string[];
 }
 
 export interface OfferOut {
