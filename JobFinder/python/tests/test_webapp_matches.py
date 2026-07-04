@@ -164,6 +164,23 @@ class TestGetMatches:
         stmt = str(mock_session.execute.call_args_list[1].args[0])
         assert "offers.commune" not in stmt
 
+    def test_department_token_filters_by_code_prefix(self, test_client, mock_session):
+        profile = _make_profile(commune_codes=["dept:74", "75101"])
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": []}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        # "dept:74" compiles to a LIKE prefix condition, plain codes to IN —
+        # both OR-ed inside the same geographic filter.
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune IN" in stmt
+        assert "offers.commune LIKE" in stmt
+        assert " OR " in stmt
+
     def test_no_commune_filter_when_no_profile(self, test_client, mock_session):
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": None}),
