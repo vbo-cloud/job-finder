@@ -29,9 +29,7 @@ def _make_profile() -> MagicMock:
     profile = MagicMock()
     profile.user_id = TEST_USER_ID
     profile.rome_codes = {}
-    profile.job_categories = ["informatique"]
     profile.location = "Paris"
-    profile.contract_types = ["CDI"]
     return profile
 
 
@@ -88,16 +86,12 @@ class TestGetProfile:
 
 class TestPutProfile:
     _PUT_BODY = {
-        "job_categories": ["dev"],
         "location": "Lyon",
-        "contract_types": ["CDI", "CDD"],
     }
 
     def test_creates_or_updates_profile_and_returns_it(self, test_client, mock_session):
         profile = _make_profile()
-        profile.job_categories = self._PUT_BODY["job_categories"]
         profile.location = self._PUT_BODY["location"]
-        profile.contract_types = self._PUT_BODY["contract_types"]
         # upsert execute + select scalar_one
         mock_session.execute.return_value.scalar_one.return_value = profile
 
@@ -114,8 +108,3 @@ class TestPutProfile:
         resp = test_client.put("/profile", json=self._PUT_BODY)
 
         assert resp.status_code == 500
-
-    def test_returns_422_on_missing_required_field(self, test_client, mock_session):
-        resp = test_client.put("/profile", json={"location": "Paris"})
-
-        assert resp.status_code == 422
