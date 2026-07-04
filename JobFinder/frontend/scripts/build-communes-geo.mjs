@@ -1,17 +1,16 @@
 /**
  * Build the per-department commune contour files used by CommuneZonePicker.
  *
- * Sources (licence ouverte / Etalab):
- *   - Communes:  contours-administratifs 2024, simplification 1000m
- *   - Arrondissements municipaux (Paris/Lyon/Marseille): geo.api.gouv.fr
- *
- * Paris, Lyon and Marseille are replaced by their municipal arrondissements
- * because France Travail offers carry arrondissement-level INSEE codes
- * (e.g. 75101), never the parent commune code (75056).
+ * Source (licence ouverte / Etalab): contours-administratifs 2024,
+ * simplification 1000m. The dataset already includes the municipal
+ * arrondissements of Paris/Lyon/Marseille — only the three parent communes
+ * are dropped, because France Travail offers carry arrondissement-level
+ * INSEE codes (e.g. 75101), never the parent commune code (75056).
  *
  * Output:
  *   public/geo/communes/<dept>.geojson  — one FeatureCollection per department
  *   public/geo/communes/index.json     — department code -> [W, S, E, N] bbox
+ *   public/geo/departements.geojson    — department contours (stylised basemap)
  *
  * Usage: node scripts/build-communes-geo.mjs
  */
@@ -21,10 +20,10 @@ import path from "node:path";
 
 const COMMUNES_URL =
   "https://etalab-datasets.geo.data.gouv.fr/contours-administratifs/2024/geojson/communes-1000m.geojson";
-const ARRONDISSEMENTS_URL =
-  "https://geo.api.gouv.fr/communes?type=arrondissement-municipal&format=geojson&geometry=contour";
+const DEPARTEMENTS_URL =
+  "https://etalab-datasets.geo.data.gouv.fr/contours-administratifs/2024/geojson/departements-1000m.geojson";
 
-// Parent communes replaced by their municipal arrondissements.
+// Parent communes whose municipal arrondissements are already in the dataset.
 const PLM_PARENT_CODES = new Set(["75056", "69123", "13055"]);
 
 const OUT_DIR = path.join(import.meta.dirname, "..", "public", "geo", "communes");
@@ -50,33 +49,42 @@ function extendBbox(bbox, coords) {
 }
 
 async function main() {
-  const [communes, arrondissements] = await Promise.all([
+  const [communes, departements] = await Promise.all([
     fetchGeoJson(COMMUNES_URL),
-    fetchGeoJson(ARRONDISSEMENTS_URL),
+    fetchGeoJson(DEPARTEMENTS_URL),
   ]);
 
-  const features = [
-    ...communes.features
-      .filter((f) => !PLM_PARENT_CODES.has(f.properties.code))
-      .map((f) => ({
+  await mkdir(path.join(OUT_DIR, ".."), { recursive: true });
+  await writeFile(
+    path.join(OUT_DIR, "..", "departements.geojson"),
+    JSON.stringify({
+      type: "FeatureCollection",
+      features: departements.features.map((f) => ({
         type: "Feature",
-        properties: {
-          code: f.properties.code,
-          nom: f.properties.nom,
-          dept: f.properties.departement,
-        },
+        properties: { code: f.properties.code, nom: f.properties.nom },
         geometry: f.geometry,
       })),
-    ...arrondissements.features.map((f) => ({
+    }),
+  );
+  console.log(`departements: ${departements.features.length} features`);
+
+  const seenCodes = new Set();
+  const features = communes.features
+    .filter((f) => !PLM_PARENT_CODES.has(f.properties.code))
+    .filter((f) => {
+      if (seenCodes.has(f.properties.code)) return false;
+      seenCodes.add(f.properties.code);
+      return true;
+    })
+    .map((f) => ({
       type: "Feature",
       properties: {
         code: f.properties.code,
         nom: f.properties.nom,
-        dept: f.properties.codeDepartement,
+        dept: f.properties.departement,
       },
       geometry: f.geometry,
-    })),
-  ];
+    }));
 
   const byDept = new Map();
   for (const f of features) {
