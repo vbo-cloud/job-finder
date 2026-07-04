@@ -7,7 +7,8 @@ import { ChevronRight, Redo2, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { MapContainer } from "react-leaflet";
 
-import CommunePaintLayer, { type SelectableCommune } from "./CommunePaintLayer";
+import CommunePaintLayer from "./CommunePaintLayer";
+import { compressSelection, expandSelection, type SelectableCommune } from "./communeGeo";
 
 interface CommuneZonePickerProps {
   value: string[];
@@ -37,9 +38,12 @@ function deptSortKey(dept: string): number {
 /**
  * Stylised France map (no tiles — department contours on the page background)
  * on which the user paints their job search zone commune by commune with a
- * circular brush. Selected INSEE codes are controlled by the parent through
- * value/onChange; undo/redo history is kept per brush stroke. The selection
- * is summarised live below the map, grouped by department.
+ * circular brush. The controlled value is the storage form: INSEE codes
+ * plus "dept:xx" tokens for fully-selected departments (kept small for the
+ * profile API); painting works on the expanded code list. An empty value
+ * means no geographic restriction — the map then shows a national outline.
+ * Undo/redo history is kept per brush stroke, and the selection is
+ * summarised live below the map, grouped by department.
  */
 export default function CommuneZonePicker({ value, onChange }: CommuneZonePickerProps) {
   const [past, setPast] = useState<string[][]>([]);
@@ -71,17 +75,35 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     [communes],
   );
 
+  const codesByDept = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const c of communes ?? []) {
+      const group = map.get(c.dept);
+      if (group) group.push(c.code);
+      else map.set(c.dept, [c.code]);
+    }
+    return map;
+  }, [communes]);
+
   const deptTotals = useMemo(() => {
     const totals = new Map<string, number>();
-    for (const c of communes ?? []) totals.set(c.dept, (totals.get(c.dept) ?? 0) + 1);
+    codesByDept.forEach((codes, dept) => totals.set(dept, codes.length));
     return totals;
-  }, [communes]);
+  }, [codesByDept]);
+
+  // The stored value may hold "dept:xx" tokens — the map and the summary
+  // always work on the expanded code list. Tokens of departments not loaded
+  // yet stay unresolved and are re-attached on the next change.
+  const expanded = useMemo(() => expandSelection(value, codesByDept), [value, codesByDept]);
+
+  const handlePaintChange = (codes: string[]) =>
+    onChange([...expanded.unresolved, ...compressSelection(codes, communeByCode, deptTotals)]);
 
   // Live selection summary: departments in numeric order; the commune lists
   // are only sorted (and rendered) for the departments the user unfolds.
   const selectedByDept = useMemo(() => {
     const groups = new Map<string, SelectableCommune[]>();
-    for (const code of value) {
+    for (const code of expanded.codes) {
       const commune = communeByCode.get(code);
       if (!commune) continue;
       const group = groups.get(commune.dept);
@@ -91,7 +113,7 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     return Array.from(groups.entries()).sort(
       (a, b) => deptSortKey(a[0]) - deptSortKey(b[0]) || a[0].localeCompare(b[0]),
     );
-  }, [value, communeByCode]);
+  }, [expanded, communeByCode]);
 
   const toggleDept = (dept: string) =>
     setOpenDepts((prev) => {
@@ -117,12 +139,6 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     onChange(next);
   };
 
-  const selectAll = () => {
-    if (!communes) return;
-    snapshot();
-    onChange(communes.map((c) => c.code));
-  };
-
   const reset = () => {
     snapshot();
     onChange([]);
@@ -136,19 +152,11 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={selectAll}
-          disabled={communes === null}
-          className={toolButtonClass}
-        >
-          Tout sélectionner
-        </button>
-        <button
-          type="button"
           onClick={reset}
           disabled={value.length === 0}
           className={toolButtonClass}
         >
-          Réinitialiser la zone
+          Réinitialiser
         </button>
         <button
           type="button"
@@ -170,8 +178,8 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         </button>
         <span className="ml-auto text-sm text-muted">
           {value.length === 0
-            ? "Aucune commune sélectionnée"
-            : `${value.length} commune${value.length > 1 ? "s" : ""} sélectionnée${value.length > 1 ? "s" : ""}`}
+            ? "Toute la France — aucune restriction"
+            : `${expanded.codes.length} commune${expanded.codes.length > 1 ? "s" : ""} sélectionnée${expanded.codes.length > 1 ? "s" : ""}`}
         </span>
       </div>
 
@@ -190,8 +198,8 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         className="h-[50rem] w-full"
       >
         <CommunePaintLayer
-          value={value}
-          onChange={onChange}
+          value={expanded.codes}
+          onChange={handlePaintChange}
           onStrokeStart={snapshot}
           onCommunesLoaded={handleCommunesLoaded}
         />
@@ -225,7 +233,7 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
                 {open && (
                   <div className="flex flex-wrap gap-1.5 px-3 pb-3 pl-9">
                     {[...list]
-                      .sort((a, b) => a.nom.localeCompare(b.nom, "fr"))
+                      .sort((a, b) => a.nom.localeCompare(b.nom, "fr", { numeric: true }))
                       .map((commune) => (
                         <span
                           key={commune.code}

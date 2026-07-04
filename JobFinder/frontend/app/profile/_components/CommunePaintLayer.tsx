@@ -8,6 +8,7 @@ import { useMap } from "react-leaflet";
 import { CITY_LABELS } from "./cityLabels";
 import {
   bboxIntersects,
+  buildFranceOutline,
   communeIntersectsCircle,
   loadDepartementContours,
   loadDeptCommunes,
@@ -15,14 +16,8 @@ import {
   type Bbox,
   type CommuneFeature,
   type DeptIndexEntry,
+  type SelectableCommune,
 } from "./communeGeo";
-
-/** Commune identity forwarded to the parent for the selection summary. */
-export interface SelectableCommune {
-  code: string;
-  nom: string;
-  dept: string;
-}
 
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
@@ -172,6 +167,7 @@ export default function CommunePaintLayer({
   const selectionGroupRef = useRef<L.GeoJSON | null>(null);
   const selectionLayersRef = useRef(new Map<string, L.Layer>());
   const rendererRef = useRef<L.Renderer | null>(null);
+  const franceOutlineRef = useRef<L.Polyline | null>(null);
 
   const selectedRef = useRef(new Set(value));
   selectedRef.current = new Set(value);
@@ -233,6 +229,24 @@ export default function CommunePaintLayer({
           }),
         }).addTo(map);
         baseLayers.push(layer);
+
+        // National outline shown while the selection is empty — empty zone
+        // means "no geographic restriction", i.e. the whole of France.
+        const outline = L.polyline(
+          buildFranceOutline(departements).map((line) =>
+            line.map(([lng, lat]) => [lat, lng] as [number, number]),
+          ),
+          {
+            pane: "franceBase",
+            renderer: baseRenderer,
+            color: themeVar("--border-accent"),
+            weight: 2.5,
+            interactive: false,
+          },
+        );
+        franceOutlineRef.current = outline;
+        if (selectedRef.current.size === 0) outline.addTo(map);
+        baseLayers.push(outline);
       })
       .catch((err: unknown) =>
         console.error("[CommunePaintLayer] loading departements failed:", err),
@@ -442,8 +456,18 @@ export default function CommunePaintLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map]);
 
-  // Reflect the controlled selection on the always-visible selection layer.
+  // Reflect the controlled selection on the always-visible selection layer,
+  // and swap the national outline in/out ("empty zone = whole country").
   useEffect(() => {
+    const outline = franceOutlineRef.current;
+    if (outline) {
+      if (value.length === 0) {
+        if (!map.hasLayer(outline)) outline.addTo(map);
+      } else if (map.hasLayer(outline)) {
+        outline.remove();
+      }
+    }
+
     const selected = new Set(value);
     const toRemove: string[] = [];
     selectionLayersRef.current.forEach((_, code) => {
