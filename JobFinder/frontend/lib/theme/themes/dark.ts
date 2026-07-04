@@ -66,4 +66,7 @@ export const darkTheme: Theme = {
   "--canvas-orbit": "170, 210, 255",
   "--canvas-icon": "#383838",
   "--canvas-icon-text": "255, 255, 255",
+
+  /* Map */
+  "--map-tiles": "dark_all",
 };

@@ -69,4 +69,7 @@ export type Theme = {
   "--canvas-orbit": string;     /* RGB channels for orbit particle rgba() */
   "--canvas-icon": string;      /* Solid color for the document icon body */
   "--canvas-icon-text": string; /* RGB channels for "CV" label and "+" cross */
+
+  /* Map (CommuneZonePicker — CARTO basemap style, read via getComputedStyle) */
+  "--map-tiles": string;        /* "dark_all" | "light_all" */
 };
