@@ -459,3 +459,19 @@ Script qui récupère les logs des dernières 24h depuis Application Insights
 et les envoie à Claude pour détecter des anomalies, patterns d'erreur récurrents,
 ou dégradations de performance. Utile pour le monitoring et démontre l'usage
 de l'IA au-delà de la génération de code.
+
+---
+
+## Carte des communes (feature/profile-geo-search) — suites identifiées en review
+
+### [optional] Support tactile du pinceau de communes
+`CommunePaintLayer` n'écoute que les événements souris (`mousedown`/`mousemove`/`mouseup`) —
+la carte est inutilisable sur mobile/tablette. Migrer vers les Pointer Events
+(`pointerdown`/`pointermove`/`pointerup` + `touch-action: none`) pour couvrir souris,
+stylet et tactile avec un seul chemin de code.
+
+### [optional] Sortir les GeoJSON du dépôt Git
+`public/geo/` pèse ~38 Mo (dont 29 Mo de contours HD) versionnés dans Git — le clone
+s'alourdit à chaque régénération du dataset. Pistes : Git LFS, ou hébergement sur le
+Storage Account existant (CDN) avec téléchargement au build (`scripts/build-communes-geo.mjs`
+tourne déjà en une commande ; risque : disponibilité des sources Etalab au moment du build).
