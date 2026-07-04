@@ -96,8 +96,11 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
   // yet stay unresolved and are re-attached on the next change.
   const expanded = useMemo(() => expandSelection(value, codesByDept), [value, codesByDept]);
 
-  const handlePaintChange = (codes: string[]) =>
-    onChange([...expanded.unresolved, ...compressSelection(codes, communeByCode, deptTotals)]);
+  const handlePaintChange = useCallback(
+    (codes: string[]) =>
+      onChange([...expanded.unresolved, ...compressSelection(codes, communeByCode, deptTotals)]),
+    [onChange, expanded, communeByCode, deptTotals],
+  );
 
   // Live selection summary: departments in numeric order; the commune lists
   // are only sorted (and rendered) for the departments the user unfolds.
@@ -115,34 +118,37 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     );
   }, [expanded, communeByCode]);
 
-  const toggleDept = (dept: string) =>
-    setOpenDepts((prev) => {
-      const next = new Set(prev);
-      if (next.has(dept)) next.delete(dept);
-      else next.add(dept);
-      return next;
-    });
+  const toggleDept = useCallback(
+    (dept: string) =>
+      setOpenDepts((prev) => {
+        const next = new Set(prev);
+        if (next.has(dept)) next.delete(dept);
+        else next.add(dept);
+        return next;
+      }),
+    [],
+  );
 
-  const undo = () => {
+  const undo = useCallback(() => {
     if (past.length === 0) return;
     const previous = past[past.length - 1];
     setPast(past.slice(0, -1));
     setFuture([value, ...future].slice(0, HISTORY_LIMIT));
     onChange(previous);
-  };
+  }, [past, future, value, onChange]);
 
-  const redo = () => {
+  const redo = useCallback(() => {
     if (future.length === 0) return;
     const next = future[0];
     setFuture(future.slice(1));
     setPast([...past.slice(-(HISTORY_LIMIT - 1)), value]);
     onChange(next);
-  };
+  }, [past, future, value, onChange]);
 
-  const reset = () => {
+  const reset = useCallback(() => {
     snapshot();
     onChange([]);
-  };
+  }, [snapshot, onChange]);
 
   const toolButtonClass =
     "rounded bg-solid-secondary px-3 py-1.5 text-sm text-body hover:bg-solid-secondary-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";

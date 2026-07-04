@@ -363,7 +363,14 @@ export default function CommunePaintLayer({
         }
       });
     };
-    map.on("moveend", syncDetailLayers);
+    // Debounced: fast successive pans/zooms only pay one full detail pass
+    // (contours + label collision over every commune in the viewport).
+    let detailTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleDetailSync = () => {
+      clearTimeout(detailTimer);
+      detailTimer = setTimeout(syncDetailLayers, 50);
+    };
+    map.on("moveend", scheduleDetailSync);
 
     // Once zoomed in, swap each visible department for its 100m-simplified
     // geometry (fetched once) so contours and selection match the zoom level —
@@ -462,8 +469,9 @@ export default function CommunePaintLayer({
     return () => {
       cancelled = true;
       themeObserver.disconnect();
+      clearTimeout(detailTimer);
       map.off("zoomend", syncCityLabels);
-      map.off("moveend", syncDetailLayers);
+      map.off("moveend", scheduleDetailSync);
       contoursLayer?.remove();
       communeLabelMarkers.forEach((marker) => marker.remove());
       communeLabelMarkers.clear();
@@ -525,12 +533,19 @@ export default function CommunePaintLayer({
       brush.style.transform = `translate(${x - BRUSH_RADIUS_PX}px, ${y - BRUSH_RADIUS_PX}px)`;
     };
 
+    // The zoom-dependent factor is cached per zoom level — stamp runs on
+    // every mousemove of a stroke, only the latitude term varies.
+    let equatorMetersPerPixel = { zoom: NaN, value: 0 };
     const stamp = (e: MouseEvent, erase: boolean) => {
       const latlng = map.mouseEventToLatLng(e);
-      const metersPerPixel =
-        (EARTH_CIRCUMFERENCE_M * Math.abs(Math.cos((latlng.lat * Math.PI) / 180))) /
-        Math.pow(2, map.getZoom() + 8);
-      const radiusM = BRUSH_RADIUS_PX * metersPerPixel;
+      const zoom = map.getZoom();
+      if (equatorMetersPerPixel.zoom !== zoom) {
+        equatorMetersPerPixel = { zoom, value: EARTH_CIRCUMFERENCE_M / Math.pow(2, zoom + 8) };
+      }
+      const radiusM =
+        BRUSH_RADIUS_PX *
+        equatorMetersPerPixel.value *
+        Math.abs(Math.cos((latlng.lat * Math.PI) / 180));
 
       const next = new Set(selectedRef.current);
       let changed = false;
