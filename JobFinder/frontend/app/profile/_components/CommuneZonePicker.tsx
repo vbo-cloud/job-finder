@@ -2,10 +2,8 @@
 
 import "leaflet/dist/leaflet.css";
 
-import { useState } from "react";
+import { useMemo } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
-
-import { cn } from "@/lib/utils";
 
 import CommunePaintLayer from "./CommunePaintLayer";
 
@@ -18,33 +16,22 @@ const FRANCE_CENTER: [number, number] = [46.6, 2.4];
 const FRANCE_ZOOM = 6;
 
 /**
- * Map on which the user paints their job search zone commune by commune.
- * Selected INSEE codes are controlled by the parent through value/onChange.
+ * Map on which the user paints their job search zone commune by commune with
+ * a circular brush. Selected INSEE codes are controlled by the parent through
+ * value/onChange.
  */
 export default function CommuneZonePicker({ value, onChange }: CommuneZonePickerProps) {
-  const [mode, setMode] = useState<"pan" | "paint">("pan");
-
-  const modeButton = (target: "pan" | "paint", label: string) => (
-    <button
-      type="button"
-      onClick={() => setMode(target)}
-      aria-pressed={mode === target}
-      className={cn(
-        "rounded px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-        mode === target
-          ? "bg-solid-primary text-strong"
-          : "bg-interactive text-body hover:bg-interactive-hover",
-      )}
-    >
-      {label}
-    </button>
+  // CARTO basemap flavor follows the active theme (dark_all / light_all).
+  const tileStyle = useMemo(
+    () =>
+      getComputedStyle(document.documentElement).getPropertyValue("--map-tiles").trim() ||
+      "dark_all",
+    [],
   );
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        {modeButton("pan", "Déplacer")}
-        {modeButton("paint", "Peindre")}
         <button
           type="button"
           onClick={() => onChange([])}
@@ -64,19 +51,24 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         center={FRANCE_CENTER}
         zoom={FRANCE_ZOOM}
         scrollWheelZoom
+        dragging={false}
+        doubleClickZoom={false}
+        boxZoom={false}
         className="h-96 w-full rounded border border-default"
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url={`https://{s}.basemaps.cartocdn.com/${tileStyle}/{z}/{x}/{y}{r}.png`}
+          subdomains="abcd"
         />
-        <CommunePaintLayer value={value} onChange={onChange} mode={mode} />
+        <CommunePaintLayer value={value} onChange={onChange} />
       </MapContainer>
 
       <p className="text-xs text-hint">
-        Zoomez jusqu&apos;au niveau communal, activez « Peindre », puis glissez sur la carte pour
-        sélectionner des communes entières. Un clic sur une commune sélectionnée la retire. Sans
-        zone peinte, aucune restriction géographique n&apos;est appliquée.
+        Molette : zoomer · clic molette : déplacer la carte · clic gauche : peindre · clic droit :
+        effacer. Le pinceau sélectionne toutes les communes qu&apos;il survole — dézoomez pour
+        couvrir une zone plus large. Sans zone peinte, aucune restriction géographique n&apos;est
+        appliquée.
       </p>
     </div>
   );

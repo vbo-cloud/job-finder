@@ -1,3 +1,4 @@
+import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import type { Feature, MultiPolygon, Polygon, Position } from "geojson";
 
 /** Bounding box as [west, south, east, north]. */
@@ -40,6 +41,59 @@ export function bboxContains(bbox: Bbox, lng: number, lat: number): boolean {
 
 export function bboxIntersects(a: Bbox, b: Bbox): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+const METERS_PER_DEGREE_LAT = 111_320;
+
+/**
+ * True when the commune polygon intersects a circular brush.
+ *
+ * The exact test is approximated by: circle center inside the polygon, or any
+ * polygon vertex within the radius. With 1000m-simplified contours (vertices
+ * every ~1 km) and brush radii of several km this misses nothing in practice,
+ * and stays cheap enough to run on every mousemove.
+ */
+export function communeIntersectsCircle(
+  commune: CommuneFeature,
+  lng: number,
+  lat: number,
+  radiusMeters: number,
+): boolean {
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  const latMargin = radiusMeters / METERS_PER_DEGREE_LAT;
+  const lngMargin = radiusMeters / (METERS_PER_DEGREE_LAT * Math.max(cosLat, 0.01));
+  const [w, s, e, n] = commune.bbox;
+  if (lng < w - lngMargin || lat < s - latMargin || lng > e + lngMargin || lat > n + latMargin) {
+    return false;
+  }
+  if (booleanPointInPolygon([lng, lat], commune.feature)) return true;
+  return anyVertexWithin(
+    commune.feature.geometry.coordinates,
+    lng,
+    lat,
+    radiusMeters * radiusMeters,
+    cosLat,
+  );
+}
+
+/* Equirectangular distance — accurate enough at brush scale, no trig per vertex. */
+function anyVertexWithin(
+  coords: Coords,
+  lng: number,
+  lat: number,
+  radiusSqMeters: number,
+  cosLat: number,
+): boolean {
+  if (typeof coords[0] === "number") {
+    const [vLng, vLat] = coords as Position;
+    const dx = (vLng - lng) * cosLat * METERS_PER_DEGREE_LAT;
+    const dy = (vLat - lat) * METERS_PER_DEGREE_LAT;
+    return dx * dx + dy * dy <= radiusSqMeters;
+  }
+  for (const c of coords as Coords[]) {
+    if (anyVertexWithin(c, lng, lat, radiusSqMeters, cosLat)) return true;
+  }
+  return false;
 }
 
 type Coords = Position | Coords[];

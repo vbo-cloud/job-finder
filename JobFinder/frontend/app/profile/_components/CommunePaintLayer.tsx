@@ -1,14 +1,13 @@
 "use client";
 
-import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import L from "leaflet";
-import { useEffect, useRef } from "react";
-import { useMap, useMapEvents } from "react-leaflet";
+import { useEffect, useRef, useState } from "react";
+import { useMap } from "react-leaflet";
 
 import {
-  bboxContains,
   bboxIntersects,
+  communeIntersectsCircle,
   loadDeptCommunes,
   loadDeptIndex,
   type Bbox,
@@ -16,15 +15,16 @@ import {
 } from "./communeGeo";
 
 /** Below this zoom, commune contours are neither loaded nor paintable. */
-export const MIN_PAINT_ZOOM = 8;
+export const MIN_PAINT_ZOOM = 7;
 
-/** Cursor travel (px) under which a mousedown+mouseup counts as a click, not a drag. */
-const CLICK_TOLERANCE_PX = 5;
+/** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
+const BRUSH_RADIUS_PX = 24;
+
+const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
 
 interface CommunePaintLayerProps {
   value: string[];
   onChange: (codes: string[]) => void;
-  mode: "pan" | "paint";
 }
 
 /* Leaflet canvas paths cannot be styled through CSS classes — colors are read
@@ -49,11 +49,13 @@ function communeStyle(selected: boolean): L.PathOptions {
 
 /**
  * Imperative Leaflet layer that loads commune contours for the departments
- * visible in the viewport and lets the user paint/unpaint whole communes.
- * Must be rendered inside a react-leaflet MapContainer.
+ * visible in the viewport and lets the user paint whole communes with a
+ * circular brush: left button paints, right button erases, middle button
+ * pans, the wheel zooms. Must be rendered inside a react-leaflet MapContainer.
  */
-export default function CommunePaintLayer({ value, onChange, mode }: CommunePaintLayerProps) {
+export default function CommunePaintLayer({ value, onChange }: CommunePaintLayerProps) {
   const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
 
   const deptIndexRef = useRef<Record<string, Bbox> | null>(null);
   const loadedDeptsRef = useRef(new Set<string>());
@@ -63,11 +65,13 @@ export default function CommunePaintLayer({ value, onChange, mode }: CommunePain
 
   const selectedRef = useRef(new Set(value));
   selectedRef.current = new Set(value);
-  const paintingRef = useRef(false);
-  const draggedRef = useRef(false);
-  const downPointRef = useRef<L.Point | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   const styledSelectionRef = useRef(new Set<string>());
+  const strokeRef = useRef<"paint" | "erase" | null>(null);
+  const panPointRef = useRef<{ x: number; y: number } | null>(null);
 
+  // Load the contours of every department intersecting the viewport.
   useEffect(() => {
     let cancelled = false;
     const deptLayers: L.GeoJSON[] = [];
@@ -116,10 +120,13 @@ export default function CommunePaintLayer({ value, onChange, mode }: CommunePain
       })
       .catch((err: unknown) => console.error("[CommunePaintLayer] loading index failed:", err));
 
+    const onZoomEnd = () => setZoom(map.getZoom());
     map.on("moveend", syncVisibleDepts);
+    map.on("zoomend", onZoomEnd);
     return () => {
       cancelled = true;
       map.off("moveend", syncVisibleDepts);
+      map.off("zoomend", onZoomEnd);
       for (const layer of deptLayers) layer.remove();
     };
   }, [map]);
@@ -139,77 +146,114 @@ export default function CommunePaintLayer({ value, onChange, mode }: CommunePain
     styledSelectionRef.current = selected;
   }, [value]);
 
-  // Paint mode suspends map dragging so mousedown+drag paints instead of panning.
+  // Mouse interactions: left = paint, right = erase, middle drag = pan.
   useEffect(() => {
-    if (mode === "paint") {
-      map.dragging.disable();
-      map.getContainer().style.cursor = "crosshair";
-    } else {
-      map.dragging.enable();
-      map.getContainer().style.cursor = "";
-    }
-  }, [map, mode]);
+    const container = map.getContainer();
+    container.style.cursor = "crosshair";
 
-  const communesAt = (latlng: L.LatLng): CommuneFeature[] => {
-    const result: CommuneFeature[] = [];
-    communesRef.current.forEach((commune) => {
-      if (
-        bboxContains(commune.bbox, latlng.lng, latlng.lat) &&
-        booleanPointInPolygon([latlng.lng, latlng.lat], commune.feature)
-      ) {
-        result.push(commune);
+    const brush = document.createElement("div");
+    brush.style.cssText =
+      `position:absolute;top:0;left:0;width:${BRUSH_RADIUS_PX * 2}px;height:${BRUSH_RADIUS_PX * 2}px;` +
+      "border-radius:9999px;pointer-events:none;z-index:800;display:none;";
+    const setBrushAppearance = (erasing: boolean) => {
+      brush.style.border = `2px solid var(${erasing ? "--ring-destructive" : "--border-accent"})`;
+      brush.style.background = `var(${erasing ? "--bg-destructive-muted" : "--bg-accent-muted"})`;
+    };
+    setBrushAppearance(false);
+    container.appendChild(brush);
+
+    const moveBrush = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const visible =
+        x >= 0 && y >= 0 && x <= rect.width && y <= rect.height &&
+        map.getZoom() >= MIN_PAINT_ZOOM;
+      brush.style.display = visible ? "block" : "none";
+      brush.style.transform = `translate(${x - BRUSH_RADIUS_PX}px, ${y - BRUSH_RADIUS_PX}px)`;
+    };
+
+    const stamp = (e: MouseEvent, erase: boolean) => {
+      if (map.getZoom() < MIN_PAINT_ZOOM) return;
+      const latlng = map.mouseEventToLatLng(e);
+      const metersPerPixel =
+        (EARTH_CIRCUMFERENCE_M * Math.abs(Math.cos((latlng.lat * Math.PI) / 180))) /
+        Math.pow(2, map.getZoom() + 8);
+      const radiusM = BRUSH_RADIUS_PX * metersPerPixel;
+
+      const next = new Set(selectedRef.current);
+      let changed = false;
+      communesRef.current.forEach((commune) => {
+        if (erase === next.has(commune.code) &&
+            communeIntersectsCircle(commune, latlng.lng, latlng.lat, radiusM)) {
+          if (erase) next.delete(commune.code);
+          else next.add(commune.code);
+          changed = true;
+        }
+      });
+      if (changed) onChangeRef.current(Array.from(next));
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      // Clicks on Leaflet controls (zoom buttons, attribution) must not paint.
+      if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
+      if (e.button === 0) {
+        strokeRef.current = "paint";
+        setBrushAppearance(false);
+        stamp(e, false);
+        e.preventDefault();
+      } else if (e.button === 2) {
+        strokeRef.current = "erase";
+        setBrushAppearance(true);
+        stamp(e, true);
+        e.preventDefault();
+      } else if (e.button === 1) {
+        panPointRef.current = { x: e.clientX, y: e.clientY };
+        e.preventDefault(); // suppress browser autoscroll
       }
-    });
-    return result;
-  };
-
-  const paintAt = (latlng: L.LatLng) => {
-    const toAdd = communesAt(latlng).filter((c) => !selectedRef.current.has(c.code));
-    if (toAdd.length === 0) return;
-    onChange(Array.from(selectedRef.current).concat(toAdd.map((c) => c.code)));
-  };
-
-  const toggleAt = (latlng: L.LatLng) => {
-    const communes = communesAt(latlng);
-    if (communes.length === 0) return;
-    const next = new Set(selectedRef.current);
-    for (const { code } of communes) {
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-    }
-    onChange(Array.from(next));
-  };
-
-  useMapEvents({
-    mousedown(e) {
-      if (mode !== "paint" || map.getZoom() < MIN_PAINT_ZOOM) return;
-      paintingRef.current = true;
-      draggedRef.current = false;
-      downPointRef.current = e.containerPoint;
-    },
-    mousemove(e) {
-      if (!paintingRef.current) return;
-      // A real click always wobbles a pixel or two — only paint past the tolerance.
-      if (
-        !draggedRef.current &&
-        downPointRef.current &&
-        e.containerPoint.distanceTo(downPointRef.current) < CLICK_TOLERANCE_PX
-      ) {
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      moveBrush(e);
+      const panPoint = panPointRef.current;
+      if (panPoint) {
+        map.panBy([panPoint.x - e.clientX, panPoint.y - e.clientY], { animate: false });
+        panPointRef.current = { x: e.clientX, y: e.clientY };
         return;
       }
-      draggedRef.current = true;
-      paintAt(e.latlng);
-    },
-    mouseup(e) {
-      if (!paintingRef.current) return;
-      paintingRef.current = false;
-      // A plain click (no drag) toggles: it deselects an already-painted commune.
-      if (!draggedRef.current) toggleAt(e.latlng);
-    },
-    mouseout() {
-      paintingRef.current = false;
-    },
-  });
+      if (strokeRef.current) stamp(e, strokeRef.current === "erase");
+    };
+    const onMouseUp = () => {
+      strokeRef.current = null;
+      panPointRef.current = null;
+      setBrushAppearance(false);
+    };
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    const onMouseLeave = () => {
+      brush.style.display = "none";
+    };
 
-  return null;
+    container.addEventListener("mousedown", onMouseDown);
+    container.addEventListener("contextmenu", onContextMenu);
+    container.addEventListener("mouseleave", onMouseLeave);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      container.removeEventListener("mousedown", onMouseDown);
+      container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("mouseleave", onMouseLeave);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      brush.remove();
+      container.style.cursor = "";
+    };
+  }, [map]);
+
+  if (zoom >= MIN_PAINT_ZOOM) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center">
+      <span className="rounded border border-subtle bg-surface px-3 py-1.5 text-sm text-secondary">
+        Zoomez pour afficher et peindre les communes
+      </span>
+    </div>
+  );
 }

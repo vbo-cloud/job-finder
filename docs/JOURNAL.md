@@ -3627,8 +3627,8 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 **Frontend :**
 - Dépendances : `leaflet`, `react-leaflet@4` (React 18), `@turf/boolean-point-in-polygon`.
 - `scripts/build-communes-geo.mjs` : télécharge les contours Etalab 2024 (simplification 1000m, licence ouverte), remplace Paris/Lyon/Marseille par leurs 45 arrondissements municipaux (les offres France Travail portent des codes INSEE d'arrondissement, ex. `75101`), et découpe en un GeoJSON par département sous `public/geo/communes/` (8,2 Mo, 35 116 communes) avec un `index.json` des bounding boxes.
-- `app/profile/_components/CommuneZonePicker.tsx` : carte Leaflet centrée sur la France, deux modes « Déplacer »/« Peindre », bouton « Réinitialiser la zone », compteur de sélection. Composant contrôlé (`value`/`onChange`), importé via `dynamic(..., { ssr: false })`.
-- `app/profile/_components/CommunePaintLayer.tsx` : charge les départements visibles dans le viewport (zoom ≥ 8) via l'index de bboxes, peint au `mousedown`+`drag` (test point-dans-polygone préfiltré par bbox), toggle au clic simple, rendu canvas.
+- `app/profile/_components/CommuneZonePicker.tsx` : carte Leaflet centrée sur la France (tuiles CARTO assorties au thème via le token `--map-tiles`), bouton unique « Réinitialiser la zone », compteur de sélection. Composant contrôlé (`value`/`onChange`), importé via `dynamic(..., { ssr: false })`.
+- `app/profile/_components/CommunePaintLayer.tsx` : charge les départements visibles dans le viewport (zoom ≥ 7) via l'index de bboxes ; pinceau circulaire de taille écran fixe — clic gauche peint, clic droit efface, molette zoome, glisser-molette déplace la carte ; test cercle/commune préfiltré par bbox ; rendu canvas ; overlay « Zoomez pour afficher et peindre les communes » sous le zoom minimal.
 - `app/profile/page.tsx` : le bloc « Localisation » (input texte) est remplacé par le picker ; `handleSave` envoie `commune_codes`.
 
 **Tests :**
@@ -3637,8 +3637,10 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 
 ### Décisions techniques
 
-- **Toggle « Déplacer »/« Peindre »** : `mousedown`+`drag` sert aussi au pan de la carte — le mode Peindre désactive `map.dragging` pour que le glisser peigne au lieu de déplacer. Non prévu dans le prompt initial, mais indispensable à l'utilisabilité.
-- **Tolérance de clic (5 px)** : un vrai clic bouge toujours d'un ou deux pixels entre `mousedown` et `mouseup` ; sans seuil, il était interprété comme un drag et la désélection ne fonctionnait pas.
-- **Restyle différentiel** : ne re-styler que les communes dont l'état de sélection a changé — un passage complet sur ~1 200 polygones chargés à chaque `mousemove` gelait le renderer canvas.
+- **Pinceau circulaire plutôt que toggle de mode** : une première itération utilisait un toggle « Déplacer »/« Peindre » avec sélection point par point — jugé peu utilisable (retour utilisateur : impossible de peindre). Remplacé par un pinceau circulaire de rayon écran fixe (24 px) : plus on dézoome, plus le cercle couvre de communes. Le pan gauche de Leaflet est désactivé (`dragging={false}`) ; le déplacement passe par le glisser-molette (implémenté à la main via `map.panBy`), l'effacement par le clic droit (`contextmenu` intercepté).
+- **Test cercle/commune approximé** : centre du cercle dans le polygone OU un sommet du polygone dans le rayon (distance équirectangulaire). Avec des contours simplifiés à 1000m (un sommet par km) et des rayons de plusieurs km, aucun cas réel n'échappe au test, et il reste assez léger pour tourner à chaque `mousemove` sur ~35 000 communes préfiltrées par bbox.
+- **Restyle différentiel** : ne re-styler que les communes dont l'état de sélection a changé — un passage complet sur tous les polygones chargés à chaque `mousemove` gelait le renderer canvas.
+- **Garde sur les contrôles Leaflet** : les `mousedown` provenant de `.leaflet-control-container` (boutons +/−, attribution) sont ignorés, sinon cliquer sur le zoom peignait les communes situées dessous.
+- **Token `--map-tiles`** : le style de fond de carte CARTO (`dark_all`/`light_all`) est un token de thème lu via `getComputedStyle` au montage — la carte suit le thème actif comme le reste du site.
 - **Couleurs via variables CSS du thème** : les paths canvas Leaflet ne sont pas stylables par classes CSS — les tokens (`--bg-accent-muted`, `--border-accent`, `--border-subtle`) sont lus par `getComputedStyle` au moment du style, même exception que `OrbitAnimation`.
 - **Arrondissements municipaux fusionnés au dataset** : peindre « Paris » entier sélectionnerait `75056`, code que France Travail n'émet jamais — le dataset contient donc les arrondissements à la place des trois communes parentes.
