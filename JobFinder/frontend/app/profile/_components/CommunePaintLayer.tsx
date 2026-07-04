@@ -1,31 +1,47 @@
 "use client";
 
-import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import L from "leaflet";
 import { useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 
 import {
-  bboxIntersects,
   communeIntersectsCircle,
+  loadDepartementContours,
   loadDeptCommunes,
   loadDeptIndex,
-  type Bbox,
   type CommuneFeature,
 } from "./communeGeo";
-
-/** Below this zoom, unselected commune contours are not drawn (too many polygons).
- * Painting itself works at every zoom — the selection layer is always rendered. */
-const CONTOUR_MIN_ZOOM = 7;
 
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
 
 const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
 
+/** Reference cities rendered as labels — the stylised basemap has no tiles. */
+const CITY_LABELS: [string, number, number][] = [
+  ["Paris", 48.8566, 2.3522],
+  ["Marseille", 43.2965, 5.3698],
+  ["Lyon", 45.764, 4.8357],
+  ["Toulouse", 43.6045, 1.4442],
+  ["Nice", 43.7102, 7.262],
+  ["Nantes", 47.2184, -1.5536],
+  ["Montpellier", 43.6119, 3.8772],
+  ["Strasbourg", 48.5734, 7.7521],
+  ["Bordeaux", 44.8378, -0.5792],
+  ["Lille", 50.6292, 3.0573],
+  ["Rennes", 48.1173, -1.6778],
+  ["Clermont-Ferrand", 45.7772, 3.087],
+  ["Dijon", 47.322, 5.0415],
+  ["Ajaccio", 41.9192, 8.7386],
+];
+
 interface CommunePaintLayerProps {
   value: string[];
   onChange: (codes: string[]) => void;
+  /** Called once per brush stroke, before its first effective change — undo snapshot hook. */
+  onStrokeStart: () => void;
+  /** Called once when every commune geometry is loaded, with the full list of INSEE codes. */
+  onCommunesLoaded: (codes: string[]) => void;
 }
 
 /* Leaflet canvas paths cannot be styled through CSS classes — colors are read
@@ -45,26 +61,34 @@ function selectedStyle(): L.PathOptions {
   };
 }
 
-function contourStyle(): L.PathOptions {
-  return { color: themeVar("--border-subtle"), weight: 1, fill: false };
+function departementStyle(): L.PathOptions {
+  return {
+    color: themeVar("--border-faint"),
+    weight: 1,
+    fill: true,
+    fillColor: themeVar("--bg-card"),
+    fillOpacity: 1,
+  };
 }
 
 /**
- * Imperative Leaflet layer that lets the user paint whole communes with a
- * circular brush: left button paints, right button erases, middle button
- * pans, the wheel zooms toward the cursor. All commune geometries are loaded
- * up front so painting works anywhere in France at any zoom; unselected
- * contours are only drawn from CONTOUR_MIN_ZOOM for performance.
- * Must be rendered inside a react-leaflet MapContainer.
+ * Imperative Leaflet layer: a stylised France basemap (department contours and
+ * city labels on the page background — no tiles) on which the user paints
+ * whole communes with a circular brush. Left button paints, right button
+ * erases, middle button pans, the wheel zooms toward the cursor. All commune
+ * geometries load up front so painting works anywhere at any zoom; only the
+ * selection is drawn. Must be rendered inside a react-leaflet MapContainer.
  */
-export default function CommunePaintLayer({ value, onChange }: CommunePaintLayerProps) {
+export default function CommunePaintLayer({
+  value,
+  onChange,
+  onStrokeStart,
+  onCommunesLoaded,
+}: CommunePaintLayerProps) {
   const map = useMap();
   const [pendingDepts, setPendingDepts] = useState<number | null>(null);
 
-  const deptIndexRef = useRef<Record<string, Bbox> | null>(null);
-  const deptFeaturesRef = useRef(new Map<string, CommuneFeature[]>());
   const communesRef = useRef(new Map<string, CommuneFeature>());
-  const contourLayersRef = useRef(new Map<string, L.GeoJSON>());
   const selectionGroupRef = useRef<L.GeoJSON | null>(null);
   const selectionLayersRef = useRef(new Map<string, L.Layer>());
   const rendererRef = useRef<L.Renderer | null>(null);
@@ -73,7 +97,12 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
   selectedRef.current = new Set(value);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onStrokeStartRef = useRef(onStrokeStart);
+  onStrokeStartRef.current = onStrokeStart;
+  const onCommunesLoadedRef = useRef(onCommunesLoaded);
+  onCommunesLoadedRef.current = onCommunesLoaded;
   const strokeRef = useRef<"paint" | "erase" | null>(null);
+  const strokeSnapshottedRef = useRef(false);
   const panPointRef = useRef<{ x: number; y: number } | null>(null);
 
   const addSelectionFill = (code: string) => {
@@ -84,18 +113,22 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
     selectionGroupRef.current.addData(commune.feature);
   };
 
-  // Load the geometry of every department, keep the view locked on France,
-  // and draw unselected contours for the departments visible in the viewport.
+  // Stylised basemap, commune geometries, selection layer, view lock.
   useEffect(() => {
     let cancelled = false;
-    // The Map instances are stable — captured locally for the cleanup below.
-    const contourLayers = contourLayersRef.current;
+    // The Map instance is stable — captured locally for the cleanup below.
     const selectionLayers = selectionLayersRef.current;
-    rendererRef.current = L.canvas({ padding: 0.3 });
+    const baseLayers: L.Layer[] = [];
 
     // The map is created with bounds fitting metropolitan France — forbid
     // zooming out further than that initial fit.
     map.setMinZoom(map.getZoom());
+
+    // Departments render in a dedicated pane below the selection overlay.
+    if (!map.getPane("franceBase")) {
+      map.createPane("franceBase").style.zIndex = "350";
+    }
+    rendererRef.current = L.canvas({ padding: 0.3 });
 
     selectionGroupRef.current = L.geoJSON(undefined, {
       style: () => ({
@@ -107,64 +140,68 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
         selectionLayersRef.current.set(feature.properties.code as string, lyr),
     }).addTo(map);
 
-    const syncContourLayers = () => {
-      const index = deptIndexRef.current;
-      if (!index || map.getZoom() < CONTOUR_MIN_ZOOM) return;
-      const b = map.getBounds();
-      const view: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-      for (const [dept, bbox] of Object.entries(index)) {
-        const communes = deptFeaturesRef.current.get(dept);
-        if (!communes || !bboxIntersects(bbox, view) || contourLayersRef.current.has(dept)) {
-          continue;
-        }
-        const collection: FeatureCollection<Polygon | MultiPolygon, { code: string; nom: string }> = {
-          type: "FeatureCollection",
-          features: communes.map((c) => c.feature),
-        };
-        const layer = L.geoJSON(collection, {
-          // renderer/interactive are PathOptions — routed to each path via style().
+    loadDepartementContours()
+      .then((departements) => {
+        if (cancelled) return;
+        const baseRenderer = L.canvas({ padding: 0.3, pane: "franceBase" });
+        const layer = L.geoJSON(departements, {
+          pane: "franceBase",
           style: () => ({
-            ...contourStyle(),
-            renderer: rendererRef.current ?? undefined,
+            ...departementStyle(),
+            renderer: baseRenderer,
             interactive: false,
           }),
         }).addTo(map);
-        contourLayersRef.current.set(dept, layer);
-      }
-    };
+        baseLayers.push(layer);
+      })
+      .catch((err: unknown) =>
+        console.error("[CommunePaintLayer] loading departements failed:", err),
+      );
+
+    for (const [name, lat, lng] of CITY_LABELS) {
+      const marker = L.marker([lat, lng], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: "",
+          html: `<span class="pointer-events-none whitespace-nowrap text-xs text-muted">${name}</span>`,
+        }),
+      }).addTo(map);
+      baseLayers.push(marker);
+    }
 
     loadDeptIndex()
       .then((index) => {
         if (cancelled) return;
-        deptIndexRef.current = index;
         const depts = Object.keys(index);
-        setPendingDepts(depts.length);
+        let remaining = depts.length;
+        setPendingDepts(remaining);
         for (const dept of depts) {
           loadDeptCommunes(dept)
             .then((communes) => {
               if (cancelled) return;
-              deptFeaturesRef.current.set(dept, communes);
               for (const commune of communes) communesRef.current.set(commune.code, commune);
               // Fill communes that were already selected (profile reload).
               selectedRef.current.forEach(addSelectionFill);
-              syncContourLayers();
             })
             .catch((err: unknown) =>
               console.error(`[CommunePaintLayer] loading dept ${dept} failed:`, err),
             )
             .finally(() => {
-              if (!cancelled) setPendingDepts((n) => (n ?? 1) - 1);
+              if (cancelled) return;
+              remaining -= 1;
+              setPendingDepts(remaining);
+              if (remaining === 0) {
+                onCommunesLoadedRef.current(Array.from(communesRef.current.keys()));
+              }
             });
         }
       })
       .catch((err: unknown) => console.error("[CommunePaintLayer] loading index failed:", err));
 
-    map.on("moveend", syncContourLayers);
     return () => {
       cancelled = true;
-      map.off("moveend", syncContourLayers);
-      contourLayers.forEach((layer) => layer.remove());
-      contourLayers.clear();
+      for (const layer of baseLayers) layer.remove();
       selectionGroupRef.current?.remove();
       selectionLayers.clear();
     };
@@ -229,19 +266,28 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
           changed = true;
         }
       });
-      if (changed) onChangeRef.current(Array.from(next));
+      if (!changed) return;
+      // Snapshot the pre-stroke state exactly once, and only for strokes
+      // that actually change something — keeps the undo history meaningful.
+      if (!strokeSnapshottedRef.current) {
+        strokeSnapshottedRef.current = true;
+        onStrokeStartRef.current();
+      }
+      onChangeRef.current(Array.from(next));
     };
 
     const onMouseDown = (e: MouseEvent) => {
-      // Clicks on Leaflet controls (attribution links) must not paint.
+      // Clicks on Leaflet controls must not paint.
       if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
       if (e.button === 0) {
         strokeRef.current = "paint";
+        strokeSnapshottedRef.current = false;
         setBrushAppearance(false);
         stamp(e, false);
         e.preventDefault();
       } else if (e.button === 2) {
         strokeRef.current = "erase";
+        strokeSnapshottedRef.current = false;
         setBrushAppearance(true);
         stamp(e, true);
         e.preventDefault();

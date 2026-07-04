@@ -69,23 +69,16 @@
   --canvas-orbit:     170, 210, 255;
   --canvas-icon:      #383838;
   --canvas-icon-text: 255, 255, 255;
-
-  /* Map (CommuneZonePicker) */
-  --map-tiles: dark_all;
 }
 
-/* Leaflet chrome (CommuneZonePicker) — align the map with the site theme:
-   no light-gray tile background, no focus outline, themed attribution. */
-.leaflet-container {
-  background: var(--bg-surface);
+/* Leaflet chrome (CommuneZonePicker) — the map has no tiles: a transparent
+   background lets the stylised France sit directly on the page, and the
+   default focus outline would draw a visible frame around it. The doubled
+   selector outweighs leaflet.css's own .leaflet-container rule, which is
+   injected after this file (component-level import). */
+.leaflet-container.leaflet-container {
+  background: transparent;
   outline: none;
-}
-.leaflet-container .leaflet-control-attribution {
-  background: var(--bg-surface);
-  color: var(--text-muted);
-}
-.leaflet-container .leaflet-control-attribution a {
-  color: var(--text-accent);
 }
 
 @keyframes expandIn {

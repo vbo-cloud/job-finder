@@ -66,7 +66,4 @@ export const lightTheme: Theme = {
   "--canvas-orbit": "20, 80, 200",
   "--canvas-icon": "#c8c8cc",
   "--canvas-icon-text": "50, 50, 70",
-
-  /* Map */
-  "--map-tiles": "light_all",
 };
