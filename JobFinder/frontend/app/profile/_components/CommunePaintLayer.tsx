@@ -45,15 +45,30 @@ const LABEL_HEIGHT_PX = 20;
 const LABEL_GAP_PX = 14;
 const MAX_DYNAMIC_LABELS = 200;
 
+/* The further the map is zoomed out, the more breathing room each label
+ * demands — keeps dense areas (Île-de-France) down to a handful of names
+ * instead of a wall of text. 1x from zoom 11.5 up. */
+function labelSpacingScale(zoom: number): number {
+  return 1 + Math.max(0, 11.5 - zoom) * 0.6;
+}
+
 interface PlacedLabel {
   x: number;
   y: number;
   halfW: number;
 }
 
-function labelCollides(placed: PlacedLabel[], x: number, y: number, halfW: number): boolean {
+function labelCollides(
+  placed: PlacedLabel[],
+  x: number,
+  y: number,
+  halfW: number,
+  scale: number,
+): boolean {
   return placed.some(
-    (p) => Math.abs(y - p.y) < LABEL_HEIGHT_PX && Math.abs(x - p.x) < p.halfW + halfW + LABEL_GAP_PX,
+    (p) =>
+      Math.abs(y - p.y) < LABEL_HEIGHT_PX * scale &&
+      Math.abs(x - p.x) < p.halfW + halfW + LABEL_GAP_PX * scale,
   );
 }
 
@@ -297,13 +312,14 @@ export default function CommunePaintLayer({
           placed.push({ x: pt.x, y: pt.y, halfW: (city.name.length * LABEL_CHAR_PX) / 2 });
         }
 
+        const spacing = labelSpacingScale(zoom);
         for (const commune of candidates) {
           if (visibleCodes.size >= MAX_DYNAMIC_LABELS) break;
           const [w, s, e, n] = commune.bbox;
           const center = L.latLng((s + n) / 2, (w + e) / 2);
           const pt = map.latLngToContainerPoint(center);
           const halfW = (communeLabelText(commune).length * LABEL_CHAR_PX) / 2;
-          if (labelCollides(placed, pt.x, pt.y, halfW)) continue;
+          if (labelCollides(placed, pt.x, pt.y, halfW, spacing)) continue;
           placed.push({ x: pt.x, y: pt.y, halfW });
           visibleCodes.add(commune.code);
           if (!communeLabelMarkers.has(commune.code)) {
