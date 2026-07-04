@@ -28,6 +28,11 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
     always start with their department code — which keeps both the stored
     array and the SQL parameter list small.
 
+    Offers without a commune code (remote or nationwide postings from
+    France Travail) are kept regardless of the zone: they potentially
+    apply everywhere, and remote work is relevant to someone searching
+    in a specific area.
+
     Args:
         commune_codes: Stored zone — INSEE codes and/or department tokens.
 
@@ -40,7 +45,7 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
         for c in commune_codes
         if c.startswith(DEPT_TOKEN_PREFIX)
     ]
-    conditions: list[ColumnElement[bool]] = []
+    conditions: list[ColumnElement[bool]] = [Offer.commune.is_(None)]
     if codes:
         conditions.append(Offer.commune.in_(codes))
     conditions.extend(Offer.commune.startswith(dept, autoescape=True) for dept in depts)
@@ -82,7 +87,8 @@ def get_matches(
             .order_by(Match.score.desc())
         )
         # Hard geographic filter — offers outside the user's painted commune
-        # zone are never returned. An empty zone means no filtering at all.
+        # zone are never returned (except commune-less offers: remote or
+        # nationwide postings). An empty zone means no filtering at all.
         if profile is not None and profile.commune_codes:
             stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
                 _commune_zone_condition(profile.commune_codes)

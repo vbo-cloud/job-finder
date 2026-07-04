@@ -181,6 +181,22 @@ class TestGetMatches:
         assert "offers.commune LIKE" in stmt
         assert " OR " in stmt
 
+    def test_commune_less_offers_survive_the_zone_filter(self, test_client, mock_session):
+        profile = _make_profile(commune_codes=["75101"])
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": []}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        # Remote/nationwide offers carry no commune code — they potentially
+        # apply everywhere and must not be excluded by a painted zone.
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune IS NULL" in stmt
+        assert "offers.commune IN" in stmt
+
     def test_no_commune_filter_when_no_profile(self, test_client, mock_session):
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": None}),
