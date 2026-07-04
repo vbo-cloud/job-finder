@@ -302,9 +302,7 @@ async def upload_cv(
                 id=uuid.uuid4(),
                 user_id=user_id,
                 rome_codes={},
-                job_categories=[],
                 location=None,
-                contract_types=[],
                 created_at=now,
             ).on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
         )

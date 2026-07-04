@@ -87,16 +87,12 @@ def put_profile(
                 id=uuid.uuid4(),
                 user_id=user_id,
                 rome_codes=[],
-                job_categories=body.job_categories,
                 location=body.location,
-                contract_types=body.contract_types,
                 created_at=now,
             ).on_conflict_do_update(
                 constraint="uq_user_profiles_user_id",
                 set_={
-                    "job_categories": body.job_categories,
                     "location": body.location,
-                    "contract_types": body.contract_types,
                 },
             )
         )

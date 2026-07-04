@@ -5,11 +5,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import apiClient from "@/lib/api/client";
-import type { ProfileData, RomeCodeEntry } from "@/lib/api/types";
+import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
-
-const CONTRACT_TYPES = ["CDI", "CDD", "Freelance", "Stage", "Alternance"] as const;
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
@@ -20,10 +18,6 @@ export default function ProfilePage() {
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const [location, setLocation] = useState("");
-  const [contractTypes, setContractTypes] = useState<string[]>([]);
-  const [jobCategories, setJobCategories] = useState<string[]>([]);
-  const [jobCategoryInput, setJobCategoryInput] = useState("");
-  const [romeCodes, setRomeCodes] = useState<Record<string, RomeCodeEntry>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -36,9 +30,6 @@ export default function ProfilePage() {
       .get<ProfileData>("/profile")
       .then((res) => {
         setLocation(res.data.location ?? "");
-        setContractTypes(res.data.contract_types);
-        setJobCategories(res.data.job_categories);
-        setRomeCodes(res.data.rome_codes);
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } }).response?.status;
@@ -49,32 +40,12 @@ export default function ProfilePage() {
       .finally(() => setLoading(false));
   }, [isAuthenticated]);
 
-  function toggleContractType(type: string) {
-    setContractTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
-    );
-  }
-
-  function addJobCategory() {
-    const trimmed = jobCategoryInput.trim();
-    if (trimmed && !jobCategories.includes(trimmed)) {
-      setJobCategories((prev) => [...prev, trimmed]);
-    }
-    setJobCategoryInput("");
-  }
-
-  function removeJobCategory(cat: string) {
-    setJobCategories((prev) => prev.filter((c) => c !== cat));
-  }
-
   async function handleSave() {
     setSaving(true);
     setFeedback(null);
     try {
       await apiClient.put("/profile", {
         location: location.trim() || null,
-        contract_types: contractTypes,
-        job_categories: jobCategories,
       });
       setFeedback({ type: "success", message: "Profil enregistré." });
     } catch {
@@ -138,88 +109,6 @@ export default function ProfilePage() {
             className="w-full rounded border border-default bg-card px-3 py-2 text-sm text-strong placeholder:text-hint focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium text-primary">Types de contrat</p>
-          <div className="flex flex-wrap gap-3">
-            {CONTRACT_TYPES.map((type) => (
-              <label key={type} className="flex cursor-pointer items-center gap-1.5 text-sm text-body">
-                <input
-                  type="checkbox"
-                  checked={contractTypes.includes(type)}
-                  onChange={() => toggleContractType(type)}
-                  className="h-4 w-4 accent-[var(--bg-solid-primary)]"
-                />
-                {type}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium text-primary">Catégories de poste</p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={jobCategoryInput}
-              onChange={(e) => setJobCategoryInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
-                  e.preventDefault();
-                  addJobCategory();
-                }
-              }}
-              placeholder="ex. Développeur backend — Entrée ou virgule pour ajouter"
-              className="flex-1 rounded border border-default bg-card px-3 py-2 text-sm text-strong placeholder:text-hint focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <button
-              type="button"
-              onClick={addJobCategory}
-              className="rounded bg-solid-secondary px-3 py-2 text-sm text-body hover:bg-solid-secondary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-            >
-              Ajouter
-            </button>
-          </div>
-          {jobCategories.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {jobCategories.map((cat) => (
-                <span
-                  key={cat}
-                  className="flex items-center gap-1 rounded-full bg-accent-muted px-3 py-1 text-xs text-accent"
-                >
-                  {cat}
-                  <button
-                    type="button"
-                    onClick={() => removeJobCategory(cat)}
-                    className="ml-0.5 text-accent hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    aria-label={`Supprimer ${cat}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {Object.keys(romeCodes).length > 0 && (
-          <div>
-            <p className="mb-2 text-sm font-medium text-primary">
-              Codes ROME{" "}
-              <span className="font-normal text-muted">(détectés depuis votre CV)</span>
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(romeCodes).map(([code, entry]) => (
-                <span
-                  key={code}
-                  className="rounded-full bg-accent-muted border border-accent px-3 py-1 text-xs text-accent"
-                >
-                  {entry.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
 
         {feedback && (
           <p className={cn("text-sm", feedback.type === "success" ? "text-success" : "text-destructive")}>

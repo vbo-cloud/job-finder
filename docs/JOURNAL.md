@@ -3568,3 +3568,38 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 - **Pattern "latest ref" plutôt que snapshot** : une première implémentation utilisait un état `seenIdsSnapshot` mis à jour via un helper `withSnapshot()` sur chaque handler de filtre — fonctionnel mais dupliquait la donnée et nécessitait de câbler chaque nouveau filtre. Remplacé par `useRef` inliné : la ref reflète `seenIds` sans condition à chaque render, le `useMemo` la lit sans la déclarer dans ses deps, ESLint accepte sans désactivation.
 - **`key={selectedCvId}` sur `CorrespondancesPanel`** : garantit que chaque CV démarre avec un état propre (seenIds, filtre, carte ouverte). Sans la key, React réutilise l'instance et les états d'un CV précédent restent visibles le temps que les données se rechargent.
 - **Endpoint sur le router `/cv/`** : cohérent avec `mark_all_seen` qui y est déjà défini. La route `/{cv_id}/matches/{offer_id}/seen` suit la hiérarchie ressource CV → Match.
+
+---
+
+## PR #152 — refactor: supprimer les champs profil inutilisés (contract_types, job_categories)
+
+**Date :** 2026-07-04
+**Branche :** `feature/profile-cleanup` → `dev`
+
+### Contexte
+
+`contract_types` et `job_categories` sur `UserProfile` étaient stockés, affichés sur `/profile` et persistés via `PUT /profile`, mais n'intervenaient **nulle part** dans la logique de matching (`routers/matches.py` ignorait complètement ces champs). Ces champs morts représentaient une surface à maintenir (schéma, route, frontend, tests) sans aucune valeur fonctionnelle.
+
+`rome_codes` reste intact côté backend — il est central au matching. Seul son affichage redondant sur la page `/profile` est retiré (les chips sont déjà visibles dans la vue détail CV via `CVMatchesOut`).
+
+### Ce qui a été fait
+
+**Backend :**
+- `shared/models.py` : colonnes `job_categories` et `contract_types` retirées de `UserProfile`.
+- `migrations/versions/012_remove_unused_profile_fields.py` : `drop_column` des deux colonnes dans `upgrade()` ; `downgrade()` les recrée en `ARRAY(String) NOT NULL DEFAULT '{}'`.
+- `agents/webapp/schemas.py` : `job_categories` et `contract_types` retirés de `ProfileUpdate` et `ProfileOut`. `ProfileUpdate` n'expose plus que `location: str | None`.
+- `agents/webapp/routers/profile.py` : champs retirés du `values=` et du `set_={}` de l'upsert PostgreSQL.
+- `agents/webapp/routers/cv.py` : `job_categories=[]` et `contract_types=[]` retirés de l'insert de profil par défaut à l'upload de CV.
+
+**Frontend :**
+- `frontend/lib/api/types.ts` : `job_categories` et `contract_types` retirés de `ProfileData`.
+- `frontend/app/profile/page.tsx` : suppression de `CONTRACT_TYPES`, du bloc "Types de contrat" (état `contractTypes`, `toggleContractType`, JSX checkboxes), du bloc "Catégories de poste" (état `jobCategories`, `jobCategoryInput`, `addJobCategory`, `removeJobCategory`, JSX tag input), du bloc d'affichage des codes ROME (état `romeCodes`, chips). Import `RomeCodeEntry` supprimé. `handleSave` n'envoie plus que `{ location }`.
+
+**Tests :**
+- `python/tests/test_webapp_profile.py` : `_make_profile()` allégée (`job_categories`, `contract_types` retirés). `_PUT_BODY` réduit à `{ "location": "Lyon" }`. Test `test_returns_422_on_missing_required_field` supprimé — `ProfileUpdate` n'a plus de champ requis.
+
+### Décisions techniques
+
+- **`location` non touché** : le champ est hors périmètre — il sera remplacé par un système de zones communales dans `feature/profile-geo-search`. Modifier `location` ici créerait un conflit de colonne entre les deux branches.
+- **Champs supprimés intégralement** (pas masqués) : ils n'étaient référencés nulle part dans le matching — les retirer de la DB évite toute ambiguïté sur leur utilité future.
+- **Migration `downgrade()` fidèle** : recrée les colonnes avec le même type et `server_default` qu'à l'origine (`ARRAY(String)`, `NOT NULL`, `DEFAULT '{}'`) — rollback possible sans perte de contrainte.
