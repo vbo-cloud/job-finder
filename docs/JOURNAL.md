@@ -3603,3 +3603,77 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 - **`location` non touché** : le champ est hors périmètre — il sera remplacé par un système de zones communales dans `feature/profile-geo-search`. Modifier `location` ici créerait un conflit de colonne entre les deux branches.
 - **Champs supprimés intégralement** (pas masqués) : ils n'étaient référencés nulle part dans le matching — les retirer de la DB évite toute ambiguïté sur leur utilité future.
 - **Migration `downgrade()` fidèle** : recrée les colonnes avec le même type et `server_default` qu'à l'origine (`ARRAY(String)`, `NOT NULL`, `DEFAULT '{}'`) — rollback possible sans perte de contrainte.
+
+---
+
+## PR #153 — feat: recherche géographique par zone de communes peinte sur carte
+
+**Date :** 2026-07-04
+**Branche :** `feature/profile-geo-search` → `dev`
+
+### Contexte
+
+`offers.location` et `user_profiles.location` étaient de simples libellés texte, jamais utilisés comme filtre — la géolocalisation n'existait pas fonctionnellement. Or l'API France Travail renvoie pour chaque offre le code INSEE de la commune (`lieuTravail.commune`) plus ses coordonnées, champs jusqu'ici jetés à l'insertion. Puisque la précision réelle des données est la commune, la zone de recherche est définie en **peignant des communes entières** sur une carte (pas de polygone libre, pas de PostGIS) : le backend ne stocke qu'une liste de codes INSEE.
+
+### Ce qui a été fait
+
+**Backend :**
+- `shared/models.py` : `Offer` gagne `commune` (String nullable, index `ix_offers_commune`), `latitude` et `longitude` (Float nullable, pour un futur affichage cartographique). `UserProfile.location` remplacé par `commune_codes` (`ARRAY(String) NOT NULL DEFAULT '{}'`).
+- `agents/offer_fetching/main.py` : les trois champs de `lieuTravail` sont capturés dans le `values` et le `set_` de l'upsert. Pas de backfill — les offres existantes se rempliront à leur prochain passage dans le cycle de collecte.
+- `migrations/versions/013_add_commune_search.py` : ajoute les colonnes offers + index, permute `location` → `commune_codes` sur `user_profiles`. Réversibilité validée en local (`upgrade head` → `downgrade -1` → `upgrade head` sur un Postgres pgvector jetable).
+- `agents/webapp/` : `ProfileUpdate`/`ProfileOut` exposent `commune_codes: list[str]` ; `PUT /profile` upserte ce champ ; l'insert de profil par défaut (`cv.py`) initialise `commune_codes=[]`.
+- `routers/matches.py` : **filtre géographique dur** — si `profile.commune_codes` est non vide, `GET /matches` et `GET /matches/cv/{id}` joignent `offers` et ne gardent que les matches dont `Offer.commune` est dans la zone. Zone vide = comportement inchangé (aucun filtre).
+
+**Frontend :**
+- Dépendances : `leaflet`, `react-leaflet@4` (React 18), `@turf/boolean-point-in-polygon`.
+- `scripts/build-communes-geo.mjs` : télécharge les contours Etalab 2024 (simplification 1000m, licence ouverte) — le jeu inclut déjà les 45 arrondissements municipaux de Paris/Lyon/Marseille, seules les 3 communes parentes sont retirées (les offres France Travail portent des codes INSEE d'arrondissement, ex. `75101`, jamais `75056`) — découpe en un GeoJSON par département sous `public/geo/communes/` (8,2 Mo, 35 071 communes) avec un `index.json` des bounding boxes, plus `public/geo/departements.geojson` (329 Ko) pour le fond de carte stylisé.
+- `app/profile/_components/CommuneZonePicker.tsx` : carte de France stylisée **sans tuiles** — contours départementaux et étiquettes de grandes villes posés directement sur le fond de la page (conteneur Leaflet transparent, aucun cadre), cadrée sur la métropole entière (`fitBounds` + zoom minimal verrouillé + `maxBounds`, aucun contrôle Leaflet). Barre d'outils : « Tout sélectionner », « Réinitialiser la zone », undo/redo par coup de pinceau (pile de 50 instantanés), compteur. Composant contrôlé (`value`/`onChange`), importé via `dynamic(..., { ssr: false })`.
+- `app/profile/_components/CommunePaintLayer.tsx` : charge la géométrie des 35 071 communes dès le montage (~8 Mo de GeoJSON statique) — la peinture fonctionne partout et à tout niveau de zoom ; pinceau circulaire de taille écran fixe — clic gauche peint, clic droit efface, molette zoome vers le curseur, glisser-molette déplace la carte ; test cercle/commune préfiltré par bbox ; seule la **sélection** est dessinée (couche canvas dédiée, toujours visible) — les communes non sélectionnées n'ont aucun contour ; le fond départements vit dans un pane sous la sélection ; `onStrokeStart` notifie le parent au premier changement effectif de chaque coup de pinceau (instantané d'annulation).
+- `app/profile/page.tsx` : le bloc « Localisation » (input texte) est remplacé par le picker ; `handleSave` envoie `commune_codes`.
+
+**Tests :**
+- `test_webapp_profile.py` : `location` → `commune_codes` dans `_make_profile()` et `_PUT_BODY`.
+- `test_webapp_matches.py` : `_make_offer()` porte `commune="75101"`, `_make_profile()` accepte `commune_codes`. Cinq nouveaux tests valident le filtre en inspectant le statement SQL compilé passé à `session.execute` (présence/absence de `JOIN offers` et `offers.commune IN`) — pas de vraie base derrière les mocks.
+
+### Décisions techniques
+
+- **Pinceau circulaire plutôt que toggle de mode** : une première itération utilisait un toggle « Déplacer »/« Peindre » avec sélection point par point — jugé peu utilisable (retour utilisateur : impossible de peindre). Remplacé par un pinceau circulaire de rayon écran fixe (24 px) : plus on dézoome, plus le cercle couvre de communes. Le pan gauche de Leaflet est désactivé (`dragging={false}`) ; le déplacement passe par le glisser-molette (implémenté à la main via `map.panBy`), l'effacement par le clic droit (`contextmenu` intercepté).
+- **Test cercle/commune approximé** : centre du cercle dans le polygone OU un sommet du polygone dans le rayon (distance équirectangulaire). Avec des contours simplifiés à 1000m (un sommet par km) et des rayons de plusieurs km, aucun cas réel n'échappe au test, et il reste assez léger pour tourner à chaque `mousemove` sur ~35 000 communes préfiltrées par bbox.
+- **Restyle différentiel** : ne re-styler que les communes dont l'état de sélection a changé — un passage complet sur tous les polygones chargés à chaque `mousemove` gelait le renderer canvas.
+- **Garde sur les contrôles Leaflet** : les `mousedown` provenant de `.leaflet-control-container` sont ignorés, sinon cliquer dessus peignait les communes situées dessous.
+- **Carte stylisée plutôt que tuiles** (retour utilisateur : « une vraie carte de France intégrée dans la DA ») : les tuiles CARTO et le token `--map-tiles` d'une itération intermédiaire ont été retirés — le fond est le `--bg-page` de la page (conteneur Leaflet transparent, spécificité doublée pour battre la règle de `leaflet.css` injectée après `globals.css`), la silhouette de la France vient de `departements.geojson` (remplissage `--bg-card`, traits `--border-faint`) et ~90 villes servent de repères (marqueurs `divIcon` non interactifs, `cityLabels.ts`) affichées par paliers de zoom : 14 métropoles toujours visibles, ~30 villes régionales à partir du zoom 7, ~60 villes locales à partir du zoom 8,5 — synchronisées sur `zoomend`. La carte occupe une page élargie (`max-w-6xl`, 800 px de haut).
+- **Données séparées du rendu** : une première itération ne chargeait les communes qu'au zoom ≥ 7 dans le viewport — sans pan au clic gauche, seul le centre de la France était atteignable (retour utilisateur). Les géométries sont désormais toutes chargées au montage (peinture partout, navigation entièrement à la molette puisque le zoom Leaflet est centré sur le curseur). Les contours des communes non sélectionnées, d'abord conditionnés au zoom, ont finalement été supprimés (retour utilisateur) — seule la sélection est dessinée, ce qui règle aussi la question du coût de rendu de 35 000 polygones.
+- **Historique undo/redo dans le picker** : la couche de peinture appelle `onStrokeStart` une seule fois par coup de pinceau, juste avant son premier changement effectif — les coups « à vide » ne polluent pas l'historique, et « Tout sélectionner »/« Réinitialiser » créent chacun un instantané.
+- **Doublons d'arrondissements corrigés** : les contours Etalab incluent déjà les arrondissements municipaux — la fusion initiale avec geo.api.gouv.fr dupliquait 45 features dans les fichiers 13/69/75 ; le script ne retire plus que les 3 communes parentes et déduplique par code INSEE.
+- **Focus clavier restauré après `preventDefault()`** : le `preventDefault()` du `mousedown` de peinture supprime le focus implicite du conteneur, ce qui tuait la navigation clavier Leaflet (+/− et flèches) — `container.focus({ preventScroll: true })` est appelé explicitement à chaque coup de pinceau.
+- **France métropolitaine uniquement** : la vue est verrouillée sur la métropole (Corse incluse) — les communes d'outre-mer sont présentes dans le dataset mais injoignables sur la carte ; à traiter si un besoin DOM apparaît.
+- **Couleurs via variables CSS du thème** : les paths canvas Leaflet ne sont pas stylables par classes CSS — les tokens (`--bg-accent-muted`, `--border-accent`, `--border-subtle`) sont lus par `getComputedStyle` au moment du style, même exception que `OrbitAnimation`.
+- **Arrondissements municipaux fusionnés au dataset** : peindre « Paris » entier sélectionnerait `75056`, code que France Travail n'émet jamais — le dataset contient donc les arrondissements à la place des trois communes parentes.
+
+### Ce qui a été fait — itération 2 (même PR, retours utilisateur)
+
+**Données (`scripts/build-communes-geo.mjs`) :**
+- Population de chaque commune injectée dans les GeoJSON (`pop`, jointure geo.api.gouv.fr sur ~35 000 codes, arrondissements municipaux inclus) — pilote l'affichage progressif des noms.
+- Second jeu de contours **simplifiés à 100m** sous `public/geo/communes-hd/` (96 départements métropolitains uniquement, ~29 Mo, coordonnées arrondies à 4 décimales) — ~5× plus de sommets que le 1000m.
+- `index.json` passe de `dept → bbox` à `dept → { bbox, nom }` (noms de départements pour la liste récapitulative).
+
+**Frontend :**
+- **Détail au zoom** : dès le zoom 10, contours de toutes les communes du viewport (arrondissements de Paris/Lyon/Marseille inclus, libellés courts « 1er », « 12e ») ; les géométries HD 100m sont chargées paresseusement par département visible et substituées aux 1000m (remplissages de la sélection redessinés en HD). Zoom plafonné à 14.
+- **Labels progressifs par population** : paliers (≥ 20 000 hab. dès le zoom 9, ≥ 5 000 dès 10, toutes les communes dès 11) combinés à un **placement par priorité** : tri population décroissante, rejet de tout label dont la boîte de texte estimée chevaucherait un label déjà posé (les villes statiques réservent leur place), espacement gonflé jusqu'à 2,5× en vue dézoomée, plafond de 200 labels par vue.
+- **Liste récapitulative temps réel** sous la carte : groupée par département (ordre numérique, 2A/2B après le 20), compteur « x / total communes », sections repliables — seules les sections dépliées rendent leurs communes — tri alphabétique français avec collation numérique (Paris 2e avant Paris 18e).
+- **Contour national bleu** quand la zone est vide (sémantique « toute la France, aucune restriction ») : dissolution côté client des frontières départementales partagées (les arêtes internes apparaissent deux fois et s'annulent) → 22 anneaux fermés en ~60 ms. Le bouton « Tout sélectionner » disparaît au profit de cette sémantique ; reste « Réinitialiser ».
+- **Compression par département** : à l'écriture API, chaque département intégralement sélectionné devient un jeton `dept:xx` ; décompression à l'affichage, jetons non résolus préservés pendant le chargement du référentiel.
+- **Thème clair** : les paths canvas Leaflet figent leurs couleurs au style — un `MutationObserver` sur l'attribut `style` de `<html>` (réécrit par `applyTheme()`) re-style sélection, fond départements, contours HD et liseré national au changement de thème.
+- Indications d'usage sous la carte supprimées ; seule l'attribution Etalab/IGN (Licence Ouverte) subsiste.
+
+**Backend :**
+- `routers/matches.py` : condition géographique factorisée (`_commune_zone_condition`) — les jetons `dept:xx` se traduisent en préfixe SQL (`Offer.commune LIKE 'xx%'`, `autoescape`) OR-és avec le `IN` des codes isolés. Test ajouté sur le statement compilé (`IN` + `LIKE` + `OR`).
+
+### Décisions techniques — itération 2
+
+- **HD paresseux plutôt que 100m partout** : le chargement initial reste à 8,5 Mo (peinture immédiate sur toute la France) ; le détail 100m n'est payé que pour les départements effectivement zoomés.
+- **Labels par collision plutôt que paliers seuls** (retour utilisateur : « mur de texte » en Île-de-France) : un palier de population déverse tous ses noms d'un coup en zone dense ; le placement priorisé garantit zéro chevauchement quelle que soit la densité, et les noms apparaissent au fil du zoom quand la place se libère.
+- **Compression à la frontière API, côté client** : le backend n'a pas le référentiel des communes (il vit dans `public/geo/`) ; le frontend, qui l'a déjà en mémoire, compresse/décompresse — le backend ne connaît que la sémantique « préfixe INSEE ». Les zones énormes passent de milliers de codes à quelques jetons (stockage et paramètres SQL).
+- **Dissolution topologique côté client** : Etalab ne publie pas de contour « métropole » ; les contours départementaux étant topologiquement cohérents, l'annulation des arêtes partagées donne le contour national sans dépendance (pas de turf/union) ni fichier supplémentaire.
+- **Anciennes zones non compressées** : un profil enregistré avant la compression reste en codes bruts — lu normalement, compressé automatiquement au prochain enregistrement. Aucune migration nécessaire.
+- **Offres sans code commune conservées malgré la zone** (retour utilisateur) : une offre France Travail sans `lieuTravail.commune` (télétravail, portée nationale) correspond potentiellement à tout — le filtre géographique inclut `offers.commune IS NULL` dans son OR plutôt que d'exclure ces offres.

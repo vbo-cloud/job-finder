@@ -87,12 +87,12 @@ def put_profile(
                 id=uuid.uuid4(),
                 user_id=user_id,
                 rome_codes=[],
-                location=body.location,
+                commune_codes=body.commune_codes,
                 created_at=now,
             ).on_conflict_do_update(
                 constraint="uq_user_profiles_user_id",
                 set_={
-                    "location": body.location,
+                    "commune_codes": body.commune_codes,
                 },
             )
         )

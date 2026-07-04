@@ -29,7 +29,7 @@ def _make_profile() -> MagicMock:
     profile = MagicMock()
     profile.user_id = TEST_USER_ID
     profile.rome_codes = {}
-    profile.location = "Paris"
+    profile.commune_codes = ["75101", "75102"]
     return profile
 
 
@@ -62,7 +62,7 @@ class TestGetProfile:
         assert resp.status_code == 200
         body = resp.json()
         assert body["user_id"] == TEST_USER_ID
-        assert body["location"] == "Paris"
+        assert body["commune_codes"] == ["75101", "75102"]
 
     def test_returns_404_when_profile_not_found(self, test_client, mock_session):
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
@@ -86,12 +86,12 @@ class TestGetProfile:
 
 class TestPutProfile:
     _PUT_BODY = {
-        "location": "Lyon",
+        "commune_codes": ["69381", "69382"],
     }
 
     def test_creates_or_updates_profile_and_returns_it(self, test_client, mock_session):
         profile = _make_profile()
-        profile.location = self._PUT_BODY["location"]
+        profile.commune_codes = self._PUT_BODY["commune_codes"]
         # upsert execute + select scalar_one
         mock_session.execute.return_value.scalar_one.return_value = profile
 
@@ -99,7 +99,7 @@ class TestPutProfile:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["location"] == "Lyon"
+        assert body["commune_codes"] == ["69381", "69382"]
         mock_session.commit.assert_called_once()
 
     def test_returns_500_on_db_error(self, test_client, mock_session):

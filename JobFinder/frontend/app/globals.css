@@ -71,6 +71,19 @@
   --canvas-icon-text: 255, 255, 255;
 }
 
+/* Leaflet chrome (CommuneZonePicker) — the map has no tiles: a transparent
+   background lets the stylised France sit directly on the page. The doubled
+   selector outweighs leaflet.css's own .leaflet-container rule, which is
+   injected after this file (component-level import). The focus outline is
+   only hidden for pointer interactions — keyboard users (Tab, then +/− and
+   arrows) keep the visible focus ring. */
+.leaflet-container.leaflet-container {
+  background: transparent;
+}
+.leaflet-container.leaflet-container:not(:focus-visible) {
+  outline: none;
+}
+
 @keyframes expandIn {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }

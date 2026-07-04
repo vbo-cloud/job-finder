@@ -16,7 +16,7 @@ class ProfileUpdate(BaseModel):
     the GPT-4o-mini CV analysis agent and must never be overwritten by the user.
     """
 
-    location: str | None = None
+    commune_codes: list[str] = []
 
 
 class OfferOut(BaseModel):
@@ -64,7 +64,7 @@ class ProfileOut(BaseModel):
 
     user_id: str
     rome_codes: dict[str, RomeCodeEntry]
-    location: str | None
+    commune_codes: list[str]
 
     model_config = ConfigDict(from_attributes=True)
 

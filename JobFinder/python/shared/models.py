@@ -24,6 +24,9 @@ class Offer(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     company: Mapped[str] = mapped_column(String, nullable=False)
     location: Mapped[str] = mapped_column(String, nullable=False)
+    commune: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     contract_type: Mapped[str] = mapped_column(String, nullable=False)
     rome_code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     salary: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -67,7 +70,7 @@ class UserProfile(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     rome_codes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    location: Mapped[str | None] = mapped_column(String, nullable=True)
+    commune_codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

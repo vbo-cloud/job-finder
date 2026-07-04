@@ -4,17 +4,52 @@ import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from shared.models import CV, Match, UserProfile
+from shared.models import CV, Match, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
 from schemas import MatchOut, MatchesOut
 
+DEPT_TOKEN_PREFIX = "dept:"
+
 router = APIRouter(prefix="/matches", tags=["matches"])
 logger = structlog.get_logger()
+
+
+def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
+    """Build the offer geographic condition for a stored commune zone.
+
+    The stored zone mixes plain INSEE codes with department tokens
+    ("dept:74") written by the frontend when every commune of a department
+    is selected. A token matches offers by INSEE code prefix — INSEE codes
+    always start with their department code — which keeps both the stored
+    array and the SQL parameter list small.
+
+    Offers without a commune code (remote or nationwide postings from
+    France Travail) are kept regardless of the zone: they potentially
+    apply everywhere, and remote work is relevant to someone searching
+    in a specific area.
+
+    Args:
+        commune_codes: Stored zone — INSEE codes and/or department tokens.
+
+    Returns:
+        SQLAlchemy boolean condition matching offers inside the zone.
+    """
+    codes = [c for c in commune_codes if not c.startswith(DEPT_TOKEN_PREFIX)]
+    depts = [
+        c.removeprefix(DEPT_TOKEN_PREFIX)
+        for c in commune_codes
+        if c.startswith(DEPT_TOKEN_PREFIX)
+    ]
+    conditions: list[ColumnElement[bool]] = [Offer.commune.is_(None)]
+    if codes:
+        conditions.append(Offer.commune.in_(codes))
+    conditions.extend(Offer.commune.startswith(dept, autoescape=True) for dept in depts)
+    return or_(*conditions)
 
 
 @router.get("", response_model=MatchesOut)
@@ -44,13 +79,21 @@ def get_matches(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
 
-        results = session.execute(
+        stmt = (
             select(Match)
             .join(CV, Match.cv_id == CV.id)
             .where(CV.user_id == user_id)
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
-        ).scalars().all()
+        )
+        # Hard geographic filter — offers outside the user's painted commune
+        # zone are never returned (except commune-less offers: remote or
+        # nationwide postings). An empty zone means no filtering at all.
+        if profile is not None and profile.commune_codes:
+            stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
+                _commune_zone_condition(profile.commune_codes)
+            )
+        results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
         matches = [MatchOut.model_validate(m) for m in results]
     except SQLAlchemyError:
@@ -94,12 +137,18 @@ def get_matches_for_cv(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
 
-        results = session.execute(
+        stmt = (
             select(Match)
             .where(Match.cv_id == cv_id)
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
-        ).scalars().all()
+        )
+        # Hard geographic filter — same behaviour as GET /matches.
+        if profile is not None and profile.commune_codes:
+            stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
+                _commune_zone_condition(profile.commune_codes)
+            )
+        results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
         matches = [MatchOut.model_validate(m) for m in results]
     except HTTPException:
