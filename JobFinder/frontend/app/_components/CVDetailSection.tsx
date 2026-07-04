@@ -127,6 +127,8 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
           {/* Right — Vos correspondances, aligné sur le haut du pill */}
           <div className="flex-1 min-w-0 overflow-hidden flex flex-col pt-5">
             <CorrespondancesPanel
+              key={selectedCvId}
+              cvId={selectedCvId}
               matches={matches?.matches ?? []}
               loading={loadingMatches}
               error={matchesError}

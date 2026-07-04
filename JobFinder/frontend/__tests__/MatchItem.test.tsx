@@ -138,5 +138,15 @@ describe("MatchItem", () => {
       );
       expect(screen.getByText("40 000 € brut")).toBeInTheDocument();
     });
+
+    it("renders offer description in expanded view", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, { description: "Texte complet\nde l'offre." }),
+        })} />
+      );
+      expect(screen.getByText(/Texte complet/)).toBeInTheDocument();
+    });
   });
 });

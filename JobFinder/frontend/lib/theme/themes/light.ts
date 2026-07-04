@@ -56,8 +56,8 @@ export const lightTheme: Theme = {
   /* Match / offer-card semantic */
   "--bg-match-skill":  "#e6f2ec",
   "--text-match-skill": "#12724e",
-  "--bg-new-offer":    "#fdeaea",
-  "--text-new-offer":  "#c8102e",
+  "--bg-new-offer":    "rgb(253, 234, 234)",
+  "--text-new-offer":  "rgb(200, 16, 46)",
   "--border-match":    "#1c7a56",
   "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
 
