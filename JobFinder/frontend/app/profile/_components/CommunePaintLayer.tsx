@@ -14,8 +14,9 @@ import {
   type CommuneFeature,
 } from "./communeGeo";
 
-/** Below this zoom, commune contours are neither loaded nor paintable. */
-export const MIN_PAINT_ZOOM = 7;
+/** Below this zoom, unselected commune contours are not drawn (too many polygons).
+ * Painting itself works at every zoom — the selection layer is always rendered. */
+const CONTOUR_MIN_ZOOM = 7;
 
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
@@ -33,82 +34,102 @@ function themeVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function communeStyle(selected: boolean): L.PathOptions {
-  if (selected) {
-    return {
-      color: themeVar("--border-accent"),
-      weight: 1.5,
-      fill: true,
-      // The rgba token carries its own alpha — do not multiply it by Leaflet's default fillOpacity.
-      fillColor: themeVar("--bg-accent-muted"),
-      fillOpacity: 1,
-    };
-  }
+function selectedStyle(): L.PathOptions {
+  return {
+    color: themeVar("--border-accent"),
+    weight: 1.5,
+    fill: true,
+    // The rgba token carries its own alpha — do not multiply it by Leaflet's default fillOpacity.
+    fillColor: themeVar("--bg-accent-muted"),
+    fillOpacity: 1,
+  };
+}
+
+function contourStyle(): L.PathOptions {
   return { color: themeVar("--border-subtle"), weight: 1, fill: false };
 }
 
 /**
- * Imperative Leaflet layer that loads commune contours for the departments
- * visible in the viewport and lets the user paint whole communes with a
+ * Imperative Leaflet layer that lets the user paint whole communes with a
  * circular brush: left button paints, right button erases, middle button
- * pans, the wheel zooms. Must be rendered inside a react-leaflet MapContainer.
+ * pans, the wheel zooms toward the cursor. All commune geometries are loaded
+ * up front so painting works anywhere in France at any zoom; unselected
+ * contours are only drawn from CONTOUR_MIN_ZOOM for performance.
+ * Must be rendered inside a react-leaflet MapContainer.
  */
 export default function CommunePaintLayer({ value, onChange }: CommunePaintLayerProps) {
   const map = useMap();
-  const [zoom, setZoom] = useState(() => map.getZoom());
+  const [pendingDepts, setPendingDepts] = useState<number | null>(null);
 
   const deptIndexRef = useRef<Record<string, Bbox> | null>(null);
-  const loadedDeptsRef = useRef(new Set<string>());
+  const deptFeaturesRef = useRef(new Map<string, CommuneFeature[]>());
   const communesRef = useRef(new Map<string, CommuneFeature>());
-  const layersRef = useRef(new Map<string, L.Path>());
+  const contourLayersRef = useRef(new Map<string, L.GeoJSON>());
+  const selectionGroupRef = useRef<L.GeoJSON | null>(null);
+  const selectionLayersRef = useRef(new Map<string, L.Layer>());
   const rendererRef = useRef<L.Renderer | null>(null);
 
   const selectedRef = useRef(new Set(value));
   selectedRef.current = new Set(value);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const styledSelectionRef = useRef(new Set<string>());
   const strokeRef = useRef<"paint" | "erase" | null>(null);
   const panPointRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Load the contours of every department intersecting the viewport.
+  const addSelectionFill = (code: string) => {
+    if (selectionLayersRef.current.has(code)) return;
+    const commune = communesRef.current.get(code);
+    if (!commune || !selectionGroupRef.current) return;
+    // onEachFeature (below) registers the created sublayer in selectionLayersRef.
+    selectionGroupRef.current.addData(commune.feature);
+  };
+
+  // Load the geometry of every department, keep the view locked on France,
+  // and draw unselected contours for the departments visible in the viewport.
   useEffect(() => {
     let cancelled = false;
-    const deptLayers: L.GeoJSON[] = [];
+    // The Map instances are stable — captured locally for the cleanup below.
+    const contourLayers = contourLayersRef.current;
+    const selectionLayers = selectionLayersRef.current;
     rendererRef.current = L.canvas({ padding: 0.3 });
 
-    const syncVisibleDepts = () => {
+    // The map is created with bounds fitting metropolitan France — forbid
+    // zooming out further than that initial fit.
+    map.setMinZoom(map.getZoom());
+
+    selectionGroupRef.current = L.geoJSON(undefined, {
+      style: () => ({
+        ...selectedStyle(),
+        renderer: rendererRef.current ?? undefined,
+        interactive: false,
+      }),
+      onEachFeature: (feature, lyr) =>
+        selectionLayersRef.current.set(feature.properties.code as string, lyr),
+    }).addTo(map);
+
+    const syncContourLayers = () => {
       const index = deptIndexRef.current;
-      if (!index || map.getZoom() < MIN_PAINT_ZOOM) return;
+      if (!index || map.getZoom() < CONTOUR_MIN_ZOOM) return;
       const b = map.getBounds();
       const view: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
       for (const [dept, bbox] of Object.entries(index)) {
-        if (!bboxIntersects(bbox, view) || loadedDeptsRef.current.has(dept)) continue;
-        loadedDeptsRef.current.add(dept);
-        loadDeptCommunes(dept)
-          .then((communes) => {
-            if (cancelled) return;
-            for (const commune of communes) communesRef.current.set(commune.code, commune);
-            const collection: FeatureCollection<Polygon | MultiPolygon, { code: string; nom: string }> = {
-              type: "FeatureCollection",
-              features: communes.map((c) => c.feature),
-            };
-            const layer = L.geoJSON(collection, {
-              // renderer/interactive are PathOptions — routed to each path via style().
-              style: (feature) => ({
-                ...communeStyle(selectedRef.current.has(feature?.properties.code as string)),
-                renderer: rendererRef.current ?? undefined,
-                interactive: false,
-              }),
-              onEachFeature: (feature, lyr) =>
-                layersRef.current.set(feature.properties.code as string, lyr as L.Path),
-            }).addTo(map);
-            deptLayers.push(layer);
-          })
-          .catch((err: unknown) => {
-            loadedDeptsRef.current.delete(dept);
-            console.error(`[CommunePaintLayer] loading dept ${dept} failed:`, err);
-          });
+        const communes = deptFeaturesRef.current.get(dept);
+        if (!communes || !bboxIntersects(bbox, view) || contourLayersRef.current.has(dept)) {
+          continue;
+        }
+        const collection: FeatureCollection<Polygon | MultiPolygon, { code: string; nom: string }> = {
+          type: "FeatureCollection",
+          features: communes.map((c) => c.feature),
+        };
+        const layer = L.geoJSON(collection, {
+          // renderer/interactive are PathOptions — routed to each path via style().
+          style: () => ({
+            ...contourStyle(),
+            renderer: rendererRef.current ?? undefined,
+            interactive: false,
+          }),
+        }).addTo(map);
+        contourLayersRef.current.set(dept, layer);
       }
     };
 
@@ -116,34 +137,54 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
       .then((index) => {
         if (cancelled) return;
         deptIndexRef.current = index;
-        syncVisibleDepts();
+        const depts = Object.keys(index);
+        setPendingDepts(depts.length);
+        for (const dept of depts) {
+          loadDeptCommunes(dept)
+            .then((communes) => {
+              if (cancelled) return;
+              deptFeaturesRef.current.set(dept, communes);
+              for (const commune of communes) communesRef.current.set(commune.code, commune);
+              // Fill communes that were already selected (profile reload).
+              selectedRef.current.forEach(addSelectionFill);
+              syncContourLayers();
+            })
+            .catch((err: unknown) =>
+              console.error(`[CommunePaintLayer] loading dept ${dept} failed:`, err),
+            )
+            .finally(() => {
+              if (!cancelled) setPendingDepts((n) => (n ?? 1) - 1);
+            });
+        }
       })
       .catch((err: unknown) => console.error("[CommunePaintLayer] loading index failed:", err));
 
-    const onZoomEnd = () => setZoom(map.getZoom());
-    map.on("moveend", syncVisibleDepts);
-    map.on("zoomend", onZoomEnd);
+    map.on("moveend", syncContourLayers);
     return () => {
       cancelled = true;
-      map.off("moveend", syncVisibleDepts);
-      map.off("zoomend", onZoomEnd);
-      for (const layer of deptLayers) layer.remove();
+      map.off("moveend", syncContourLayers);
+      contourLayers.forEach((layer) => layer.remove());
+      contourLayers.clear();
+      selectionGroupRef.current?.remove();
+      selectionLayers.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map]);
 
-  // Reflect the controlled selection on the rendered communes. Only layers whose
-  // state actually changed are restyled — a full pass over every loaded polygon
-  // on each paint stroke stalls the canvas renderer.
+  // Reflect the controlled selection on the always-visible selection layer.
   useEffect(() => {
     const selected = new Set(value);
-    const previous = styledSelectionRef.current;
-    selected.forEach((code) => {
-      if (!previous.has(code)) layersRef.current.get(code)?.setStyle(communeStyle(true));
+    const toRemove: string[] = [];
+    selectionLayersRef.current.forEach((_, code) => {
+      if (!selected.has(code)) toRemove.push(code);
     });
-    previous.forEach((code) => {
-      if (!selected.has(code)) layersRef.current.get(code)?.setStyle(communeStyle(false));
-    });
-    styledSelectionRef.current = selected;
+    for (const code of toRemove) {
+      const layer = selectionLayersRef.current.get(code);
+      if (layer) selectionGroupRef.current?.removeLayer(layer);
+      selectionLayersRef.current.delete(code);
+    }
+    selected.forEach(addSelectionFill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   // Mouse interactions: left = paint, right = erase, middle drag = pan.
@@ -166,15 +207,12 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const visible =
-        x >= 0 && y >= 0 && x <= rect.width && y <= rect.height &&
-        map.getZoom() >= MIN_PAINT_ZOOM;
+      const visible = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
       brush.style.display = visible ? "block" : "none";
       brush.style.transform = `translate(${x - BRUSH_RADIUS_PX}px, ${y - BRUSH_RADIUS_PX}px)`;
     };
 
     const stamp = (e: MouseEvent, erase: boolean) => {
-      if (map.getZoom() < MIN_PAINT_ZOOM) return;
       const latlng = map.mouseEventToLatLng(e);
       const metersPerPixel =
         (EARTH_CIRCUMFERENCE_M * Math.abs(Math.cos((latlng.lat * Math.PI) / 180))) /
@@ -195,7 +233,7 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
     };
 
     const onMouseDown = (e: MouseEvent) => {
-      // Clicks on Leaflet controls (zoom buttons, attribution) must not paint.
+      // Clicks on Leaflet controls (attribution links) must not paint.
       if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
       if (e.button === 0) {
         strokeRef.current = "paint";
@@ -248,11 +286,11 @@ export default function CommunePaintLayer({ value, onChange }: CommunePaintLayer
     };
   }, [map]);
 
-  if (zoom >= MIN_PAINT_ZOOM) return null;
+  if (pendingDepts !== null && pendingDepts <= 0) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center">
       <span className="rounded border border-subtle bg-surface px-3 py-1.5 text-sm text-secondary">
-        Zoomez pour afficher et peindre les communes
+        Chargement des communes…
       </span>
     </div>
   );

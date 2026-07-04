@@ -74,6 +74,20 @@
   --map-tiles: dark_all;
 }
 
+/* Leaflet chrome (CommuneZonePicker) — align the map with the site theme:
+   no light-gray tile background, no focus outline, themed attribution. */
+.leaflet-container {
+  background: var(--bg-surface);
+  outline: none;
+}
+.leaflet-container .leaflet-control-attribution {
+  background: var(--bg-surface);
+  color: var(--text-muted);
+}
+.leaflet-container .leaflet-control-attribution a {
+  color: var(--text-accent);
+}
+
 @keyframes expandIn {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }

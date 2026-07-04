@@ -2,6 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 
+import type { LatLngBoundsExpression } from "leaflet";
 import { useMemo } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 
@@ -12,8 +13,15 @@ interface CommuneZonePickerProps {
   onChange: (codes: string[]) => void;
 }
 
-const FRANCE_CENTER: [number, number] = [46.6, 2.4];
-const FRANCE_ZOOM = 6;
+/** Metropolitan France (Corsica included) — initial fit and pan limits. */
+const FRANCE_BOUNDS: LatLngBoundsExpression = [
+  [41.2, -5.6],
+  [51.3, 9.8],
+];
+const FRANCE_MAX_BOUNDS: LatLngBoundsExpression = [
+  [40.0, -8.0],
+  [52.5, 12.0],
+];
 
 /**
  * Map on which the user paints their job search zone commune by commune with
@@ -48,13 +56,16 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
       </div>
 
       <MapContainer
-        center={FRANCE_CENTER}
-        zoom={FRANCE_ZOOM}
+        bounds={FRANCE_BOUNDS}
+        maxBounds={FRANCE_MAX_BOUNDS}
+        maxBoundsViscosity={1}
+        zoomSnap={0.25}
+        zoomControl={false}
         scrollWheelZoom
         dragging={false}
         doubleClickZoom={false}
         boxZoom={false}
-        className="h-96 w-full rounded border border-default"
+        className="h-[30rem] w-full rounded border border-default"
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -65,10 +76,11 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
       </MapContainer>
 
       <p className="text-xs text-hint">
-        Molette : zoomer · clic molette : déplacer la carte · clic gauche : peindre · clic droit :
-        effacer. Le pinceau sélectionne toutes les communes qu&apos;il survole — dézoomez pour
-        couvrir une zone plus large. Sans zone peinte, aucune restriction géographique n&apos;est
-        appliquée.
+        Clic gauche : peindre · clic droit : effacer · molette : zoomer sur le curseur · clic
+        molette : déplacer. Le pinceau sélectionne toutes les communes qu&apos;il couvre —
+        dézoomez pour élargir la surface peinte d&apos;un coup. Les contours communaux
+        s&apos;affichent en zoomant, mais la peinture fonctionne à tout niveau. Sans zone peinte,
+        aucune restriction géographique n&apos;est appliquée.
       </p>
     </div>
   );
