@@ -36,6 +36,27 @@ const COMMUNE_LABEL_MIN_ZOOM = 11;
  * the short form ("12e") and only once their contours are drawn. */
 const ARRONDISSEMENT_RE = /^(?:Paris|Lyon|Marseille) (\d+(?:er|e)) Arrondissement$/;
 
+/* Labels are placed biggest-population-first and dropped when they would
+ * overlap an already-placed one, so names fill in gradually as zooming in
+ * frees screen space instead of a whole population tier popping at once.
+ * Collision boxes are estimated from the name length. */
+const LABEL_CHAR_PX = 7;
+const LABEL_HEIGHT_PX = 20;
+const LABEL_GAP_PX = 14;
+const MAX_DYNAMIC_LABELS = 200;
+
+interface PlacedLabel {
+  x: number;
+  y: number;
+  halfW: number;
+}
+
+function labelCollides(placed: PlacedLabel[], x: number, y: number, halfW: number): boolean {
+  return placed.some(
+    (p) => Math.abs(y - p.y) < LABEL_HEIGHT_PX && Math.abs(x - p.x) < p.halfW + halfW + LABEL_GAP_PX,
+  );
+}
+
 const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
 
 /* Communes already labelled through the static city tiers — skip their
@@ -90,8 +111,12 @@ function labelMinZoom(commune: CommuneFeature): number {
   return COMMUNE_LABEL_MIN_ZOOM;
 }
 
+function communeLabelText(commune: CommuneFeature): string {
+  return ARRONDISSEMENT_RE.exec(commune.nom)?.[1] ?? commune.nom;
+}
+
 function communeLabelIcon(commune: CommuneFeature): L.DivIcon {
-  const nom = ARRONDISSEMENT_RE.exec(commune.nom)?.[1] ?? commune.nom;
+  const nom = communeLabelText(commune);
   const sizeClass = commune.pop >= TOWN_MIN_POP ? "text-xs" : "text-[11px]";
   return L.divIcon({
     className: "",
@@ -193,6 +218,7 @@ export default function CommunePaintLayer({
     // visible, medium ones only from their minZoom.
     const cityMarkers = CITY_LABELS.map((city) => ({
       minZoom: city.minZoom,
+      name: city.name,
       marker: L.marker([city.lat, city.lng], {
         interactive: false,
         keyboard: false,
@@ -248,6 +274,7 @@ export default function CommunePaintLayer({
 
       const visibleCodes = new Set<string>();
       if (zoom >= TOWN_LABEL_MIN_ZOOM) {
+        const candidates: CommuneFeature[] = [];
         communesRef.current.forEach((commune) => {
           if (
             zoom < labelMinZoom(commune) ||
@@ -256,17 +283,38 @@ export default function CommunePaintLayer({
           ) {
             return;
           }
+          candidates.push(commune);
+        });
+        // Biggest towns claim their spot first; the code tie-break keeps the
+        // selection stable from one pan to the next.
+        candidates.sort((a, b) => b.pop - a.pop || a.code.localeCompare(b.code));
+
+        // The static city labels already on screen reserve their space.
+        const placed: PlacedLabel[] = [];
+        for (const city of cityMarkers) {
+          if (zoom < city.minZoom) continue;
+          const pt = map.latLngToContainerPoint(city.marker.getLatLng());
+          placed.push({ x: pt.x, y: pt.y, halfW: (city.name.length * LABEL_CHAR_PX) / 2 });
+        }
+
+        for (const commune of candidates) {
+          if (visibleCodes.size >= MAX_DYNAMIC_LABELS) break;
+          const [w, s, e, n] = commune.bbox;
+          const center = L.latLng((s + n) / 2, (w + e) / 2);
+          const pt = map.latLngToContainerPoint(center);
+          const halfW = (communeLabelText(commune).length * LABEL_CHAR_PX) / 2;
+          if (labelCollides(placed, pt.x, pt.y, halfW)) continue;
+          placed.push({ x: pt.x, y: pt.y, halfW });
           visibleCodes.add(commune.code);
           if (!communeLabelMarkers.has(commune.code)) {
-            const [w, s, e, n] = commune.bbox;
-            const marker = L.marker([(s + n) / 2, (w + e) / 2], {
+            const marker = L.marker(center, {
               interactive: false,
               keyboard: false,
               icon: communeLabelIcon(commune),
             }).addTo(map);
             communeLabelMarkers.set(commune.code, marker);
           }
-        });
+        }
       }
       communeLabelMarkers.forEach((marker, code) => {
         if (!visibleCodes.has(code)) {
