@@ -3603,3 +3603,42 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 - **`location` non touché** : le champ est hors périmètre — il sera remplacé par un système de zones communales dans `feature/profile-geo-search`. Modifier `location` ici créerait un conflit de colonne entre les deux branches.
 - **Champs supprimés intégralement** (pas masqués) : ils n'étaient référencés nulle part dans le matching — les retirer de la DB évite toute ambiguïté sur leur utilité future.
 - **Migration `downgrade()` fidèle** : recrée les colonnes avec le même type et `server_default` qu'à l'origine (`ARRAY(String)`, `NOT NULL`, `DEFAULT '{}'`) — rollback possible sans perte de contrainte.
+
+---
+
+## PR #153 — feat: recherche géographique par zone de communes peinte sur carte
+
+**Date :** 2026-07-04
+**Branche :** `feature/profile-geo-search` → `dev`
+
+### Contexte
+
+`offers.location` et `user_profiles.location` étaient de simples libellés texte, jamais utilisés comme filtre — la géolocalisation n'existait pas fonctionnellement. Or l'API France Travail renvoie pour chaque offre le code INSEE de la commune (`lieuTravail.commune`) plus ses coordonnées, champs jusqu'ici jetés à l'insertion. Puisque la précision réelle des données est la commune, la zone de recherche est définie en **peignant des communes entières** sur une carte (pas de polygone libre, pas de PostGIS) : le backend ne stocke qu'une liste de codes INSEE.
+
+### Ce qui a été fait
+
+**Backend :**
+- `shared/models.py` : `Offer` gagne `commune` (String nullable, index `ix_offers_commune`), `latitude` et `longitude` (Float nullable, pour un futur affichage cartographique). `UserProfile.location` remplacé par `commune_codes` (`ARRAY(String) NOT NULL DEFAULT '{}'`).
+- `agents/offer_fetching/main.py` : les trois champs de `lieuTravail` sont capturés dans le `values` et le `set_` de l'upsert. Pas de backfill — les offres existantes se rempliront à leur prochain passage dans le cycle de collecte.
+- `migrations/versions/013_add_commune_search.py` : ajoute les colonnes offers + index, permute `location` → `commune_codes` sur `user_profiles`. Réversibilité validée en local (`upgrade head` → `downgrade -1` → `upgrade head` sur un Postgres pgvector jetable).
+- `agents/webapp/` : `ProfileUpdate`/`ProfileOut` exposent `commune_codes: list[str]` ; `PUT /profile` upserte ce champ ; l'insert de profil par défaut (`cv.py`) initialise `commune_codes=[]`.
+- `routers/matches.py` : **filtre géographique dur** — si `profile.commune_codes` est non vide, `GET /matches` et `GET /matches/cv/{id}` joignent `offers` et ne gardent que les matches dont `Offer.commune` est dans la zone. Zone vide = comportement inchangé (aucun filtre).
+
+**Frontend :**
+- Dépendances : `leaflet`, `react-leaflet@4` (React 18), `@turf/boolean-point-in-polygon`.
+- `scripts/build-communes-geo.mjs` : télécharge les contours Etalab 2024 (simplification 1000m, licence ouverte), remplace Paris/Lyon/Marseille par leurs 45 arrondissements municipaux (les offres France Travail portent des codes INSEE d'arrondissement, ex. `75101`), et découpe en un GeoJSON par département sous `public/geo/communes/` (8,2 Mo, 35 116 communes) avec un `index.json` des bounding boxes.
+- `app/profile/_components/CommuneZonePicker.tsx` : carte Leaflet centrée sur la France, deux modes « Déplacer »/« Peindre », bouton « Réinitialiser la zone », compteur de sélection. Composant contrôlé (`value`/`onChange`), importé via `dynamic(..., { ssr: false })`.
+- `app/profile/_components/CommunePaintLayer.tsx` : charge les départements visibles dans le viewport (zoom ≥ 8) via l'index de bboxes, peint au `mousedown`+`drag` (test point-dans-polygone préfiltré par bbox), toggle au clic simple, rendu canvas.
+- `app/profile/page.tsx` : le bloc « Localisation » (input texte) est remplacé par le picker ; `handleSave` envoie `commune_codes`.
+
+**Tests :**
+- `test_webapp_profile.py` : `location` → `commune_codes` dans `_make_profile()` et `_PUT_BODY`.
+- `test_webapp_matches.py` : `_make_offer()` porte `commune="75101"`, `_make_profile()` accepte `commune_codes`. Cinq nouveaux tests valident le filtre en inspectant le statement SQL compilé passé à `session.execute` (présence/absence de `JOIN offers` et `offers.commune IN`) — pas de vraie base derrière les mocks.
+
+### Décisions techniques
+
+- **Toggle « Déplacer »/« Peindre »** : `mousedown`+`drag` sert aussi au pan de la carte — le mode Peindre désactive `map.dragging` pour que le glisser peigne au lieu de déplacer. Non prévu dans le prompt initial, mais indispensable à l'utilisabilité.
+- **Tolérance de clic (5 px)** : un vrai clic bouge toujours d'un ou deux pixels entre `mousedown` et `mouseup` ; sans seuil, il était interprété comme un drag et la désélection ne fonctionnait pas.
+- **Restyle différentiel** : ne re-styler que les communes dont l'état de sélection a changé — un passage complet sur ~1 200 polygones chargés à chaque `mousemove` gelait le renderer canvas.
+- **Couleurs via variables CSS du thème** : les paths canvas Leaflet ne sont pas stylables par classes CSS — les tokens (`--bg-accent-muted`, `--border-accent`, `--border-subtle`) sont lus par `getComputedStyle` au moment du style, même exception que `OrbitAnimation`.
+- **Arrondissements municipaux fusionnés au dataset** : peindre « Paris » entier sélectionnerait `75056`, code que France Travail n'émet jamais — le dataset contient donc les arrondissements à la place des trois communes parentes.
