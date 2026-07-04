@@ -23,9 +23,7 @@ export interface RomeCodeEntry {
 export interface ProfileData {
   user_id: string;
   rome_codes: Record<string, RomeCodeEntry>;
-  job_categories: string[];
   location: string | null;
-  contract_types: string[];
 }
 
 export interface OfferOut {
