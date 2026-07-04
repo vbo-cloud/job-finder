@@ -128,6 +128,7 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         bounds={FRANCE_BOUNDS}
         maxBounds={FRANCE_MAX_BOUNDS}
         maxBoundsViscosity={1}
+        maxZoom={14}
         zoomSnap={0.25}
         zoomControl={false}
         attributionControl={false}
@@ -148,9 +149,9 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
       <p className="text-xs text-hint">
         Clic gauche : peindre · clic droit : effacer · molette : zoomer sur le curseur · clic
         molette : déplacer. Le pinceau sélectionne toutes les communes qu&apos;il couvre —
-        dézoomez pour élargir la surface peinte d&apos;un coup. Sans zone peinte, aucune
-        restriction géographique n&apos;est appliquée. Contours administratifs © Etalab / IGN
-        (Licence Ouverte).
+        dézoomez pour élargir la surface peinte d&apos;un coup, zoomez pour voir les contours puis
+        les noms de chaque commune. Sans zone peinte, aucune restriction géographique n&apos;est
+        appliquée. Contours administratifs © Etalab / IGN (Licence Ouverte).
       </p>
     </div>
   );

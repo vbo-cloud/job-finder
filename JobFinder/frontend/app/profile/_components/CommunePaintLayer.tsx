@@ -1,22 +1,46 @@
 "use client";
 
+import type { FeatureCollection } from "geojson";
 import L from "leaflet";
 import { useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 
 import { CITY_LABELS } from "./cityLabels";
 import {
+  bboxIntersects,
   communeIntersectsCircle,
   loadDepartementContours,
   loadDeptCommunes,
   loadDeptIndex,
+  type Bbox,
   type CommuneFeature,
 } from "./communeGeo";
 
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
 
+/** From this zoom, the contours of every commune in the viewport are drawn
+ * (e.g. the Paris arrondissements become visible) and the 100m-simplified
+ * geometries are fetched per visible department to sharpen the rendering. */
+const CONTOUR_MIN_ZOOM = 10;
+
+/* Commune name labels appear progressively by population while zooming in,
+ * ending with every village at COMMUNE_LABEL_MIN_ZOOM. */
+const TOWN_LABEL_MIN_ZOOM = 9;
+const TOWN_MIN_POP = 20_000;
+const SMALL_TOWN_LABEL_MIN_ZOOM = 10;
+const SMALL_TOWN_MIN_POP = 5_000;
+const COMMUNE_LABEL_MIN_ZOOM = 11;
+
+/* Municipal arrondissements ("Paris 12e Arrondissement") are labelled with
+ * the short form ("12e") and only once their contours are drawn. */
+const ARRONDISSEMENT_RE = /^(?:Paris|Lyon|Marseille) (\d+(?:er|e)) Arrondissement$/;
+
 const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
+
+/* Communes already labelled through the static city tiers — skip their
+ * dynamic label to avoid doubled names. */
+const CITY_NAMES = new Set(CITY_LABELS.map((c) => c.name));
 
 interface CommunePaintLayerProps {
   value: string[];
@@ -54,6 +78,29 @@ function departementStyle(): L.PathOptions {
   };
 }
 
+function contourStyle(): L.PathOptions {
+  return { color: themeVar("--border-subtle"), weight: 1, fill: false };
+}
+
+/** Zoom from which a commune's name label is shown — lower for bigger towns. */
+function labelMinZoom(commune: CommuneFeature): number {
+  if (ARRONDISSEMENT_RE.test(commune.nom)) return CONTOUR_MIN_ZOOM;
+  if (commune.pop >= TOWN_MIN_POP) return TOWN_LABEL_MIN_ZOOM;
+  if (commune.pop >= SMALL_TOWN_MIN_POP) return SMALL_TOWN_LABEL_MIN_ZOOM;
+  return COMMUNE_LABEL_MIN_ZOOM;
+}
+
+function communeLabelIcon(commune: CommuneFeature): L.DivIcon {
+  const nom = ARRONDISSEMENT_RE.exec(commune.nom)?.[1] ?? commune.nom;
+  const sizeClass = commune.pop >= TOWN_MIN_POP ? "text-xs" : "text-[11px]";
+  return L.divIcon({
+    className: "",
+    html:
+      `<span class="pointer-events-none whitespace-nowrap ${sizeClass} text-muted" ` +
+      `style="position:absolute;transform:translate(-50%,-50%)">${nom}</span>`,
+  });
+}
+
 /**
  * Imperative Leaflet layer: a stylised France basemap (department contours and
  * city labels on the page background — no tiles) on which the user paints
@@ -72,6 +119,7 @@ export default function CommunePaintLayer({
   const [pendingDepts, setPendingDepts] = useState<number | null>(null);
 
   const communesRef = useRef(new Map<string, CommuneFeature>());
+  const deptIndexRef = useRef<Record<string, Bbox> | null>(null);
   const selectionGroupRef = useRef<L.GeoJSON | null>(null);
   const selectionLayersRef = useRef(new Map<string, L.Layer>());
   const rendererRef = useRef<L.Renderer | null>(null);
@@ -170,9 +218,101 @@ export default function CommunePaintLayer({
     map.on("zoomend", syncCityLabels);
     for (const { marker } of cityMarkers) baseLayers.push(marker);
 
+    // High-zoom detail: contours of every visible commune from
+    // CONTOUR_MIN_ZOOM, and name labels revealed progressively by population
+    // (big towns first, then every village) — driven by the loaded dataset.
+    let contoursLayer: L.GeoJSON | null = null;
+    const communeLabelMarkers = new Map<string, L.Marker>();
+    const syncDetailLayers = () => {
+      const zoom = map.getZoom();
+      const b = map.getBounds();
+      const view: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+
+      contoursLayer?.remove();
+      contoursLayer = null;
+      if (zoom >= CONTOUR_MIN_ZOOM) {
+        upgradeVisibleDepts(view);
+        const features: CommuneFeature["feature"][] = [];
+        communesRef.current.forEach((commune) => {
+          if (bboxIntersects(commune.bbox, view)) features.push(commune.feature);
+        });
+        const collection: FeatureCollection = { type: "FeatureCollection", features };
+        contoursLayer = L.geoJSON(collection, {
+          style: () => ({
+            ...contourStyle(),
+            renderer: rendererRef.current ?? undefined,
+            interactive: false,
+          }),
+        }).addTo(map);
+      }
+
+      const visibleCodes = new Set<string>();
+      if (zoom >= TOWN_LABEL_MIN_ZOOM) {
+        communesRef.current.forEach((commune) => {
+          if (
+            zoom < labelMinZoom(commune) ||
+            !bboxIntersects(commune.bbox, view) ||
+            CITY_NAMES.has(commune.nom)
+          ) {
+            return;
+          }
+          visibleCodes.add(commune.code);
+          if (!communeLabelMarkers.has(commune.code)) {
+            const [w, s, e, n] = commune.bbox;
+            const marker = L.marker([(s + n) / 2, (w + e) / 2], {
+              interactive: false,
+              keyboard: false,
+              icon: communeLabelIcon(commune),
+            }).addTo(map);
+            communeLabelMarkers.set(commune.code, marker);
+          }
+        });
+      }
+      communeLabelMarkers.forEach((marker, code) => {
+        if (!visibleCodes.has(code)) {
+          marker.remove();
+          communeLabelMarkers.delete(code);
+        }
+      });
+    };
+    map.on("moveend", syncDetailLayers);
+
+    // Once zoomed in, swap each visible department for its 100m-simplified
+    // geometry (fetched once) so contours and selection match the zoom level —
+    // the always-loaded 1000m set stays good enough for the country-wide view.
+    const hdDepts = new Set<string>();
+    const upgradeVisibleDepts = (view: Bbox) => {
+      const index = deptIndexRef.current;
+      if (!index) return;
+      for (const [dept, bbox] of Object.entries(index)) {
+        // Overseas territories have no HD files — the map cannot reach them.
+        if (hdDepts.has(dept) || /^9[78]/.test(dept) || !bboxIntersects(bbox, view)) continue;
+        hdDepts.add(dept);
+        loadDeptCommunes(dept, true)
+          .then((communes) => {
+            if (cancelled) return;
+            for (const commune of communes) communesRef.current.set(commune.code, commune);
+            // Redraw the fills of already-selected communes with HD geometry.
+            selectedRef.current.forEach((code) => {
+              const layer = selectionLayersRef.current.get(code);
+              if (!layer || communesRef.current.get(code)?.dept !== dept) return;
+              selectionGroupRef.current?.removeLayer(layer);
+              selectionLayersRef.current.delete(code);
+              addSelectionFill(code);
+            });
+            syncDetailLayers();
+          })
+          .catch((err: unknown) => {
+            hdDepts.delete(dept);
+            console.error(`[CommunePaintLayer] loading HD dept ${dept} failed:`, err);
+          });
+      }
+    };
+
     loadDeptIndex()
       .then((index) => {
         if (cancelled) return;
+        deptIndexRef.current = index;
         const depts = Object.keys(index);
         let remaining = depts.length;
         setPendingDepts(remaining);
@@ -180,7 +320,12 @@ export default function CommunePaintLayer({
           loadDeptCommunes(dept)
             .then((communes) => {
               if (cancelled) return;
-              for (const commune of communes) communesRef.current.set(commune.code, commune);
+              for (const commune of communes) {
+                // Never downgrade a commune already swapped to HD geometry.
+                if (!communesRef.current.has(commune.code)) {
+                  communesRef.current.set(commune.code, commune);
+                }
+              }
               // Fill communes that were already selected (profile reload).
               selectedRef.current.forEach(addSelectionFill);
             })
@@ -193,6 +338,8 @@ export default function CommunePaintLayer({
               setPendingDepts(remaining);
               if (remaining === 0) {
                 onCommunesLoadedRef.current(Array.from(communesRef.current.keys()));
+                // The user may already be zoomed in on a detail level.
+                syncDetailLayers();
               }
             });
         }
@@ -202,6 +349,10 @@ export default function CommunePaintLayer({
     return () => {
       cancelled = true;
       map.off("zoomend", syncCityLabels);
+      map.off("moveend", syncDetailLayers);
+      contoursLayer?.remove();
+      communeLabelMarkers.forEach((marker) => marker.remove());
+      communeLabelMarkers.clear();
       for (const layer of baseLayers) layer.remove();
       selectionGroupRef.current?.remove();
       selectionLayers.clear();

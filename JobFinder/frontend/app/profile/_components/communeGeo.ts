@@ -4,16 +4,23 @@ import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from
 /** Bounding box as [west, south, east, north]. */
 export type Bbox = [number, number, number, number];
 
-export type CommuneGeometry = Feature<Polygon | MultiPolygon, { code: string; nom: string }>;
+export type CommuneGeometry = Feature<
+  Polygon | MultiPolygon,
+  { code: string; nom: string; pop: number }
+>;
 
 export interface CommuneFeature {
   code: string;
   nom: string;
+  /** Population (0 when unknown) — drives the zoom level at which the name label appears. */
+  pop: number;
+  dept: string;
   bbox: Bbox;
   feature: CommuneGeometry;
 }
 
 const GEO_BASE = "/geo/communes";
+const GEO_HD_BASE = "/geo/communes-hd";
 
 /** Load the department contours used as the stylised basemap. */
 export async function loadDepartementContours(): Promise<
@@ -33,14 +40,21 @@ export async function loadDeptIndex(): Promise<Record<string, Bbox>> {
   return res.json() as Promise<Record<string, Bbox>>;
 }
 
-/** Load one department's commune contours and precompute per-feature bboxes. */
-export async function loadDeptCommunes(dept: string): Promise<CommuneFeature[]> {
-  const res = await fetch(`${GEO_BASE}/${dept}.geojson`);
+/**
+ * Load one department's commune contours and precompute per-feature bboxes.
+ * `hd` picks the 100m-simplified variant (metropolitan departments only)
+ * used for detailed rendering at high zoom; the default 1000m variant is
+ * light enough to load for the whole country up front.
+ */
+export async function loadDeptCommunes(dept: string, hd = false): Promise<CommuneFeature[]> {
+  const res = await fetch(`${hd ? GEO_HD_BASE : GEO_BASE}/${dept}.geojson`);
   if (!res.ok) throw new Error(`Failed to load communes for dept ${dept} (HTTP ${res.status})`);
   const collection = (await res.json()) as { features: CommuneGeometry[] };
   return collection.features.map((feature) => ({
     code: feature.properties.code,
     nom: feature.properties.nom,
+    pop: feature.properties.pop ?? 0,
+    dept,
     bbox: computeBbox(feature.geometry.coordinates),
     feature,
   }));
