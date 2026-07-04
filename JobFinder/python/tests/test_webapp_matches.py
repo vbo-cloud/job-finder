@@ -36,6 +36,7 @@ def _make_offer() -> MagicMock:
     offer.title = "Développeur Python"
     offer.company = "ACME"
     offer.location = "Paris (75)"
+    offer.commune = "75101"
     offer.contract_type = "CDI"
     offer.description = "Description complète de l'offre de test."
     offer.salary = None
@@ -52,11 +53,14 @@ def _make_match(score: float = 0.85) -> MagicMock:
     return match
 
 
-def _make_profile(rome_codes: dict | None = None) -> MagicMock:
+def _make_profile(
+    rome_codes: dict | None = None, commune_codes: list[str] | None = None
+) -> MagicMock:
     profile = MagicMock()
     profile.rome_codes = rome_codes or {
         "M1805": {"cv_ids": [str(TEST_CV_ID)], "label": "Dev info"}
     }
+    profile.commune_codes = commune_codes or []
     return profile
 
 
@@ -130,6 +134,48 @@ class TestGetMatches:
 
         assert resp.status_code == 500
 
+    def test_filters_by_commune_when_zone_is_defined(self, test_client, mock_session):
+        profile = _make_profile(commune_codes=["75101", "75102"])
+        match = _make_match(0.9)
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        # No real DB behind the mock — validate the geographic filter by
+        # inspecting the compiled statement passed to session.execute.
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "JOIN offers" in stmt
+        assert "offers.commune IN" in stmt
+
+    def test_no_commune_filter_when_zone_is_empty(self, test_client, mock_session):
+        profile = _make_profile(commune_codes=[])
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": []}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune" not in stmt
+
+    def test_no_commune_filter_when_no_profile(self, test_client, mock_session):
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            MagicMock(**{"scalars.return_value.all.return_value": []}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune" not in stmt
+
 
 # ---------------------------------------------------------------------------
 # GET /matches/cv/{cv_id}
@@ -153,6 +199,40 @@ class TestGetMatchesForCv:
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["matches"]) == 1
+
+    def test_filters_by_commune_when_zone_is_defined(self, test_client, mock_session):
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        profile = _make_profile(commune_codes=["13201"])
+        match = _make_match(0.75)
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[2].args[0])
+        assert "JOIN offers" in stmt
+        assert "offers.commune IN" in stmt
+
+    def test_no_commune_filter_when_zone_is_empty(self, test_client, mock_session):
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        profile = _make_profile(commune_codes=[])
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": []}),
+        ]
+
+        resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[2].args[0])
+        assert "offers.commune" not in stmt
 
     def test_returns_404_when_cv_not_found_or_not_owned(self, test_client, mock_session):
         mock_session.execute.return_value.scalar_one_or_none.return_value = None

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from shared.models import CV, Match, UserProfile
+from shared.models import CV, Match, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
 from schemas import MatchOut, MatchesOut
@@ -44,13 +44,20 @@ def get_matches(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
 
-        results = session.execute(
+        stmt = (
             select(Match)
             .join(CV, Match.cv_id == CV.id)
             .where(CV.user_id == user_id)
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
-        ).scalars().all()
+        )
+        # Hard geographic filter — offers outside the user's painted commune
+        # zone are never returned. An empty zone means no filtering at all.
+        if profile is not None and profile.commune_codes:
+            stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
+                Offer.commune.in_(profile.commune_codes)
+            )
+        results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
         matches = [MatchOut.model_validate(m) for m in results]
     except SQLAlchemyError:
@@ -94,12 +101,18 @@ def get_matches_for_cv(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
 
-        results = session.execute(
+        stmt = (
             select(Match)
             .where(Match.cv_id == cv_id)
             .options(selectinload(Match.offer))
             .order_by(Match.score.desc())
-        ).scalars().all()
+        )
+        # Hard geographic filter — same behaviour as GET /matches.
+        if profile is not None and profile.commune_codes:
+            stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
+                Offer.commune.in_(profile.commune_codes)
+            )
+        results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
         matches = [MatchOut.model_validate(m) for m in results]
     except HTTPException:
