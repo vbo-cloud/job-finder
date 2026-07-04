@@ -3,11 +3,11 @@
 import "leaflet/dist/leaflet.css";
 
 import type { LatLngBoundsExpression } from "leaflet";
-import { Redo2, Undo2 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { ChevronRight, Redo2, Undo2 } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { MapContainer } from "react-leaflet";
 
-import CommunePaintLayer from "./CommunePaintLayer";
+import CommunePaintLayer, { type SelectableCommune } from "./CommunePaintLayer";
 
 interface CommuneZonePickerProps {
   value: string[];
@@ -27,16 +27,26 @@ const FRANCE_MAX_BOUNDS: LatLngBoundsExpression = [
 /** Undo/redo depth — one entry per brush stroke or toolbar action. */
 const HISTORY_LIMIT = 50;
 
+/** Numeric department order, with Corsica (2A/2B) slotted after 20. */
+function deptSortKey(dept: string): number {
+  if (dept === "2A") return 20.1;
+  if (dept === "2B") return 20.2;
+  return Number.parseInt(dept, 10);
+}
+
 /**
  * Stylised France map (no tiles — department contours on the page background)
  * on which the user paints their job search zone commune by commune with a
  * circular brush. Selected INSEE codes are controlled by the parent through
- * value/onChange; undo/redo history is kept per brush stroke.
+ * value/onChange; undo/redo history is kept per brush stroke. The selection
+ * is summarised live below the map, grouped by department.
  */
 export default function CommuneZonePicker({ value, onChange }: CommuneZonePickerProps) {
   const [past, setPast] = useState<string[][]>([]);
   const [future, setFuture] = useState<string[][]>([]);
-  const [allCodes, setAllCodes] = useState<string[] | null>(null);
+  const [communes, setCommunes] = useState<SelectableCommune[] | null>(null);
+  const [deptNoms, setDeptNoms] = useState<Record<string, string>>({});
+  const [openDepts, setOpenDepts] = useState<Set<string>>(new Set());
 
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -48,7 +58,48 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     setFuture([]);
   }, []);
 
-  const handleCommunesLoaded = useCallback((codes: string[]) => setAllCodes(codes), []);
+  const handleCommunesLoaded = useCallback(
+    (list: SelectableCommune[], noms: Record<string, string>) => {
+      setCommunes(list);
+      setDeptNoms(noms);
+    },
+    [],
+  );
+
+  const communeByCode = useMemo(
+    () => new Map((communes ?? []).map((c) => [c.code, c])),
+    [communes],
+  );
+
+  const deptTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const c of communes ?? []) totals.set(c.dept, (totals.get(c.dept) ?? 0) + 1);
+    return totals;
+  }, [communes]);
+
+  // Live selection summary: departments in numeric order; the commune lists
+  // are only sorted (and rendered) for the departments the user unfolds.
+  const selectedByDept = useMemo(() => {
+    const groups = new Map<string, SelectableCommune[]>();
+    for (const code of value) {
+      const commune = communeByCode.get(code);
+      if (!commune) continue;
+      const group = groups.get(commune.dept);
+      if (group) group.push(commune);
+      else groups.set(commune.dept, [commune]);
+    }
+    return Array.from(groups.entries()).sort(
+      (a, b) => deptSortKey(a[0]) - deptSortKey(b[0]) || a[0].localeCompare(b[0]),
+    );
+  }, [value, communeByCode]);
+
+  const toggleDept = (dept: string) =>
+    setOpenDepts((prev) => {
+      const next = new Set(prev);
+      if (next.has(dept)) next.delete(dept);
+      else next.add(dept);
+      return next;
+    });
 
   const undo = () => {
     if (past.length === 0) return;
@@ -67,9 +118,9 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
   };
 
   const selectAll = () => {
-    if (!allCodes) return;
+    if (!communes) return;
     snapshot();
-    onChange(allCodes);
+    onChange(communes.map((c) => c.code));
   };
 
   const reset = () => {
@@ -86,7 +137,7 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         <button
           type="button"
           onClick={selectAll}
-          disabled={allCodes === null}
+          disabled={communes === null}
           className={toolButtonClass}
         >
           Tout sélectionner
@@ -146,12 +197,54 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         />
       </MapContainer>
 
+      {selectedByDept.length > 0 && (
+        <div className="max-h-80 overflow-y-auto rounded border border-subtle">
+          {selectedByDept.map(([dept, list]) => {
+            const open = openDepts.has(dept);
+            const total = deptTotals.get(dept);
+            return (
+              <div key={dept} className="border-b border-subtle last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() => toggleDept(dept)}
+                  aria-expanded={open}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-body hover:bg-solid-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  <ChevronRight
+                    className={`h-4 w-4 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {dept} — {deptNoms[dept] ?? dept}
+                  </span>
+                  <span className="ml-auto text-xs text-muted">
+                    {list.length}
+                    {total !== undefined && ` / ${total}`} commune{list.length > 1 ? "s" : ""}
+                  </span>
+                </button>
+                {open && (
+                  <div className="flex flex-wrap gap-1.5 px-3 pb-3 pl-9">
+                    {[...list]
+                      .sort((a, b) => a.nom.localeCompare(b.nom, "fr"))
+                      .map((commune) => (
+                        <span
+                          key={commune.code}
+                          title={commune.code}
+                          className="rounded bg-solid-secondary px-2 py-0.5 text-xs text-body"
+                        >
+                          {commune.nom}
+                        </span>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <p className="text-xs text-hint">
-        Clic gauche : peindre · clic droit : effacer · molette : zoomer sur le curseur · clic
-        molette : déplacer. Le pinceau sélectionne toutes les communes qu&apos;il couvre —
-        dézoomez pour élargir la surface peinte d&apos;un coup, zoomez pour voir les contours puis
-        les noms de chaque commune. Sans zone peinte, aucune restriction géographique n&apos;est
-        appliquée. Contours administratifs © Etalab / IGN (Licence Ouverte).
+        Contours administratifs © Etalab / IGN (Licence Ouverte).
       </p>
     </div>
   );

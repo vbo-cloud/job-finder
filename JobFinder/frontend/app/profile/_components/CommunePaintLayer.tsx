@@ -14,7 +14,15 @@ import {
   loadDeptIndex,
   type Bbox,
   type CommuneFeature,
+  type DeptIndexEntry,
 } from "./communeGeo";
+
+/** Commune identity forwarded to the parent for the selection summary. */
+export interface SelectableCommune {
+  code: string;
+  nom: string;
+  dept: string;
+}
 
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
@@ -83,8 +91,9 @@ interface CommunePaintLayerProps {
   onChange: (codes: string[]) => void;
   /** Called once per brush stroke, before its first effective change — undo snapshot hook. */
   onStrokeStart: () => void;
-  /** Called once when every commune geometry is loaded, with the full list of INSEE codes. */
-  onCommunesLoaded: (codes: string[]) => void;
+  /** Called once when every commune geometry is loaded, with the full commune
+   * list and the department code → name mapping. */
+  onCommunesLoaded: (communes: SelectableCommune[], deptNoms: Record<string, string>) => void;
 }
 
 /* Leaflet canvas paths cannot be styled through CSS classes — colors are read
@@ -159,7 +168,7 @@ export default function CommunePaintLayer({
   const [pendingDepts, setPendingDepts] = useState<number | null>(null);
 
   const communesRef = useRef(new Map<string, CommuneFeature>());
-  const deptIndexRef = useRef<Record<string, Bbox> | null>(null);
+  const deptIndexRef = useRef<Record<string, DeptIndexEntry> | null>(null);
   const selectionGroupRef = useRef<L.GeoJSON | null>(null);
   const selectionLayersRef = useRef(new Map<string, L.Layer>());
   const rendererRef = useRef<L.Renderer | null>(null);
@@ -348,9 +357,9 @@ export default function CommunePaintLayer({
     const upgradeVisibleDepts = (view: Bbox) => {
       const index = deptIndexRef.current;
       if (!index) return;
-      for (const [dept, bbox] of Object.entries(index)) {
+      for (const [dept, entry] of Object.entries(index)) {
         // Overseas territories have no HD files — the map cannot reach them.
-        if (hdDepts.has(dept) || /^9[78]/.test(dept) || !bboxIntersects(bbox, view)) continue;
+        if (hdDepts.has(dept) || /^9[78]/.test(dept) || !bboxIntersects(entry.bbox, view)) continue;
         hdDepts.add(dept);
         loadDeptCommunes(dept, true)
           .then((communes) => {
@@ -401,7 +410,16 @@ export default function CommunePaintLayer({
               remaining -= 1;
               setPendingDepts(remaining);
               if (remaining === 0) {
-                onCommunesLoadedRef.current(Array.from(communesRef.current.keys()));
+                const list = Array.from(communesRef.current.values(), (c) => ({
+                  code: c.code,
+                  nom: c.nom,
+                  dept: c.dept,
+                }));
+                const deptNoms: Record<string, string> = {};
+                for (const [dept, entry] of Object.entries(deptIndexRef.current ?? {})) {
+                  deptNoms[dept] = entry.nom;
+                }
+                onCommunesLoadedRef.current(list, deptNoms);
                 // The user may already be zoomed in on a detail level.
                 syncDetailLayers();
               }

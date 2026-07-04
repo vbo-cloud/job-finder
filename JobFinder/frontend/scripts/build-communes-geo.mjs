@@ -15,7 +15,7 @@
  * Output:
  *   public/geo/communes/<dept>.geojson     — 1000m FeatureCollection per department
  *   public/geo/communes-hd/<dept>.geojson  — 100m FeatureCollection (metropolitan only)
- *   public/geo/communes/index.json         — department code -> [W, S, E, N] bbox
+ *   public/geo/communes/index.json         — department code -> { bbox: [W,S,E,N], nom }
  *   public/geo/departements.geojson        — department contours (stylised basemap)
  *
  * Usage: node scripts/build-communes-geo.mjs
@@ -151,11 +151,17 @@ async function main() {
 
   const byDept = groupByDept(cleanCommunes(communes, popByCode));
 
+  const deptNoms = new Map(
+    departements.features.map((f) => [f.properties.code, f.properties.nom]),
+  );
   const index = {};
   for (const [dept, deptFeatures] of [...byDept.entries()].sort()) {
     const bbox = [Infinity, Infinity, -Infinity, -Infinity];
     for (const f of deptFeatures) extendBbox(bbox, f.geometry.coordinates);
-    index[dept] = bbox.map((v) => Math.round(v * 1e4) / 1e4);
+    index[dept] = {
+      bbox: bbox.map((v) => Math.round(v * 1e4) / 1e4),
+      nom: deptNoms.get(dept) ?? dept,
+    };
   }
   await writeDeptFiles(byDept, OUT_DIR);
   await writeFile(path.join(OUT_DIR, "index.json"), JSON.stringify(index));
