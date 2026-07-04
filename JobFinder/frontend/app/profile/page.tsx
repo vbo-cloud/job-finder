@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 // Leaflet touches window/document at import time — client-only.
 const CommuneZonePicker = dynamic(() => import("./_components/CommuneZonePicker"), {
   ssr: false,
-  loading: () => <div className="h-96 w-full animate-pulse rounded bg-card" />,
+  loading: () => <div className="h-[50rem] w-full animate-pulse rounded bg-card" />,
 });
 
 export default function ProfilePage() {
@@ -95,7 +95,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
+    <main className="mx-auto max-w-6xl px-6 py-12">
       <div className="mb-8 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-strong">Mon profil</h1>
         <Link href="/" className="text-sm text-accent hover:underline">

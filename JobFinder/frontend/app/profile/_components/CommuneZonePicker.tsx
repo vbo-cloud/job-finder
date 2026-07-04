@@ -135,7 +135,7 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         dragging={false}
         doubleClickZoom={false}
         boxZoom={false}
-        className="h-[30rem] w-full"
+        className="h-[50rem] w-full"
       >
         <CommunePaintLayer
           value={value}

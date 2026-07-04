@@ -4,6 +4,7 @@ import L from "leaflet";
 import { useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 
+import { CITY_LABELS } from "./cityLabels";
 import {
   communeIntersectsCircle,
   loadDepartementContours,
@@ -16,24 +17,6 @@ import {
 const BRUSH_RADIUS_PX = 24;
 
 const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
-
-/** Reference cities rendered as labels — the stylised basemap has no tiles. */
-const CITY_LABELS: [string, number, number][] = [
-  ["Paris", 48.8566, 2.3522],
-  ["Marseille", 43.2965, 5.3698],
-  ["Lyon", 45.764, 4.8357],
-  ["Toulouse", 43.6045, 1.4442],
-  ["Nice", 43.7102, 7.262],
-  ["Nantes", 47.2184, -1.5536],
-  ["Montpellier", 43.6119, 3.8772],
-  ["Strasbourg", 48.5734, 7.7521],
-  ["Bordeaux", 44.8378, -0.5792],
-  ["Lille", 50.6292, 3.0573],
-  ["Rennes", 48.1173, -1.6778],
-  ["Clermont-Ferrand", 45.7772, 3.087],
-  ["Dijon", 47.322, 5.0415],
-  ["Ajaccio", 41.9192, 8.7386],
-];
 
 interface CommunePaintLayerProps {
   value: string[];
@@ -158,17 +141,34 @@ export default function CommunePaintLayer({
         console.error("[CommunePaintLayer] loading departements failed:", err),
       );
 
-    for (const [name, lat, lng] of CITY_LABELS) {
-      const marker = L.marker([lat, lng], {
+    // City labels appear progressively: the biggest cities are always
+    // visible, medium ones only from their minZoom.
+    const cityMarkers = CITY_LABELS.map((city) => ({
+      minZoom: city.minZoom,
+      marker: L.marker([city.lat, city.lng], {
         interactive: false,
         keyboard: false,
         icon: L.divIcon({
           className: "",
-          html: `<span class="pointer-events-none whitespace-nowrap text-xs text-muted">${name}</span>`,
+          html: `<span class="pointer-events-none whitespace-nowrap text-xs ${
+            city.minZoom === 0 ? "text-secondary" : "text-muted"
+          }">${city.name}</span>`,
         }),
-      }).addTo(map);
-      baseLayers.push(marker);
-    }
+      }),
+    }));
+    const syncCityLabels = () => {
+      const zoom = map.getZoom();
+      for (const { marker, minZoom } of cityMarkers) {
+        if (zoom >= minZoom) {
+          if (!map.hasLayer(marker)) marker.addTo(map);
+        } else if (map.hasLayer(marker)) {
+          marker.remove();
+        }
+      }
+    };
+    syncCityLabels();
+    map.on("zoomend", syncCityLabels);
+    for (const { marker } of cityMarkers) baseLayers.push(marker);
 
     loadDeptIndex()
       .then((index) => {
@@ -201,6 +201,7 @@ export default function CommunePaintLayer({
 
     return () => {
       cancelled = true;
+      map.off("zoomend", syncCityLabels);
       for (const layer of baseLayers) layer.remove();
       selectionGroupRef.current?.remove();
       selectionLayers.clear();
@@ -279,6 +280,9 @@ export default function CommunePaintLayer({
     const onMouseDown = (e: MouseEvent) => {
       // Clicks on Leaflet controls must not paint.
       if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
+      // preventDefault() below suppresses the implicit focus — restore it so
+      // Leaflet keyboard navigation (+/- and arrows) keeps working.
+      container.focus({ preventScroll: true });
       if (e.button === 0) {
         strokeRef.current = "paint";
         strokeSnapshottedRef.current = false;
