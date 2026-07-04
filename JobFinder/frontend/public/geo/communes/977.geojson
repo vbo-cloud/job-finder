@@ -1,1 +1,1 @@
-{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"code":"97701","nom":"Saint-Barthélemy"},"geometry":{"type":"Polygon","coordinates":[[[-62.866,17.913],[-62.84,17.904],[-62.809,17.916],[-62.798,17.897],[-62.837,17.878],[-62.866,17.913]]]}}]}
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"code":"97701","nom":"Saint-Barthélemy","pop":10660},"geometry":{"type":"Polygon","coordinates":[[[-62.866,17.913],[-62.84,17.904],[-62.809,17.916],[-62.798,17.897],[-62.837,17.878],[-62.866,17.913]]]}}]}
