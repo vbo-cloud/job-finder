@@ -195,6 +195,7 @@ export default function CommunePaintLayer({
     // The Map instance is stable — captured locally for the cleanup below.
     const selectionLayers = selectionLayersRef.current;
     const baseLayers: L.Layer[] = [];
+    let departementsLayer: L.GeoJSON | null = null;
 
     // The map is created with bounds fitting metropolitan France — forbid
     // zooming out further than that initial fit.
@@ -220,7 +221,7 @@ export default function CommunePaintLayer({
       .then((departements) => {
         if (cancelled) return;
         const baseRenderer = L.canvas({ padding: 0.3, pane: "franceBase" });
-        const layer = L.geoJSON(departements, {
+        departementsLayer = L.geoJSON(departements, {
           pane: "franceBase",
           style: () => ({
             ...departementStyle(),
@@ -228,7 +229,7 @@ export default function CommunePaintLayer({
             interactive: false,
           }),
         }).addTo(map);
-        baseLayers.push(layer);
+        baseLayers.push(departementsLayer);
 
         // National outline shown while the selection is empty — empty zone
         // means "no geographic restriction", i.e. the whole of France.
@@ -396,6 +397,22 @@ export default function CommunePaintLayer({
       }
     };
 
+    // Canvas paths capture their colors at style time — when the theme
+    // switches (applyTheme rewrites the CSS variables on <html>), re-read
+    // the tokens and re-style every themed layer. Labels and the brush use
+    // CSS variables directly and follow the theme on their own.
+    const restyleThemedLayers = () => {
+      selectionGroupRef.current?.setStyle(selectedStyle());
+      departementsLayer?.setStyle(departementStyle());
+      contoursLayer?.setStyle(contourStyle());
+      franceOutlineRef.current?.setStyle({ color: themeVar("--border-accent") });
+    };
+    const themeObserver = new MutationObserver(restyleThemedLayers);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+
     loadDeptIndex()
       .then((index) => {
         if (cancelled) return;
@@ -444,6 +461,7 @@ export default function CommunePaintLayer({
 
     return () => {
       cancelled = true;
+      themeObserver.disconnect();
       map.off("zoomend", syncCityLabels);
       map.off("moveend", syncDetailLayers);
       contoursLayer?.remove();
