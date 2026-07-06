@@ -39,9 +39,12 @@ interface Props {
   matches: MatchOut[];
   loading: boolean;
   error: string | null;
+  /** Called once a match is confirmed marked seen server-side, so the parent
+   * can refresh the library's unseen_count badge for this CV. */
+  onMatchSeen?: () => void;
 }
 
-export default function CorrespondancesPanel({ cvId, matches, loading, error }: Props) {
+export default function CorrespondancesPanel({ cvId, matches, loading, error, onMatchSeen }: Props) {
   const [tab, setTab]               = useState<"Matchs" | "Review">("Matchs");
   const [query, setQuery]           = useState("");
   const [sort, setSort]             = useState<SortKey>("score");
@@ -67,9 +70,12 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error }: 
         persistSeenId(cvId, next);
         return next;
       });
-      apiClient.patch(`/cv/${cvId}/matches/${id}/seen`).catch((err: unknown) => {
-        console.error("[jf] mark_match_seen failed:", err);
-      });
+      apiClient
+        .patch(`/cv/${cvId}/matches/${id}/seen`)
+        .then(() => onMatchSeen?.())
+        .catch((err: unknown) => {
+          console.error("[jf] mark_match_seen failed:", err);
+        });
     }
   }
   function toggleSaved(id: string) {

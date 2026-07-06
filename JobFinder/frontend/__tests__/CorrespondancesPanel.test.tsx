@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CorrespondancesPanel from "@/app/_components/CorrespondancesPanel";
 import type { MatchOut } from "@/lib/api/types";
 
@@ -86,5 +86,45 @@ describe("CorrespondancesPanel — localStorage contract", () => {
 
     const ids = JSON.parse(localStorage.getItem(LS_KEY)!) as string[];
     expect(ids.filter((id) => id === OFFER_ID)).toHaveLength(1);
+  });
+});
+
+describe("CorrespondancesPanel — onMatchSeen callback", () => {
+  it("calls onMatchSeen once the seen PATCH resolves, so the library badge can refresh", async () => {
+    const onMatchSeen = jest.fn();
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch()]}
+        loading={false}
+        error={null}
+        onMatchSeen={onMatchSeen}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+
+    await waitFor(() => expect(onMatchSeen).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not call onMatchSeen again when the same offer is collapsed and re-expanded", async () => {
+    const onMatchSeen = jest.fn();
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch()]}
+        loading={false}
+        error={null}
+        onMatchSeen={onMatchSeen}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /Ingénieur Cloud/i });
+    fireEvent.click(btn); // open — marks seen
+    await waitFor(() => expect(onMatchSeen).toHaveBeenCalledTimes(1));
+    fireEvent.click(btn); // close
+    fireEvent.click(btn); // re-open — already in seenIds, no new PATCH
+
+    expect(onMatchSeen).toHaveBeenCalledTimes(1);
   });
 });
