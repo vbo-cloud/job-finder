@@ -499,3 +499,21 @@ la fenêtre du navigateur sans que le `mouseup` soit délivré → `paintingRef`
 `true` et bloque la sortie par molette jusqu'au clic suivant. Durcissement possible :
 réinitialiser l'état de trait (`strokeRef`, `onPaintingChange(false)`) sur
 `window.blur` dans `CommunePaintLayer`.
+
+---
+
+## Filtre géographique department fallback (feature/fix-commune-zone-department-fallback) — suites identifiées en review
+
+### [optional] Index composite/partiel sur offers (commune, department)
+`_commune_zone_condition()` filtre systématiquement `commune IS NULL AND department IN (...)`
+comme une unité — actuellement couvert par deux index simple-colonne (`ix_offers_commune`,
+`ix_offers_department`). Un index composite `(commune, department)`, ou mieux, un index partiel
+`ON department WHERE commune IS NULL`, serait plus ciblé et plus petit. Pas urgent avec le volume
+actuel (~5000 offres) ; à revisiter si la table grossit significativement.
+
+### [optional] Chunker la lecture des migrations de backfill sur grosses tables
+La migration `014_add_offer_department.py` charge tout le résultat de
+`SELECT id, location FROM offers WHERE commune IS NULL` en mémoire via `fetchall()` avant de
+backfiller. Sans risque pour le volume actuel (~3000 lignes), mais si une future migration de
+backfill doit toucher un ordre de grandeur plus élevé de lignes, prévoir une lecture par lots
+(curseur serveur ou pagination `LIMIT`/`OFFSET`) plutôt qu'un chargement complet en mémoire.
