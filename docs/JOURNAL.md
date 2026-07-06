@@ -3712,3 +3712,36 @@ La carte de communes (PR #153) ne vivait que sur `/profile`. Vision produit : la
 - **Sauvegarde par debounce plutôt qu'au clic sur le bouton profil** — accrocher la sauvegarde à `AuthButton` (monté globalement dans `layout.tsx`) exigerait un état partagé global pour un bénéfice minime ; le debounce + flush à la sortie couvre tous les cas (bouton profil, changement d'onglet, fermeture).
 - **Molette uniquement, pas de tactile** — la peinture est déjà souris uniquement (backlog « Support tactile du pinceau de communes ») ; la transition suit. Piste `Escape` signalée en commentaire, non bloquante.
 - **Pinceau masqué par hit-test réel** — `elementFromPoint` contenu dans le conteneur : couvre le mode accueil et les transitions sans prop supplémentaire, `/profile` inchangé.
+
+---
+
+## PR #155 — fix: repli département pour les offres sans code commune dans le filtre de zone
+
+**Date :** 2026-07-06
+**Branche :** `feature/fix-commune-zone-department-fallback` → `dev`
+
+### Contexte
+
+Retour utilisateur après le merge de PR #153/#154 : peindre et enregistrer une zone communale sur `/profile` n'avait aucun effet visible sur `/matches`. Diagnostic confirmé par requêtes live en lecture seule sur la base dev (autorisation explicite de l'utilisateur, accès via `az containerapp exec` dans le webapp — Postgres est en VNet privé, aucun accès direct possible depuis l'extérieur) plutôt que par simple lecture de code : `_commune_zone_condition()` (`routers/matches.py`) OR-ait `Offer.commune.is_(None)` sans condition, pensé (PR #153) pour laisser passer les offres remote/nationales. En pratique, 3128 offres sur 5002 (62,5 %) ont `commune = NULL` au moment du diagnostic, et l'écrasante majorité de ces offres ne sont pas remote : leur `location` contient une ville ordinaire (`"75 - Paris"`, `"31 - Toulouse"`, `"69 - Lyon"`...) — France Travail laisse souvent le code INSEE structuré vide même quand le libellé texte donne une vraie ville (lacune de qualité de donnée côté source, pas un bug d'ingestion). Sur une zone de test (01/38/42/69), le filtre ne réduisait que 5002 → 3344 résultats au lieu des 216 offres réellement dans la zone — le bypass noyait le signal utile.
+
+*Aparté sécurité relevé pendant l'investigation, hors périmètre de cette PR :* un seul rôle Postgres (superutilisateur) existe côté infra, partagé par le webapp public et tous les jobs batch (même chaîne de connexion admin injectée partout) — pas de séparation de privilèges par service. Signalé à l'utilisateur pour arbitrage avec Claude Cowork, non traité ici.
+
+### Ce qui a été fait
+
+**Backend :**
+- `shared/geo.py` (nouveau) : `parse_department_from_location()` extrait un code département depuis le libellé texte France Travail (`"75 - Paris"` → `"75"`, gère Corse `2A`/`2B` et DOM/TOM `97x` ; retourne `None` pour `"France"`, `"Luxembourg"`, vide ou absent). `department_from_commune()` dérive le département depuis un code INSEE déjà connu. Deux fonctions pures, sans accès DB/réseau.
+- `shared/models.py` : `Offer` gagne `department` (String nullable, index `ix_offers_department`).
+- `agents/offer_fetching/main.py` : `department` dérivé de `lieuTravail.libelle` à chaque cycle de fetch/upsert, indépendamment de la présence de `commune`.
+- `migrations/versions/014_add_offer_department.py` : ajoute la colonne + index, backfill des offres déjà en base où `commune IS NULL` (relit `location`, aucun rappel à l'API France Travail nécessaire). Réversibilité et idempotence vérifiées sur un conteneur `pgvector/pgvector:pg16` jetable (`upgrade head` → `downgrade -1` → `upgrade head` reproduit un backfill identique sur des lignes de test Paris/Corse/Guadeloupe/"France").
+- `routers/matches.py` : `_commune_zone_condition()` retravaillée — le bypass inconditionnel devient un repli département, **gated derrière `commune IS NULL`** : une offre avec un `commune` connu hors zone n'est jamais repêchée par une correspondance de département (le commune précis prime), et seules les offres où ni `commune` ni `department` ne sont déterminables gardent le bypass total (ex. `"France"`, `"Luxembourg"`).
+
+**Tests :**
+- `test_geo.py` (nouveau) : cas Paris/Corse/DOM-TOM/valeurs non résolvables pour les deux helpers.
+- `test_webapp_matches.py` : nouveaux tests directs sur `_commune_zone_condition` (inclusion via département, exclusion hors zone, bypass restreint, non-repêchage d'un commune précis hors zone via `and_`). L'assertion multi-départements compare l'ensemble des valeurs du `IN(...)` plutôt qu'un ordre littéral fixe — les sets Python n'ont pas d'ordre d'itération garanti pour des chaînes (hash randomisé), l'assertion à ordre fixe échouait sous certaines valeurs de `PYTHONHASHSEED` (reproduit empiriquement avant correction).
+
+### Décisions techniques
+
+- **Repli département plutôt que rappel à l'API France Travail** : le backfill ne relit que la colonne `location` déjà en base — aucune dépendance à la disponibilité de l'API France Travail pour une migration, cohérent avec la façon dont `commune`/`latitude`/`longitude` avaient été ajoutés en PR #153.
+- **Repli gated derrière `commune IS NULL`** : `department` est renseigné pour **toutes** les offres à l'ingestion (pas seulement celles sans commune) — un simple OR sur `Offer.department.in_(departments)` aurait pu repêcher une offre au commune précis mais hors zone via une coïncidence de département. Le repli et le bypass total partagent donc le même garde-fou `and_(Offer.commune.is_(None), ...)`.
+- **Diagnostic vérifié en conditions réelles avant l'implémentation** : requêtes de comptage live sur la base dev (`commune IS NULL`, échantillon de `location`, simulation de la zone 01/38/42/69) plutôt qu'une hypothèse basée sur la seule lecture du code — a permis d'écarter une piste concurrente (staleness du fetch côté frontend) et de confirmer que le bypass NULL était bien la cause dominante.
+- **Nettoyage post-review en 6 commits atomiques** : rebase sur `dev` (PR #154 mergée entretemps, conflit résolu sur `docs/BACKLOG.md`) puis reconstruction de l'historique via `git reset --soft` + recommits ciblés par fichier plutôt qu'un rebase interactif (non supporté par l'outillage) — les correctifs de retour de review (test non déterministe, clarification de contrat) sont repliés dans leurs commits d'origine plutôt que de rester des commits « fixup » séparés.
