@@ -17,7 +17,7 @@ from azure.servicebus.exceptions import ServiceBusError
 from azure.storage.blob import BlobServiceClient
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from pdfminer.pdfparser import PDFSyntaxError
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, select, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -25,9 +25,10 @@ from sqlalchemy.orm import Session
 from shared.bus import send_message
 from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
-from shared.models import CV, Match, UserProfile
+from shared.models import CV, Match, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
+from routers.matches import commune_zone_condition
 from schemas import CVListItemOut, CVUploadOut
 
 router = APIRouter(prefix="/cv", tags=["cv"])
@@ -338,6 +339,12 @@ def list_cvs(
 ) -> list[CVListItemOut]:
     """Return all CVs belonging to the authenticated user.
 
+    Both match_count and unseen_count only count matches whose offer falls
+    inside the user's painted commune zone (same geographic filter as
+    GET /matches) — otherwise the library could advertise matches, new or
+    not, that never appear in the matches list actually shown for the
+    selected zone.
+
     Args:
         user_id: Authenticated user ID from the JWT sub claim.
         session: Active database session.
@@ -347,12 +354,25 @@ def list_cvs(
     """
     logger.info("cv_list_started", user_id=user_id)
     try:
+        profile = session.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        ).scalar_one_or_none()
+
+        zone_condition = (
+            commune_zone_condition(profile.commune_codes)
+            if profile is not None and profile.commune_codes
+            else true()
+        )
+
         match_count_sq = (
             select(
                 Match.cv_id,
-                func.count(Match.id).label("match_count"),
-                func.count(Match.id).filter(Match.seen_at.is_(None)).label("unseen_count"),
+                func.count(Match.id).filter(zone_condition).label("match_count"),
+                func.count(Match.id)
+                .filter(and_(Match.seen_at.is_(None), zone_condition))
+                .label("unseen_count"),
             )
+            .join(Offer, Match.offer_id == Offer.id)
             .group_by(Match.cv_id)
             .subquery()
         )

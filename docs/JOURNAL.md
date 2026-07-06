@@ -3782,3 +3782,51 @@ Le second : `HomeMapSection`, `LibrarySection` et `CVDetailSection` sont des sec
 - **Diagnostic vérifié sur données réelles avant implémentation** : comptage live sur la base dev (offres à région nue, simulation zone Lyon-only) plutôt qu'une hypothèse de code seul — a confirmé les 17 offres région comme cause du bypass excessif.
 - **`zoneVersion` bumped après succès du `PUT /profile`, pas avant** : un bump optimiste aurait pu déclencher un refetch avant que la zone soit effectivement persistée, courant le risque de lire l'ancienne zone côté backend.
 - **Compteur plutôt que ref de zone brute** : `CVDetailSection` n'a besoin de savoir *qu'*un changement a eu lieu, pas de connaître la zone elle-même — un entier incrémental évite de propager `commune_codes` à travers `HomeClient` jusqu'à un composant qui ne les utilise pas directement.
+
+---
+
+## PR #157 — fix: badge vert de la bibliothèque non rafraîchi à la consultation, non filtré par zone
+
+**Date :** 2026-07-06
+**Branche :** `fix/library-unseen-count-refresh` → `dev`
+
+### Contexte
+
+Retour utilisateur : le badge vert `+N` affiché sur chaque carte CV de la bibliothèque (nombre de nouveaux matchs) ne réagissait à rien après le chargement initial. Deux angles morts distincts :
+
+1. Consulter (déplier) une offre dans `CorrespondancesPanel` appelle bien `PATCH /cv/{cv_id}/matches/{offer_id}/seen`, mais aucun signal ne remontait jusqu'à `LibrarySection` pour redemander `GET /cv/` — le badge restait figé sur la valeur du chargement initial jusqu'au prochain upload ou poll.
+2. `list_cvs` (`GET /cv/`) calculait `unseen_count` (et `match_count`) par un simple `COUNT(...)` sur `Match`, sans jointure ni filtre géographique — contrairement à `GET /matches` et `GET /matches/cv/{cv_id}` qui appliquent `_commune_zone_condition()` (PR #155/#156). La bibliothèque pouvait donc annoncer des matchs (nouveaux ou non) hors de la zone peinte par l'utilisateur, qui n'apparaissent jamais dans la liste réellement affichée.
+
+Retour de test supplémentaire une fois le premier correctif en place : le total gris (`X matchs`) devait lui aussi respecter la zone sélectionnée sur la carte, pas seulement le badge vert — élargi au cours de cette même PR plutôt que de rouvrir un ticket séparé.
+
+**Découverte en testant manuellement les deux correctifs ci-dessus** (frontend local pointé sur le backend dev déployé) : la console navigateur montrait `Access to XMLHttpRequest ... has been blocked by CORS policy` sur chaque `PATCH .../seen`, avec `AxiosError: Network Error` côté client. `CORSMiddleware` (`main.py`) n'incluait pas `PATCH` dans `allow_methods` depuis son ajout en PR (commit `cc93c99`, « feat: add configurable CORS middleware to webapp API ») — le preflight `OPTIONS` du navigateur pour toute requête `PATCH` cross-origin échouait donc systématiquement, et la requête réelle n'atteignait jamais le backend. Bug préexistant, indépendant des deux points ci-dessus : consulter une offre ne persistait `seen_at` côté serveur **dans aucune version antérieure du frontend** — seul le marquage local (`localStorage`, introduit en PR #151) donnait l'illusion que ça fonctionnait (le badge « Nouveau » disparaît côté client indépendamment du serveur). Sans ce correctif, les deux points 1 et 2 restent invérifiables en conditions réelles : le badge de la bibliothèque ne peut jamais refléter une consultation, quel que soit l'état du reste du code.
+
+**Angle mort supplémentaire signalé par l'utilisateur en revue** : le cache `seenIds` (`localStorage`) de PR #151 sert non seulement à masquer instantanément le badge « Nouveau » côté client, mais aussi de garde (`!seenIds.has(id)`) décidant si le `PATCH .../seen` est envoyé au backend — une fois un id dans ce cache, plus aucune tentative n'est refaite. Conséquence directe du bug CORS : toute offre consultée pendant la période où le `PATCH` échouait silencieusement reste marquée « traitée » côté client à vie, sans que le backend n'ait jamais reçu le signal — le badge vert de la bibliothèque resterait donc faux indéfiniment pour ces offres précises, même après le correctif CORS, sans readjustement automatique.
+
+### Ce qui a été fait
+
+**Backend :**
+- `main.py` : `allow_methods` de `CORSMiddleware` gagne `"PATCH"` — sans ça, `PATCH /cv/{cv_id}/matches/{offer_id}/seen` et `PATCH /cv/{cv_id}/mark-all-seen` échouent silencieusement (bloqués par le navigateur avant même d'atteindre FastAPI, aucune trace côté serveur).
+- `routers/matches.py` : `_commune_zone_condition()` renommée en `commune_zone_condition` (perd son underscore, désormais partagée entre routers, logique inchangée).
+- `routers/cv.py` : `list_cvs` récupère le `UserProfile` de l'utilisateur et calcule un `zone_condition` unique (`commune_zone_condition(profile.commune_codes)` si `commune_codes` est non vide, sinon `true()`), appliqué aux deux `COUNT(...) FILTER` — `match_count` filtré par `zone_condition` seul, `unseen_count` par `and_(seen_at IS NULL, zone_condition)` — avec jointure `Match.offer_id == Offer.id`. La jointure vers `Offer` est une inner join sans risque : `offer_id` est une FK `NOT NULL`, donc aucune ligne n'est perdue quand la zone est vide (`true()` ne filtre rien).
+
+**Frontend :**
+- `HomeClient.tsx` : `uploadCount` renommé `libraryRefreshTrigger` (portée élargie, pas seulement les uploads) et incrémenté aussi dans `handleZoneSaved` et dans un nouveau `handleMatchSeen`, passé à `CVDetailSection` → `CorrespondancesPanel`.
+- `CorrespondancesPanel.tsx` : `toggleExpand` chaîne `onMatchSeen?.()` après succès du `PATCH .../seen` (pas avant, pour ne pas rafraîchir avant que `seen_at` soit réellement committé côté backend). Nouvel effet de réconciliation : à chaque changement de `matches`, toute offre où le backend dit encore `is_new: true` alors que le cache local la considère déjà traitée déclenche un nouveau `PATCH .../seen` en tâche de fond — le backend reste la seule source de vérité, `localStorage` ne sert plus qu'à l'affichage instantané, jamais à décider définitivement qu'une tentative ne doit plus être refaite.
+
+**Tests :**
+- `test_webapp_main.py` (nouveau) : `allow_methods` de `CORSMiddleware` contient `PATCH` et les méthodes attendues — importe `main.py` avec `BlobServiceClient` patché (même technique que `test_webapp_cv.py`), sans déclencher le lifespan (donc sans tenter de connexion DB réelle).
+- `test_webapp_matches.py` : import mis à jour (`commune_zone_condition`).
+- `test_webapp_cv.py` : 3 nouveaux tests sur `list_cvs` — `match_count` et `unseen_count` tous deux filtrés quand `commune_codes` est renseigné (assertion sur le nombre d'occurrences de la condition de zone dans le SQL compilé, une par `FILTER`), non filtrés quand la zone est vide ou qu'il n'y a pas de profil.
+- `CorrespondancesPanel.test.tsx` : 4 nouveaux tests — `onMatchSeen` appelé une fois le PATCH résolu, pas rappelé sur un cycle replier/redéplier de la même offre (déjà dans `seenIds`) ; retry automatique quand `is_new: true` + id déjà dans le cache local, pas de retry quand le backend confirme déjà vu.
+
+Vérifié par tests unitaires (pytest + jest) et `tsc --noEmit`/`eslint` sans erreur, et par test manuel réel qui a révélé le bug CORS (console navigateur) ; le correctif CORS lui-même n'a pas encore pu être revérifié en conditions réelles puisqu'il nécessite un déploiement (backend non exécutable en local — DB en VNet privé).
+
+### Décisions techniques
+
+- **CORS traité comme faisant partie de cette PR plutôt qu'un ticket séparé** : découvert en testant les deux correctifs ci-dessus, et bloquant leur vérification même une fois mergés — sans lui, aucune consultation d'offre ne peut jamais faire bouger le badge, peu importe le reste.
+- **Le backend arbitre, jamais le cache local** : `seenIds` gardait jusqu'ici le double rôle d'affichage instantané *et* de garde définitive contre un nouvel envoi — un échec silencieux (CORS ou autre) devenait donc permanent et invisible. L'effet de réconciliation retire ce second rôle : `localStorage` reste utile pour l'UX immédiate, mais seul `is_new` du backend décide si une tentative doit être refaite.
+- **`match_count` et `unseen_count` partagent le même `zone_condition`** plutôt que deux conditions construites séparément : un seul appel à `commune_zone_condition()`, moins de risque de désynchronisation entre les deux compteurs si la logique de zone évolue.
+- **`true()` comme condition neutre plutôt qu'un branchement de requête séparé** : évite de dupliquer la construction du `select(...)` selon que la zone soit vide ou non — un seul chemin de code, la même sous-requête dans tous les cas.
+- **Renommage `_commune_zone_condition` → `commune_zone_condition` sans déplacer le fichier** : `cv.py` importe la fonction directement depuis `routers.matches` plutôt que de créer un nouveau module partagé — la fonction reste à un seul endroit, `routers/` est déjà un package important en absolu ailleurs dans les tests (`from routers.matches import ...`).
+- **Rafraîchir après le succès du PATCH, pas de façon optimiste** : même raisonnement que `zoneVersion` en PR #156 — éviter de redemander `GET /cv/` avant que `seen_at` soit committé, ce qui redonnerait l'ancien `unseen_count`.

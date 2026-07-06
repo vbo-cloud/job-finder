@@ -1,6 +1,7 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CorrespondancesPanel from "@/app/_components/CorrespondancesPanel";
+import apiClient from "@/lib/api/client";
 import type { MatchOut } from "@/lib/api/types";
 
 jest.mock("@/lib/api/client", () => ({
@@ -46,6 +47,7 @@ function renderPanel(matches: MatchOut[] = [makeMatch()]) {
 
 beforeEach(() => {
   localStorage.clear();
+  (apiClient.patch as jest.Mock).mockClear();
 });
 
 describe("CorrespondancesPanel — localStorage contract", () => {
@@ -86,5 +88,86 @@ describe("CorrespondancesPanel — localStorage contract", () => {
 
     const ids = JSON.parse(localStorage.getItem(LS_KEY)!) as string[];
     expect(ids.filter((id) => id === OFFER_ID)).toHaveLength(1);
+  });
+});
+
+describe("CorrespondancesPanel — onMatchSeen callback", () => {
+  it("calls onMatchSeen once the seen PATCH resolves, so the library badge can refresh", async () => {
+    const onMatchSeen = jest.fn();
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch()]}
+        loading={false}
+        error={null}
+        onMatchSeen={onMatchSeen}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+
+    await waitFor(() => expect(onMatchSeen).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not call onMatchSeen again when the same offer is collapsed and re-expanded", async () => {
+    const onMatchSeen = jest.fn();
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch()]}
+        loading={false}
+        error={null}
+        onMatchSeen={onMatchSeen}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /Ingénieur Cloud/i });
+    fireEvent.click(btn); // open — marks seen
+    await waitFor(() => expect(onMatchSeen).toHaveBeenCalledTimes(1));
+    fireEvent.click(btn); // close
+    fireEvent.click(btn); // re-open — already in seenIds, no new PATCH
+
+    expect(onMatchSeen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CorrespondancesPanel — stale local cache reconciliation", () => {
+  it("retries the seen PATCH when the backend still reports is_new for an offer the local cache already marked handled", async () => {
+    // Simulates a previous mark-seen attempt that silently failed server-side
+    // (e.g. the CORS misconfiguration): the local cache says "handled" but
+    // the backend's is_new is still true — the backend must win, and the
+    // PATCH must be retried rather than trusting localStorage forever.
+    localStorage.setItem(LS_KEY, JSON.stringify([OFFER_ID]));
+    const onMatchSeen = jest.fn();
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch({ is_new: true })]}
+        loading={false}
+        error={null}
+        onMatchSeen={onMatchSeen}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(apiClient.patch).toHaveBeenCalledWith(
+        `/cv/${CV_ID}/matches/${OFFER_ID}/seen`,
+      ),
+    );
+    await waitFor(() => expect(onMatchSeen).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not retry when the backend already confirms the offer as seen", () => {
+    localStorage.setItem(LS_KEY, JSON.stringify([OFFER_ID]));
+    render(
+      <CorrespondancesPanel
+        cvId={CV_ID}
+        matches={[makeMatch({ is_new: false })]}
+        loading={false}
+        error={null}
+      />,
+    );
+
+    expect(apiClient.patch).not.toHaveBeenCalled();
   });
 });

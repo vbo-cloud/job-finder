@@ -14,10 +14,13 @@ interface Props {
    * matches list is refetched to reflect the new geographic filter, since
    * this section stays mounted across zone changes (no route change). */
   zoneVersion?: number;
+  /** Called whenever a match is marked seen, so the parent can refresh the
+   * library's unseen_count badge for this CV. */
+  onMatchSeen?: () => void;
 }
 
 const CVDetailSection = forwardRef<HTMLElement, Props>(
-  ({ cvs, selectedCvId, onCvChange, onClose, zoneVersion }, ref) => {
+  ({ cvs, selectedCvId, onCvChange, onClose, zoneVersion, onMatchSeen }, ref) => {
     const currentIndex  = cvs.findIndex((cv) => cv.id === selectedCvId);
     const currentCv     = cvs[currentIndex] ?? null;
     const prevCv        = cvs[currentIndex - 1] ?? null;
@@ -136,6 +139,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               matches={matches?.matches ?? []}
               loading={loadingMatches}
               error={matchesError}
+              onMatchSeen={onMatchSeen}
             />
           </div>
         </div>

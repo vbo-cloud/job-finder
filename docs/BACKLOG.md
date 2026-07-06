@@ -517,3 +517,38 @@ La migration `014_add_offer_department.py` charge tout le résultat de
 backfiller. Sans risque pour le volume actuel (~3000 lignes), mais si une future migration de
 backfill doit toucher un ordre de grandeur plus élevé de lignes, prévoir une lecture par lots
 (curseur serveur ou pagination `LIMIT`/`OFFSET`) plutôt qu'un chargement complet en mémoire.
+
+---
+
+## Badge bibliothèque — zone, refresh et CORS (fix/library-unseen-count-refresh, PR #157) — suites identifiées en review
+
+### [optional] Nettoyer `seenIds` si le retry de réconciliation échoue aussi
+`CorrespondancesPanel.tsx` retente le `PATCH .../seen` quand le backend dit encore
+`is_new: true` pour une offre déjà dans le cache local — mais si ce retry échoue aussi
+(réseau, 5xx transitoire), l'id reste dans `seenIds` sans qu'aucun signal ne permette de
+le retenter avant le prochain remontage de l'effet (nouveau fetch de `matches` : sélection
+d'un autre CV, changement de zone, ou rechargement de page). Fenêtre étroite en pratique,
+mais retirer l'id de `seenIds`/`localStorage` dans le `.catch()` permettrait un retry plus
+rapide sans attendre un déclencheur externe.
+
+### [optional] Garde anti-course sur `refreshTrigger` / `fetchCvs`
+`LibrarySection.fetchCvs` n'a aucune protection contre les réponses hors-ordre (pas
+d'`AbortController` ni de compteur de séquence) — si `refreshTrigger` est incrémenté deux
+fois rapprochées (ex. sauvegarde de zone suivie immédiatement d'une consultation d'offre,
+tous deux câblés sur ce compteur depuis PR #157), une réponse plus ancienne arrivant après
+une plus récente écraserait l'état avec des données périmées. Rare et sans conséquence
+grave (le badge se corrige au déclencheur suivant), mais à durcir si `LibrarySection` gagne
+un jour un debounce ou si les déclencheurs se multiplient.
+
+### [optional] Extraire la réconciliation `seenIds` en hook dédié
+L'effet de réconciliation dans `CorrespondancesPanel.tsx` (retry du `PATCH .../seen` quand
+le backend contredit le cache local) pourrait devenir un hook `useStaleSeenReconciliation(matches, cvId, seenIdsRef, onMatchSeen)` — rendrait l'intention explicite au point d'appel et le
+comportement testable indépendamment du reste du composant, qui gère déjà plusieurs
+préoccupations (tri, filtres, sélection, sauvegarde).
+
+### [optional] Déplacer `commune_zone_condition` vers `shared/` si un 3e router en a besoin
+`cv.py` importe actuellement `commune_zone_condition` directement depuis `routers.matches`
+(couplage router-à-router). Acceptable tant que seul `cv.py` en dépend en plus de son
+propre module ; si un troisième router a un jour besoin du filtre géographique, déplacer
+la fonction vers un module partagé (ex. `shared/db_filters.py`) pour rendre la dépendance
+explicite plutôt que de laisser les routers s'importer mutuellement.

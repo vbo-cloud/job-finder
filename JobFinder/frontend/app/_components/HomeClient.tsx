@@ -12,7 +12,9 @@ interface OptimisticUpload {
 }
 
 export default function HomeClient() {
-  const [uploadCount, setUploadCount]             = useState(0);
+  // Bumped on upload, zone save, and marking a match seen — anything that can
+  // change a CV's unseen_count badge in the library.
+  const [libraryRefreshTrigger, setLibraryRefreshTrigger] = useState(0);
   const [libraryAccessible, setLibraryAccessible] = useState(false);
   const [optimisticUpload, setOptimisticUpload]   = useState<OptimisticUpload | null>(null);
   const [selectedCvId, setSelectedCvId]           = useState<string | null>(null);
@@ -38,7 +40,7 @@ export default function HomeClient() {
   const handleUploadComplete = useCallback((cvId: string) => {
     uploadedCvIdRef.current = cvId;
     setOptimisticUpload((prev) => (prev ? { ...prev, cvId } : null));
-    setUploadCount((n) => n + 1);
+    setLibraryRefreshTrigger((n) => n + 1);
   }, []);
 
   const handleAnimationComplete = useCallback((thumbnailUrl: string) => {
@@ -71,6 +73,13 @@ export default function HomeClient() {
 
   const handleZoneSaved = useCallback(() => {
     setZoneVersion((v) => v + 1);
+    setLibraryRefreshTrigger((n) => n + 1);
+  }, []);
+
+  // A match was marked seen while viewing a CV's offers — the library badge
+  // (unseen_count) needs a fresh GET /cv/ to reflect it.
+  const handleMatchSeen = useCallback(() => {
+    setLibraryRefreshTrigger((n) => n + 1);
   }, []);
 
   return (
@@ -84,7 +93,7 @@ export default function HomeClient() {
         onZoneSaved={handleZoneSaved}
       />
       <LibrarySection
-        refreshTrigger={uploadCount}
+        refreshTrigger={libraryRefreshTrigger}
         onAccessibilityChange={setLibraryAccessible}
         optimisticUpload={optimisticUpload}
         onOptimisticConsumed={handleOptimisticConsumed}
@@ -99,6 +108,7 @@ export default function HomeClient() {
           onCvChange={setSelectedCvId} // arrow nav: already on section, no scroll needed
           onClose={handleCloseDetail}
           zoneVersion={zoneVersion}
+          onMatchSeen={handleMatchSeen}
         />
       )}
     </main>
