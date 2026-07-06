@@ -10,10 +10,14 @@ interface Props {
   selectedCvId: string;
   onCvChange: (id: string) => void;
   onClose: () => void;
+  /** Bumped whenever the commune zone is saved elsewhere on the page — the
+   * matches list is refetched to reflect the new geographic filter, since
+   * this section stays mounted across zone changes (no route change). */
+  zoneVersion?: number;
 }
 
 const CVDetailSection = forwardRef<HTMLElement, Props>(
-  ({ cvs, selectedCvId, onCvChange, onClose }, ref) => {
+  ({ cvs, selectedCvId, onCvChange, onClose, zoneVersion }, ref) => {
     const currentIndex  = cvs.findIndex((cv) => cv.id === selectedCvId);
     const currentCv     = cvs[currentIndex] ?? null;
     const prevCv        = cvs[currentIndex - 1] ?? null;
@@ -37,7 +41,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
           setMatchesError(status ? `Erreur ${status}` : "Erreur réseau");
         })
         .finally(() => setLoadingMatches(false));
-    }, [selectedCvId]);
+    }, [selectedCvId, zoneVersion]);
 
     useEffect(() => {
       if (!currentCv?.has_thumbnail) { setThumbnailSrc(null); return; }

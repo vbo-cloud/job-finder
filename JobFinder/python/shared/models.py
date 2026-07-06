@@ -26,6 +26,7 @@ class Offer(Base):
     location: Mapped[str] = mapped_column(String, nullable=False)
     commune: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     department: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    region: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     contract_type: Mapped[str] = mapped_column(String, nullable=False)

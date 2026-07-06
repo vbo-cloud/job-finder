@@ -17,6 +17,7 @@ export default function HomeClient() {
   const [optimisticUpload, setOptimisticUpload]   = useState<OptimisticUpload | null>(null);
   const [selectedCvId, setSelectedCvId]           = useState<string | null>(null);
   const [cvList, setCvList]                       = useState<CVData[]>([]);
+  const [zoneVersion, setZoneVersion]             = useState(0);
   const detailRef                                  = useRef<HTMLElement>(null);
 
   // Holds the cv_id from POST /cv/upload so we can set it on the optimistic
@@ -68,6 +69,10 @@ export default function HomeClient() {
     document.getElementById("library")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  const handleZoneSaved = useCallback(() => {
+    setZoneVersion((v) => v + 1);
+  }, []);
+
   return (
     <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
       <HomeMapSection
@@ -76,6 +81,7 @@ export default function HomeClient() {
           onAnimationComplete: handleAnimationComplete,
           libraryAccessible,
         }}
+        onZoneSaved={handleZoneSaved}
       />
       <LibrarySection
         refreshTrigger={uploadCount}
@@ -92,6 +98,7 @@ export default function HomeClient() {
           selectedCvId={selectedCvId}
           onCvChange={setSelectedCvId} // arrow nav: already on section, no scroll needed
           onClose={handleCloseDetail}
+          zoneVersion={zoneVersion}
         />
       )}
     </main>

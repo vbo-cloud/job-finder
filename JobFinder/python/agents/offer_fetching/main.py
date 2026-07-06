@@ -24,7 +24,7 @@ from shared.bus import send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.embedder import embed
-from shared.geo import parse_department_from_location
+from shared.geo import parse_department_from_location, parse_region_from_location
 from shared.models import Offer, UserProfile
 from shared.telemetry import configure_telemetry
 
@@ -114,6 +114,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
             "location": libelle,
             "commune": raw.get("lieuTravail", {}).get("commune"),
             "department": parse_department_from_location(libelle),
+            "region": parse_region_from_location(libelle),
             "latitude": raw.get("lieuTravail", {}).get("latitude"),
             "longitude": raw.get("lieuTravail", {}).get("longitude"),
             "contract_type": raw.get("typeContratLibelle", "Non renseigné"),
@@ -136,6 +137,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
                     "location": insert_stmt.excluded.location,
                     "commune": insert_stmt.excluded.commune,
                     "department": insert_stmt.excluded.department,
+                    "region": insert_stmt.excluded.region,
                     "latitude": insert_stmt.excluded.latitude,
                     "longitude": insert_stmt.excluded.longitude,
                     "contract_type": insert_stmt.excluded.contract_type,

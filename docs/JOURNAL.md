@@ -3745,3 +3745,40 @@ Retour utilisateur après le merge de PR #153/#154 : peindre et enregistrer une 
 - **Repli gated derrière `commune IS NULL`** : `department` est renseigné pour **toutes** les offres à l'ingestion (pas seulement celles sans commune) — un simple OR sur `Offer.department.in_(departments)` aurait pu repêcher une offre au commune précis mais hors zone via une coïncidence de département. Le repli et le bypass total partagent donc le même garde-fou `and_(Offer.commune.is_(None), ...)`.
 - **Diagnostic vérifié en conditions réelles avant l'implémentation** : requêtes de comptage live sur la base dev (`commune IS NULL`, échantillon de `location`, simulation de la zone 01/38/42/69) plutôt qu'une hypothèse basée sur la seule lecture du code — a permis d'écarter une piste concurrente (staleness du fetch côté frontend) et de confirmer que le bypass NULL était bien la cause dominante.
 - **Nettoyage post-review en 6 commits atomiques** : rebase sur `dev` (PR #154 mergée entretemps, conflit résolu sur `docs/BACKLOG.md`) puis reconstruction de l'historique via `git reset --soft` + recommits ciblés par fichier plutôt qu'un rebase interactif (non supporté par l'outillage) — les correctifs de retour de review (test non déterministe, clarification de contrat) sont repliés dans leurs commits d'origine plutôt que de rester des commits « fixup » séparés.
+
+---
+
+## PR #156 — fix: repli région pour la zone de matching, refetch des correspondances au changement de zone
+
+**Date :** 2026-07-06
+**Branche :** `fix/matches-refresh-on-zone-change` → `dev`
+
+### Contexte
+
+Deux angles morts distincts découverts après le merge de PR #155, tous deux via retour utilisateur en usage réel plutôt que par relecture de code.
+
+Le premier : requêtes live sur la base dev ont montré que le repli département de PR #155 laissait encore passer 17 offres portant un libellé **région** (« Île-de-France », « Bourgogne-Franche-Comté », « Centre-Val de Loire ») sans aucun code département — France Travail donne parfois un nom de région nu plutôt qu'un libellé « DD - Ville » — via le bypass inconditionnel, faisant apparaître ces offres même en peignant un unique département sans rapport (ex. Lyon seul). `DEPARTMENT_PREFIX_RE` manquait par ailleurs `98[6-9]` (Wallis-et-Futuna, Polynésie française, Nouvelle-Calédonie), faisant tomber des offres comme « 987 - Papeete » à `department = NULL`.
+
+Le second : `HomeMapSection`, `LibrarySection` et `CVDetailSection` sont des sections sœurs montées en permanence sur la page d'accueil (scroll-snap, jamais démontées) — peindre une nouvelle zone puis revenir à la vue des offres affichait des correspondances périmées, le fetch de `CVDetailSection` ne dépendant que de `selectedCvId`, sans signal que la zone (et donc les résultats) avait changé.
+
+### Ce qui a été fait
+
+**Backend :**
+- `shared/geo.py` : `DEPARTMENT_PREFIX_RE` reconnaît désormais `98[6-9]` ; `department_from_commune()` traite les codes commune `98x`. Ajout de `parse_region_from_location()` et `regions_intersecting()` — table `REGION_DEPARTMENTS` couvrant les 13 régions métropolitaines et les 5 DROM mono-départementaux, normalisation accents/apostrophes/casse (`_normalize_region`) car la donnée source est incohérente (« Île-de-France » et « Ile-de-France » coexistent).
+- `shared/models.py` / `agents/offer_fetching/main.py` : `Offer.region` (indexée, nullable), peuplée depuis `lieuTravail.libelle` à chaque cycle fetch/upsert, même schéma que `commune`/`department`.
+- `migrations/versions/015_add_offer_region.py` : ajoute la colonne + index ; re-parse le département des lignes que la migration 014 avait manquées (`98[6-9]` pas encore reconnu) ; backfille `region` pour les lignes où `commune` et `department` restent NULL. Réversibilité et idempotence vérifiées sur un conteneur `pgvector/pgvector:pg16` jetable (`upgrade head` → `downgrade -1` → `upgrade head` reproduit le même backfill), y compris une ligne Papeete passant de `department=NULL` à `department="987"`, des lignes Île-de-France/Bourgogne-Franche-Comté recevant leur région, et une ligne « France »/Luxembourg restant intégralement non résolue.
+- `routers/matches.py` : `_commune_zone_condition()` passe de deux à trois niveaux de repli — commune → département → région, chacun gated derrière l'inconnu du niveau précédent. Une offre à département connu hors zone n'est jamais repêchée par une coïncidence de région (même règle de préséance que département sous commune). Seules les offres où ni commune, ni département, ni région ne sont déterminables (« France », « Luxembourg ») gardent le bypass total.
+
+**Frontend :**
+- `HomeMapSection` expose `onZoneSaved`, appelé après succès du `PUT /profile` (pas avant, pour ne pas courir en parallèle de la sauvegarde). `HomeClient` maintient un compteur `zoneVersion` incrémenté à chaque appel et le transmet à `CVDetailSection`, dont l'effet de fetch dépend désormais de `[selectedCvId, zoneVersion]`. Vérifié en conditions réelles : peindre une nouvelle zone puis revenir à la vue des offres déclenche un nouveau `GET /matches/cv/{id}` (81 résultats zone Lyon → 38 résultats zone Marseille/Aix-en-Provence après repeinture).
+
+**Tests :**
+- `test_geo.py` : normalisation accents/casse/apostrophe de `parse_region_from_location`, `regions_intersecting`, codes département COM 987/988.
+- `test_webapp_matches.py` : nouvelle classe `TestCommuneZoneConditionRegionFallback` — inclusion via correspondance région, exclusion région hors zone, bypass final restreint, garde-fou département-connu-prioritaire contre un faux repêchage par région.
+
+### Décisions techniques
+
+- **Repli département avant région, jamais l'inverse** : la région est la granularité la plus grossière des trois — un repêchage par région ne doit jamais contredire un département déjà connu et hors zone, même règle de préséance qu'entre commune et département en PR #155.
+- **Diagnostic vérifié sur données réelles avant implémentation** : comptage live sur la base dev (offres à région nue, simulation zone Lyon-only) plutôt qu'une hypothèse de code seul — a confirmé les 17 offres région comme cause du bypass excessif.
+- **`zoneVersion` bumped après succès du `PUT /profile`, pas avant** : un bump optimiste aurait pu déclencher un refetch avant que la zone soit effectivement persistée, courant le risque de lire l'ancienne zone côté backend.
+- **Compteur plutôt que ref de zone brute** : `CVDetailSection` n'a besoin de savoir *qu'*un changement a eu lieu, pas de connaître la zone elle-même — un entier incrémental évite de propager `commune_codes` à travers `HomeClient` jusqu'à un composant qui ne les utilise pas directement.
