@@ -311,9 +311,11 @@ class TestCommuneZoneConditionDepartmentFallback:
         stmt = _compiled(["75101"])
         assert "'13'" not in stmt
 
-    def test_offer_with_neither_commune_nor_department_always_included(self):
-        # Genuinely unlocatable offers ("France", "Luxembourg" — no parseable
-        # department either) keep the unconditional bypass.
+    def test_offer_with_neither_commune_nor_department_known_falls_to_region_check(self):
+        # An offer with no commune and no department still isn't a blanket
+        # bypass — it's gated by region next (test class below covers that
+        # level precisely). This just confirms the department-unknown branch
+        # is present at all.
         stmt = _compiled(["75101"])
         assert "offers.department IS NULL" in stmt
 
@@ -323,7 +325,8 @@ class TestCommuneZoneConditionDepartmentFallback:
         # the department fallback is gated behind "commune IS NULL", so it
         # never applies to offers with a known commune.
         stmt = _compiled(["75101"])
-        assert "offers.commune IS NULL AND (offers.department IS NULL OR offers.department IN" in stmt
+        assert "offers.commune IS NULL AND (offers.department IS NULL AND" in stmt
+        assert "OR offers.department IN" in stmt
 
     def test_department_derived_from_both_codes_and_dept_tokens(self):
         stmt = _compiled(["dept:74", "75101"])
@@ -334,3 +337,38 @@ class TestCommuneZoneConditionDepartmentFallback:
         assert match is not None
         values = {v.strip().strip("'") for v in match.group(1).split(",")}
         assert values == {"74", "75"}
+
+
+class TestCommuneZoneConditionRegionFallback:
+    def test_offer_without_commune_or_department_included_via_region_in_zone(self):
+        # Zone = department "69" (Lyon, region auvergne-rhone-alpes). An
+        # offer labeled with that region but no commune/department (e.g.
+        # France Travail gave "Île-de-France" instead of "75 - Paris") must
+        # be reachable through the region fallback.
+        stmt = _compiled(["dept:69"])
+        assert "offers.region IN ('auvergne-rhone-alpes')" in stmt
+
+    def test_offer_excluded_when_region_outside_zone(self):
+        # A Lyon-only zone (department 69, region auvergne-rhone-alpes) must
+        # never reference an unrelated region like ile-de-france.
+        stmt = _compiled(["dept:69"])
+        assert "ile-de-france" not in stmt
+
+    def test_paris_zone_derives_ile_de_france_region(self):
+        stmt = _compiled(["dept:75"])
+        assert "offers.region IN ('ile-de-france')" in stmt
+
+    def test_offer_with_neither_commune_department_nor_region_always_included(self):
+        # Genuinely unlocatable offers ("France", "Luxembourg" — no
+        # parseable department or region) keep the final unconditional
+        # bypass.
+        stmt = _compiled(["dept:69"])
+        assert "offers.region IS NULL" in stmt
+
+    def test_known_department_outside_zone_not_rescued_by_region_match(self):
+        # An offer with a known department outside the zone must not be
+        # rescued by a region-level coincidence — the region fallback is
+        # gated behind "department IS NULL", same precedence rule as
+        # department under commune.
+        stmt = _compiled(["dept:69"])
+        assert "offers.department IS NULL AND (offers.region IS NULL OR offers.region IN" in stmt
