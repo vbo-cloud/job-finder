@@ -8,7 +8,7 @@ from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from shared.geo import department_from_commune
+from shared.geo import department_from_commune, regions_intersecting
 from shared.models import CV, Match, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
@@ -31,13 +31,23 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
 
     France Travail frequently leaves an offer's INSEE commune code empty
     even when it provides a specific city in the free-text location label
-    (a source data-quality gap, not a remote/nationwide marker). When an
-    offer's commune is unknown, it falls back to its parsed department
-    (see shared.geo.parse_department_from_location): included if that
-    department is in the zone, or if the department itself is also unknown
-    (genuinely unlocatable postings, e.g. "France", "Luxembourg"). An offer
-    with a known commune outside the zone is never rescued by this
-    fallback — precise commune data always takes precedence.
+    (a source data-quality gap, not a remote/nationwide marker). Offers fall
+    back through three levels of decreasing precision, each only applying
+    when every finer level is unknown:
+
+    1. Exact commune, or department prefix match (nominal case).
+    2. Parsed department (shared.geo.parse_department_from_location) — for
+       offers with a specific city but no INSEE code.
+    3. Parsed region (shared.geo.parse_region_from_location) — for offers
+       whose label is a bare region name (e.g. "Île-de-France") rather than
+       a "DD - Ville" department prefix; included if any department of that
+       region is in the zone.
+
+    Offers where none of commune, department, or region can be determined
+    (genuinely unlocatable postings, e.g. "France", "Luxembourg") always
+    pass. An offer with a known commune or department outside the zone is
+    never rescued by a coarser fallback — precise data always takes
+    precedence.
 
     Args:
         commune_codes: Stored zone — INSEE codes and/or department tokens.
@@ -52,16 +62,24 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
         if c.startswith(DEPT_TOKEN_PREFIX)
     }
     departments = depts | {department_from_commune(c) for c in codes}
+    candidate_regions = regions_intersecting(departments) if departments else set()
 
     conditions: list[ColumnElement[bool]] = []
     if codes:
         conditions.append(Offer.commune.in_(codes))
     conditions.extend(Offer.commune.startswith(dept, autoescape=True) for dept in depts)
 
-    unresolved_conditions: list[ColumnElement[bool]] = [Offer.department.is_(None)]
+    region_level: list[ColumnElement[bool]] = [Offer.region.is_(None)]
+    if candidate_regions:
+        region_level.append(Offer.region.in_(candidate_regions))
+
+    department_level: list[ColumnElement[bool]] = [
+        and_(Offer.department.is_(None), or_(*region_level)),
+    ]
     if departments:
-        unresolved_conditions.append(Offer.department.in_(departments))
-    conditions.append(and_(Offer.commune.is_(None), or_(*unresolved_conditions)))
+        department_level.append(Offer.department.in_(departments))
+
+    conditions.append(and_(Offer.commune.is_(None), or_(*department_level)))
 
     return or_(*conditions)
 
