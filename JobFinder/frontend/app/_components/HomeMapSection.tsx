@@ -28,7 +28,10 @@ const SAVE_DEBOUNCE_MS = 800;
 
 /** Scrolling down over the map exits the map mode only once the view has
  * been fully zoomed out for this long — the grace period keeps the wheel
- * momentum of the final zoom-out from overshooting into an exit. */
+ * momentum of the final zoom-out from overshooting into an exit. Tuned by
+ * hand: the trailing wheel ticks of a fast zoom-out land within well under
+ * 200ms of the settling zoomend, while a deliberate second scroll takes
+ * longer than that — raise/lower with that trade-off in mind. */
 const MIN_ZOOM_EXIT_HOLD_MS = 200;
 
 /** Light blur only on the backgrounded map: its borders must stay readable
@@ -73,13 +76,16 @@ function mapLayerStyle(mode: Mode): CSSProperties {
   };
 }
 
+const LENS_BACKGROUND =
+  "radial-gradient(ellipse at center, transparent 55%, var(--bg-scrim) 100%)";
+
 /** Decorative vignette flashing in and out during the transitions —
  * lensPulse (globals.css) animates opacity 0 → peak → 0. */
 function lensStyle(mode: Mode): CSSProperties {
   return {
     pointerEvents: "none",
     opacity: 0,
-    background: "radial-gradient(ellipse at center, transparent 55%, var(--bg-scrim) 100%)",
+    background: LENS_BACKGROUND,
     animation:
       mode === "to-map" || mode === "to-cv"
         ? `lensPulse ${TRANSITION_MS}ms ease-in-out`

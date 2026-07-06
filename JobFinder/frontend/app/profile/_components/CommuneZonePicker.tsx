@@ -239,6 +239,10 @@ export default function CommuneZonePicker({
           // France slightly down-left so it seats on the CV icon — in the
           // container geometry rather than a transform, so the map keeps
           // the exact same position in every mode of the home transition.
+          // Values calibrated visually against the CV icon (section
+          // centre): each inset shifts the map centre by half its value,
+          // so 0.1% of inset ≈ 0.05% of the container size. Re-tune here
+          // if the hero layout or FRANCE_BOUNDS ever change.
           className={cn(
             embedded
               ? "absolute inset-0 -bottom-[3.35%] -left-[3.25%] outline-none"
