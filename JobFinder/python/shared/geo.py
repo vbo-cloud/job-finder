@@ -117,6 +117,6 @@ def regions_intersecting(departments: set[str]) -> set[str]:
 
     Returns:
         Normalized region names (see _normalize_region) that contain at
-        least one of the given departments.
+        least one of the given departments. Empty input yields an empty set.
     """
     return {region for region, depts in REGION_DEPARTMENTS.items() if depts & departments}
