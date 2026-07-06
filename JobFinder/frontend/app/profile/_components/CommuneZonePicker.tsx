@@ -7,12 +7,25 @@ import { ChevronRight, Redo2, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { MapContainer } from "react-leaflet";
 
+import { cn } from "@/lib/utils";
+
 import CommunePaintLayer from "./CommunePaintLayer";
 import { compressSelection, expandSelection, type SelectableCommune } from "./communeGeo";
 
 interface CommuneZonePickerProps {
   value: string[];
   onChange: (codes: string[]) => void;
+  /** "full" (default): fixed-height map, department summary and full-width
+   * attribution — the /profile layout. "embedded": fills its parent
+   * (h-full), no summary block, no focus outline, compact attribution
+   * overlaid on the map — for use as a background layer on the home page. */
+  variant?: "full" | "embedded";
+  /** Forwarded to the paint layer — reports brush stroke start/end. */
+  onPaintingChange?: (painting: boolean) => void;
+  /** Forwarded to the paint layer — reports entering/leaving the minimum zoom. */
+  onAtMinZoomChange?: (atMinZoom: boolean) => void;
+  /** Forwarded to the paint layer — increment to snap back to the initial view. */
+  viewResetToken?: number;
 }
 
 /** Metropolitan France (Corsica included) — initial fit and pan limits. */
@@ -45,7 +58,15 @@ function deptSortKey(dept: string): number {
  * Undo/redo history is kept per brush stroke, and the selection is
  * summarised live below the map, grouped by department.
  */
-export default function CommuneZonePicker({ value, onChange }: CommuneZonePickerProps) {
+export default function CommuneZonePicker({
+  value,
+  onChange,
+  variant = "full",
+  onPaintingChange,
+  onAtMinZoomChange,
+  viewResetToken,
+}: CommuneZonePickerProps) {
+  const embedded = variant === "embedded";
   const [past, setPast] = useState<string[][]>([]);
   const [future, setFuture] = useState<string[][]>([]);
   const [communes, setCommunes] = useState<SelectableCommune[] | null>(null);
@@ -154,8 +175,8 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
     "rounded bg-solid-secondary px-3 py-1.5 text-sm text-body hover:bg-solid-secondary-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className={cn("flex flex-col gap-2", embedded && "h-full")}>
+      <div className={cn("flex flex-wrap items-center gap-2", embedded && "relative")}>
         <button
           type="button"
           onClick={reset}
@@ -182,36 +203,66 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         >
           <Redo2 className="h-4 w-4" aria-hidden="true" />
         </button>
-        <span className="ml-auto text-sm text-muted">
+        {/* Embedded: centred in the toolbar row (top of the hero) rather
+            than pushed to the right edge of the screen. */}
+        <span
+          className={cn(
+            "text-sm text-muted",
+            embedded
+              ? "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap"
+              : "ml-auto",
+          )}
+        >
           {value.length === 0
             ? "Toute la France — aucune restriction"
             : `${expanded.codes.length} commune${expanded.codes.length > 1 ? "s" : ""} sélectionnée${expanded.codes.length > 1 ? "s" : ""}`}
         </span>
       </div>
 
-      <MapContainer
-        bounds={FRANCE_BOUNDS}
-        maxBounds={FRANCE_MAX_BOUNDS}
-        maxBoundsViscosity={1}
-        maxZoom={14}
-        zoomSnap={0.25}
-        zoomControl={false}
-        attributionControl={false}
-        scrollWheelZoom
-        dragging={false}
-        doubleClickZoom={false}
-        boxZoom={false}
-        className="h-[50rem] w-full"
-      >
-        <CommunePaintLayer
-          value={expanded.codes}
-          onChange={handlePaintChange}
-          onStrokeStart={snapshot}
-          onCommunesLoaded={handleCommunesLoaded}
-        />
-      </MapContainer>
+      <div className={cn("relative", embedded && "min-h-0 flex-1")}>
+        <MapContainer
+          bounds={FRANCE_BOUNDS}
+          maxBounds={FRANCE_MAX_BOUNDS}
+          maxBoundsViscosity={1}
+          maxZoom={14}
+          zoomSnap={0.25}
+          zoomControl={false}
+          attributionControl={false}
+          scrollWheelZoom
+          dragging={false}
+          doubleClickZoom={false}
+          boxZoom={false}
+          // Embedded: no focus outline — a white ring around a full-hero
+          // background layer reads as a glitch, not as focus feedback.
+          // The negative left/bottom insets oversize the map beyond the
+          // section (cropped by its overflow-hidden), shifting the fitted
+          // France slightly down-left so it seats on the CV icon — in the
+          // container geometry rather than a transform, so the map keeps
+          // the exact same position in every mode of the home transition.
+          className={cn(
+            embedded
+              ? "absolute inset-0 -bottom-[3.35%] -left-[3.25%] outline-none"
+              : "h-[50rem] w-full",
+          )}
+        >
+          <CommunePaintLayer
+            value={expanded.codes}
+            onChange={handlePaintChange}
+            onStrokeStart={snapshot}
+            onCommunesLoaded={handleCommunesLoaded}
+            onPaintingChange={onPaintingChange}
+            onAtMinZoomChange={onAtMinZoomChange}
+            viewResetToken={viewResetToken}
+          />
+        </MapContainer>
+        {embedded && (
+          <p className="pointer-events-none absolute bottom-1 right-2 z-[1000] text-[10px] text-hint">
+            Contours administratifs © Etalab / IGN (Licence Ouverte).
+          </p>
+        )}
+      </div>
 
-      {selectedByDept.length > 0 && (
+      {!embedded && selectedByDept.length > 0 && (
         <div className="max-h-80 overflow-y-auto rounded border border-subtle">
           {selectedByDept.map(([dept, list]) => {
             const open = openDepts.has(dept);
@@ -257,9 +308,11 @@ export default function CommuneZonePicker({ value, onChange }: CommuneZonePicker
         </div>
       )}
 
-      <p className="text-xs text-hint">
-        Contours administratifs © Etalab / IGN (Licence Ouverte).
-      </p>
+      {!embedded && (
+        <p className="text-xs text-hint">
+          Contours administratifs © Etalab / IGN (Licence Ouverte).
+        </p>
+      )}
     </div>
   );
 }
