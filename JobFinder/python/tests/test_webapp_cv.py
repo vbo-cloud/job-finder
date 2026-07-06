@@ -125,6 +125,71 @@ class TestListCvs:
 
         assert resp.status_code == 500
 
+    def test_match_count_and_unseen_count_both_scoped_to_zone(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = ["75101"]
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        cv.name = "Mon CV.pdf"
+        cv.status = "done"
+        cv.uploaded_at = "2024-01-15T10:00:00+00:00"
+        cv.thumbnail_url = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 3, 1)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.status_code == 200
+        # No real DB behind the mock — validate the zone filter is embedded
+        # in both the match_count and unseen_count FILTER clauses by
+        # inspecting the compiled statement passed to the second
+        # session.execute call (profile lookup is first).
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "JOIN offers" in stmt
+        assert stmt.count("offers.commune IN") == 2
+        assert "count(matches.id) FILTER (WHERE offers.commune IN" in stmt
+        assert "count(matches.id) FILTER (WHERE matches.seen_at IS NULL AND (offers.commune IN" in stmt
+
+    def test_counts_unfiltered_when_zone_is_empty(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = []
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        cv.name = "Mon CV.pdf"
+        cv.status = "done"
+        cv.uploaded_at = "2024-01-15T10:00:00+00:00"
+        cv.thumbnail_url = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 3, 3)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune" not in stmt
+
+    def test_counts_unfiltered_when_no_profile(self, test_client, mock_session):
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        cv.name = "Mon CV.pdf"
+        cv.status = "done"
+        cv.uploaded_at = "2024-01-15T10:00:00+00:00"
+        cv.thumbnail_url = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            MagicMock(**{"all.return_value": [(cv, 3, 3)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.status_code == 200
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "offers.commune" not in stmt
+
 
 # ---------------------------------------------------------------------------
 # GET /cv/{cv_id}/thumbnail

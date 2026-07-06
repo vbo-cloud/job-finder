@@ -20,7 +20,7 @@ router = APIRouter(prefix="/matches", tags=["matches"])
 logger = structlog.get_logger()
 
 
-def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
+def commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
     """Build the offer geographic condition for a stored commune zone.
 
     The stored zone mixes plain INSEE codes with department tokens
@@ -123,7 +123,7 @@ def get_matches(
         # nationwide postings). An empty zone means no filtering at all.
         if profile is not None and profile.commune_codes:
             stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
-                _commune_zone_condition(profile.commune_codes)
+                commune_zone_condition(profile.commune_codes)
             )
         results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
@@ -178,7 +178,7 @@ def get_matches_for_cv(
         # Hard geographic filter — same behaviour as GET /matches.
         if profile is not None and profile.commune_codes:
             stmt = stmt.join(Offer, Match.offer_id == Offer.id).where(
-                _commune_zone_condition(profile.commune_codes)
+                commune_zone_condition(profile.commune_codes)
             )
         results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}

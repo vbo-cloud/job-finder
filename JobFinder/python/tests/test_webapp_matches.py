@@ -24,7 +24,7 @@ for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
 
 from auth import get_current_user  # noqa: E402
 from dependencies import get_db  # noqa: E402
-from routers.matches import _commune_zone_condition, router  # noqa: E402
+from routers.matches import commune_zone_condition, router  # noqa: E402
 
 TEST_USER_ID = "test-user-abc123"
 TEST_CV_ID = uuid.uuid4()
@@ -287,12 +287,12 @@ class TestGetMatchesForCv:
 
 
 # ---------------------------------------------------------------------------
-# _commune_zone_condition — department fallback for commune-less offers
+# commune_zone_condition — department fallback for commune-less offers
 # ---------------------------------------------------------------------------
 
 
 def _compiled(commune_codes: list[str]) -> str:
-    condition = _commune_zone_condition(commune_codes)
+    condition = commune_zone_condition(commune_codes)
     return str(condition.compile(compile_kwargs={"literal_binds": True}))
 
 
