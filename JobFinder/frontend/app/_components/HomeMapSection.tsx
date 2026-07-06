@@ -95,6 +95,10 @@ function lensStyle(mode: Mode): CSSProperties {
 
 interface HomeMapSectionProps {
   uploadProps: ComponentProps<typeof UploadSection>;
+  /** Called after the painted zone is successfully persisted to the
+   * profile — lets the parent invalidate anything derived from it (e.g.
+   * the matches list, which stays mounted and won't refetch on its own). */
+  onZoneSaved?: () => void;
 }
 
 /**
@@ -109,9 +113,11 @@ interface HomeMapSectionProps {
  * The painted zone is auto-saved to the profile with a debounce, flushed
  * when leaving the map mode.
  */
-export default function HomeMapSection({ uploadProps }: HomeMapSectionProps) {
+export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSectionProps) {
   const isAuthenticated = useIsAuthenticated();
   const sectionRef = useRef<HTMLElement>(null);
+  const onZoneSavedRef = useRef(onZoneSaved);
+  onZoneSavedRef.current = onZoneSaved;
 
   const [mode, setMode] = useState<Mode>("cv");
   const [communeCodes, setCommuneCodes] = useState<string[]>([]);
@@ -164,6 +170,7 @@ export default function HomeMapSection({ uploadProps }: HomeMapSectionProps) {
     dirtyRef.current = false;
     apiClient
       .put("/profile", { commune_codes: communeCodesRef.current })
+      .then(() => onZoneSavedRef.current?.())
       .catch((err: unknown) => console.error("[home] PUT /profile failed:", err));
   }, []);
 
