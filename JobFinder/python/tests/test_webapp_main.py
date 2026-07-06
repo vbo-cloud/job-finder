@@ -16,6 +16,10 @@ for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+# The patch must wrap the import itself, not decorate a test function:
+# BlobServiceClient(...) is constructed once at cv.py's module level (via
+# main.py's router include), so it needs to be mocked at import time — by
+# the time a test runs, the real call has already happened or not at all.
 _mock_bsc = MagicMock()
 with patch("azure.storage.blob.BlobServiceClient", return_value=_mock_bsc):
     import main  # noqa: E402
