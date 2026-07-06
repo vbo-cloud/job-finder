@@ -5,6 +5,7 @@ with dependency overrides for get_current_user and get_db.
 
 Covers: GET /matches, GET /matches/cv/{cv_id}.
 """
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -23,20 +24,21 @@ for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
 
 from auth import get_current_user  # noqa: E402
 from dependencies import get_db  # noqa: E402
-from routers.matches import router  # noqa: E402
+from routers.matches import _commune_zone_condition, router  # noqa: E402
 
 TEST_USER_ID = "test-user-abc123"
 TEST_CV_ID = uuid.uuid4()
 
 
-def _make_offer() -> MagicMock:
+def _make_offer(commune: str | None = "75101", department: str | None = None) -> MagicMock:
     offer = MagicMock()
     offer.id = uuid.uuid4()
     offer.ft_id = "FT-001"
     offer.title = "Développeur Python"
     offer.company = "ACME"
     offer.location = "Paris (75)"
-    offer.commune = "75101"
+    offer.commune = commune
+    offer.department = department
     offer.contract_type = "CDI"
     offer.description = "Description complète de l'offre de test."
     offer.salary = None
@@ -191,8 +193,10 @@ class TestGetMatches:
         resp = test_client.get("/matches")
 
         assert resp.status_code == 200
-        # Remote/nationwide offers carry no commune code — they potentially
-        # apply everywhere and must not be excluded by a painted zone.
+        # Offers with no commune code fall back to a department match (or the
+        # unconditional bypass when the department is also unknown) — both
+        # gated behind "commune IS NULL", covered precisely in
+        # TestCommuneZoneConditionDepartmentFallback below.
         stmt = str(mock_session.execute.call_args_list[1].args[0])
         assert "offers.commune IS NULL" in stmt
         assert "offers.commune IN" in stmt
@@ -280,3 +284,53 @@ class TestGetMatchesForCv:
         resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
 
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# _commune_zone_condition — department fallback for commune-less offers
+# ---------------------------------------------------------------------------
+
+
+def _compiled(commune_codes: list[str]) -> str:
+    condition = _commune_zone_condition(commune_codes)
+    return str(condition.compile(compile_kwargs={"literal_binds": True}))
+
+
+class TestCommuneZoneConditionDepartmentFallback:
+    def test_offer_without_commune_included_via_department_in_zone(self):
+        # Zone = commune "75101" (department "75"). An offer with no commune
+        # code but department "75" must be reachable: the fallback clause
+        # ORs in "offers.department IN ('75')" once the commune is unknown.
+        stmt = _compiled(["75101"])
+        assert "offers.department IN ('75')" in stmt
+
+    def test_offer_without_commune_excluded_when_department_outside_zone(self):
+        # Zone covers only department "75" — the department fallback set
+        # never contains an unrelated department like "13" (Marseille), so
+        # an offer whose department is "13" cannot match through it.
+        stmt = _compiled(["75101"])
+        assert "'13'" not in stmt
+
+    def test_offer_with_neither_commune_nor_department_always_included(self):
+        # Genuinely unlocatable offers ("France", "Luxembourg" — no parseable
+        # department either) keep the unconditional bypass.
+        stmt = _compiled(["75101"])
+        assert "offers.department IS NULL" in stmt
+
+    def test_known_commune_outside_zone_not_rescued_by_department_match(self):
+        # An offer with a precise commune outside the zone must not be
+        # rescued just because its department happens to be in the zone —
+        # the department fallback is gated behind "commune IS NULL", so it
+        # never applies to offers with a known commune.
+        stmt = _compiled(["75101"])
+        assert "offers.commune IS NULL AND (offers.department IS NULL OR offers.department IN" in stmt
+
+    def test_department_derived_from_both_codes_and_dept_tokens(self):
+        stmt = _compiled(["dept:74", "75101"])
+        # departments is a set — Python's iteration order for str sets isn't
+        # guaranteed, so extract the IN(...) values instead of matching a
+        # fixed literal order.
+        match = re.search(r"offers\.department IN \(([^)]*)\)", stmt)
+        assert match is not None
+        values = {v.strip().strip("'") for v in match.group(1).split(",")}
+        assert values == {"74", "75"}
