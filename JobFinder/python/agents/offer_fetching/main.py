@@ -24,6 +24,7 @@ from shared.bus import send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
 from shared.embedder import embed
+from shared.geo import parse_department_from_location
 from shared.models import Offer, UserProfile
 from shared.telemetry import configure_telemetry
 
@@ -104,13 +105,15 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
         ft_updated_at = (
             datetime.fromisoformat(raw_ft_updated_at) if raw_ft_updated_at else None
         )
+        libelle = raw.get("lieuTravail", {}).get("libelle", "Non renseigné")
         values.append({
             "id": uuid.uuid4(),
             "ft_id": raw["id"],
             "title": raw["intitule"],
             "company": raw.get("entreprise", {}).get("nom", "Non renseigné"),
-            "location": raw.get("lieuTravail", {}).get("libelle", "Non renseigné"),
+            "location": libelle,
             "commune": raw.get("lieuTravail", {}).get("commune"),
+            "department": parse_department_from_location(libelle),
             "latitude": raw.get("lieuTravail", {}).get("latitude"),
             "longitude": raw.get("lieuTravail", {}).get("longitude"),
             "contract_type": raw.get("typeContratLibelle", "Non renseigné"),
@@ -132,6 +135,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
                     "company": insert_stmt.excluded.company,
                     "location": insert_stmt.excluded.location,
                     "commune": insert_stmt.excluded.commune,
+                    "department": insert_stmt.excluded.department,
                     "latitude": insert_stmt.excluded.latitude,
                     "longitude": insert_stmt.excluded.longitude,
                     "contract_type": insert_stmt.excluded.contract_type,
