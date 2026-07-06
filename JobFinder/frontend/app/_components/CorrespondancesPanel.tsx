@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { MatchOut } from "@/lib/api/types";
@@ -59,6 +59,23 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [seenIds, setSeenIds] = useState<Set<string>>(() => loadSeenIds(cvId));
   const seenIdsRef = useRef(seenIds);
   seenIdsRef.current = seenIds; // sync ref on every render — read in useMemo without declaring as dep
+
+  useEffect(() => {
+    // Backend still reports is_new: true for an offer the local cache thinks
+    // is already handled — a previous mark-seen PATCH silently failed (e.g.
+    // the CORS misconfiguration fixed alongside this). Retry it so the
+    // library badge eventually reflects reality instead of staying wrong
+    // forever — the backend, not localStorage, decides when to stop retrying.
+    for (const m of matches) {
+      if (!m.is_new || !seenIdsRef.current.has(m.offer.id)) continue;
+      apiClient
+        .patch(`/cv/${cvId}/matches/${m.offer.id}/seen`)
+        .then(() => onMatchSeen?.())
+        .catch((err: unknown) => {
+          console.error("[jf] retry mark_match_seen failed:", err);
+        });
+    }
+  }, [matches, cvId, onMatchSeen]);
 
   function toggleExpand(id: string) {
     const opening = selectedId !== id;
