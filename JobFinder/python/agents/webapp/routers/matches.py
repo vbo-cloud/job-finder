@@ -4,10 +4,11 @@ import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from shared.geo import department_from_commune
 from shared.models import CV, Match, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
@@ -28,10 +29,15 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
     always start with their department code — which keeps both the stored
     array and the SQL parameter list small.
 
-    Offers without a commune code (remote or nationwide postings from
-    France Travail) are kept regardless of the zone: they potentially
-    apply everywhere, and remote work is relevant to someone searching
-    in a specific area.
+    France Travail frequently leaves an offer's INSEE commune code empty
+    even when it provides a specific city in the free-text location label
+    (a source data-quality gap, not a remote/nationwide marker). When an
+    offer's commune is unknown, it falls back to its parsed department
+    (see shared.geo.parse_department_from_location): included if that
+    department is in the zone, or if the department itself is also unknown
+    (genuinely unlocatable postings, e.g. "France", "Luxembourg"). An offer
+    with a known commune outside the zone is never rescued by this
+    fallback — precise commune data always takes precedence.
 
     Args:
         commune_codes: Stored zone — INSEE codes and/or department tokens.
@@ -40,15 +46,23 @@ def _commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
         SQLAlchemy boolean condition matching offers inside the zone.
     """
     codes = [c for c in commune_codes if not c.startswith(DEPT_TOKEN_PREFIX)]
-    depts = [
+    depts = {
         c.removeprefix(DEPT_TOKEN_PREFIX)
         for c in commune_codes
         if c.startswith(DEPT_TOKEN_PREFIX)
-    ]
-    conditions: list[ColumnElement[bool]] = [Offer.commune.is_(None)]
+    }
+    departments = depts | {department_from_commune(c) for c in codes}
+
+    conditions: list[ColumnElement[bool]] = []
     if codes:
         conditions.append(Offer.commune.in_(codes))
     conditions.extend(Offer.commune.startswith(dept, autoescape=True) for dept in depts)
+
+    unresolved_conditions: list[ColumnElement[bool]] = [Offer.department.is_(None)]
+    if departments:
+        unresolved_conditions.append(Offer.department.in_(departments))
+    conditions.append(and_(Offer.commune.is_(None), or_(*unresolved_conditions)))
+
     return or_(*conditions)
 
 
