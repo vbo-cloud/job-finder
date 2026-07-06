@@ -3677,3 +3677,38 @@ Trois régressions ou lacunes constatées après la fusion des PRs #148 et #149 
 - **Dissolution topologique côté client** : Etalab ne publie pas de contour « métropole » ; les contours départementaux étant topologiquement cohérents, l'annulation des arêtes partagées donne le contour national sans dépendance (pas de turf/union) ni fichier supplémentaire.
 - **Anciennes zones non compressées** : un profil enregistré avant la compression reste en codes bruts — lu normalement, compressé automatiquement au prochain enregistrement. Aucune migration nécessaire.
 - **Offres sans code commune conservées malgré la zone** (retour utilisateur) : une offre France Travail sans `lieuTravail.commune` (télétravail, portée nationale) correspond potentiellement à tout — le filtre géographique inclut `offers.commune IS NULL` dans son OR plutôt que d'exclure ces offres.
+
+---
+
+## PR #154 — feat: intégration de la carte de zone à l'accueil, transition « focus caméra »
+
+**Date :** 2026-07-06
+**Branche :** `feature/home-map-transition` → `dev`
+
+### Contexte
+
+La carte de communes (PR #153) ne vivait que sur `/profile`. Vision produit : la carte n'est pas une section de scroll supplémentaire mais un **second calque de la section d'upload CV**, affiché en permanence en arrière-plan (centré, légèrement flouté, non interactif). Un scroll molette vers le haut — geste qui ne peut naturellement rien faire d'autre en haut de page — déclenche une transition complète façon « focus pull » d'appareil photo (flou + zoom + fade + vignette) qui rend la carte nette et peignable ; un scroll vers le bas joue la transition inverse. La route `/profile` est conservée telle quelle en parallèle (réserve pour de futurs réglages de profil).
+
+### Ce qui a été fait
+
+**Frontend :**
+- `CommuneZonePicker` : variante opt-in `variant="embedded"` — remplit son parent, pas de résumé par département, attribution Etalab compacte superposée à la carte, pas d'outline de focus, compteur de sélection centré en haut, et insets négatifs gauche/bas qui surdimensionnent le conteneur au-delà de la section (débordement croppé par son `overflow-hidden`) pour asseoir la France sur l'icône CV. Rendu `/profile` inchangé quand les nouvelles props sont absentes.
+- `CommunePaintLayer` : trois hooks pour un composant hôte — `onPaintingChange` (début/fin de trait de pinceau), `onAtMinZoomChange` (vue posée au zoom minimum : invalidé dès `zoomstart`, resynchronisé au `zoomend`), `viewResetToken` (incrément → retour instantané au cadrage national initial, `animate: false`). Le cercle de pinceau exige désormais que le curseur **atteigne** la carte (`elementFromPoint`), pas seulement son rectangle — il reste masqué quand la carte est un fond `pointer-events: none`.
+- `UploadSection` : ne possède plus sa `<section>` (rendu en calque `absolute inset-0`), indication CARTE (chevron rebondissant vers le haut) symétrique de BIBLIOTHÈQUE, visible uniquement connecté.
+- `MapSection` : wrapper léger du picker embedded, import `dynamic({ ssr: false })` avec placeholder pulsant.
+- `HomeMapSection` : machine à états `cv / to-map / map / to-cv` (425 ms, constante unique partagée entre timers, transitions CSS et keyframe de vignette). Sortie du mode carte par molette bas : curseur hors de la carte, ou au-dessus d'elle une fois la vue posée au dézoom max depuis ≥ 200 ms (période de grâce contre l'élan de molette). Un trait de pinceau en cours absorbe tout scroll. Chaque sortie remet la carte sur son cadrage d'origine et flushe la sauvegarde. Zone auto-sauvegardée par debounce (800 ms) via `PUT /profile`. Accès au mode carte réservé aux utilisateurs connectés.
+- `HomeClient` : monte `HomeMapSection` à la place d'`UploadSection`, callbacks inchangés via `uploadProps`.
+
+**Backend :** aucun changement (`commune_codes` et l'API `/profile` existaient déjà).
+
+### Décisions techniques
+
+- **Molette : zoom carte vs sortie de page via la propagation DOM** — le handler `ScrollWheelZoom` de Leaflet stoppe la propagation de tout `wheel` reçu par son conteneur : un wheel sur la carte zoome, un wheel ailleurs bulle jusqu'à la section. Rien à calculer (pas de `getBoundingClientRect`).
+- **Écouteur wheel natif non-passif, en phase capture** — React attache `onWheel` en passif (`preventDefault()` silencieusement ignoré), d'où un `addEventListener` natif ; la phase capture est nécessaire pour voir aussi les wheels au-dessus de la carte (sortie au dézoom max) puisque Leaflet les stoppe en phase bulle.
+- **Jamais démonter ni `display:none` le calque carte** — transitions pilotées uniquement par `opacity`/`filter`/`transform` : la taille layout du conteneur ne change jamais, aucun `invalidateSize()` ni bug Leaflet de conteneur masqué.
+- **Centrage par crop du conteneur plutôt que par transform** — un `translate` sur le calque glissait vers la position « vraie » en mode carte ; les insets négatifs déplacent le cadrage dans la géométrie même du conteneur, et le `scale` de la transition (origine centre) préserve la position : la carte est au même endroit dans tous les modes, toolbar et attribution comprises.
+- **État « au dézoom max » invalidé dès `zoomstart`** — synchronisé seulement au `zoomend`, un enchaînement rapide zoom + scroll bas sortait vers l'accueil en plein zoom (l'animation n'avait pas encore émis son `zoomend`).
+- **Reset de vue instantané (`animate: false`)** — il s'opère derrière le flou de sortie, et un saut instantané ne peut pas rester à moitié fait si une animation est interrompue (le zoom animé de Leaflet passe par `requestAnimationFrame`, gelé dans un onglet masqué).
+- **Sauvegarde par debounce plutôt qu'au clic sur le bouton profil** — accrocher la sauvegarde à `AuthButton` (monté globalement dans `layout.tsx`) exigerait un état partagé global pour un bénéfice minime ; le debounce + flush à la sortie couvre tous les cas (bouton profil, changement d'onglet, fermeture).
+- **Molette uniquement, pas de tactile** — la peinture est déjà souris uniquement (backlog « Support tactile du pinceau de communes ») ; la transition suit. Piste `Escape` signalée en commentaire, non bloquante.
+- **Pinceau masqué par hit-test réel** — `elementFromPoint` contenu dans le conteneur : couvre le mode accueil et les transitions sans prop supplémentaire, `/profile` inchangé.

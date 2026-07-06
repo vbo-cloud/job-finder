@@ -469,9 +469,33 @@ de l'IA au-delà de la génération de code.
 la carte est inutilisable sur mobile/tablette. Migrer vers les Pointer Events
 (`pointerdown`/`pointermove`/`pointerup` + `touch-action: none`) pour couvrir souris,
 stylet et tactile avec un seul chemin de code.
+Depuis la PR #154, la transition « focus pull » de l'accueil est elle aussi molette
+uniquement : la migration devra ajouter un déclencheur tactile pour l'entrée/sortie du
+mode carte (geste vertical, `touchstart` passif) et le coordonner avec la garde
+« trait de pinceau en cours absorbe le scroll » de `HomeMapSection`.
 
 ### [optional] Sortir les GeoJSON du dépôt Git
 `public/geo/` pèse ~38 Mo (dont 29 Mo de contours HD) versionnés dans Git — le clone
 s'alourdit à chaque régénération du dataset. Pistes : Git LFS, ou hébergement sur le
 Storage Account existant (CDN) avec téléchargement au build (`scripts/build-communes-geo.mjs`
 tourne déjà en une commande ; risque : disponibilité des sources Etalab au moment du build).
+
+---
+
+## Carte à l'accueil (feature/home-map-transition, PR #154) — suites identifiées en review
+
+### [a11y] Raccourci Escape pour sortir du mode carte
+Aucun moyen clavier de quitter le mode carte de l'accueil (molette uniquement) — un
+utilisateur clavier qui y entre est coincé. Piste déjà signalée par le `TODO(a11y)`
+dans le handler wheel de `HomeMapSection.tsx` : écouter `keydown` Escape en mode
+`"map"` et déclencher la même sortie (flush + reset de vue + transition).
+
+### [optional] État « peinture en cours » orphelin si le mouseup n'est jamais délivré
+Le trait se termine par le `mouseup` écouté sur `window` — il fonctionne donc aussi
+hors du conteneur Leaflet, et c'est voulu (un trait en cours doit absorber le scroll
+même si le curseur sort de la carte pendant le drag ; appeler `onPaintingChange(false)`
+sur `mouseleave` casserait cette garde). Reste un cas limite : bouton relâché hors de
+la fenêtre du navigateur sans que le `mouseup` soit délivré → `paintingRef` reste
+`true` et bloque la sortie par molette jusqu'au clic suivant. Durcissement possible :
+réinitialiser l'état de trait (`strokeRef`, `onPaintingChange(false)`) sur
+`window.blur` dans `CommunePaintLayer`.

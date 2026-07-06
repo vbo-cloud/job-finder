@@ -93,8 +93,10 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
     if (file) handleFile(file);
   }, [handleFile]);
 
+  // No <section> root here: HomeMapSection owns the h-dvh/snap-start section
+  // and layers this component (CV layer) with the commune map behind it.
   return (
-    <section className="relative h-dvh snap-start overflow-hidden bg-page">
+    <div className="absolute inset-0">
       <OrbitAnimation
         state={animState}
         thumbnailUrl={thumbnailUrl}
@@ -136,12 +138,21 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
         </p>
       )}
 
+      {/* Gated like the map mode itself (HomeMapSection): the zone is tied
+          to the profile, which requires being signed in. */}
+      {isAuthenticated && (
+        <div className="pointer-events-none absolute top-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+          <span className="animate-bounce text-sm text-hint">⌃</span>
+          <span className="text-[9px] tracking-widest text-label">CARTE</span>
+        </div>
+      )}
+
       {libraryAccessible && (
         <div className="pointer-events-none absolute bottom-9 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
           <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
           <span className="animate-bounce text-sm text-hint">⌄</span>
         </div>
       )}
-    </section>
+    </div>
   );
 }

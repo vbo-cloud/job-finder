@@ -89,6 +89,16 @@ interface CommunePaintLayerProps {
   /** Called once when every commune geometry is loaded, with the full commune
    * list and the department code → name mapping. */
   onCommunesLoaded: (communes: SelectableCommune[], deptNoms: Record<string, string>) => void;
+  /** Called with true when a brush stroke starts (left or right button),
+   * false when it ends — lets an embedding component ignore scroll while painting. */
+  onPaintingChange?: (painting: boolean) => void;
+  /** Called with true when the view is settled at the minimum zoom (fully
+   * zoomed out), false as soon as a zoom starts or settles higher. Fired
+   * once on mount with the initial state, then deduped. */
+  onAtMinZoomChange?: (atMinZoom: boolean) => void;
+  /** Increment to snap the view back to its initial nationwide fit — used
+   * by the home page when leaving the map mode. */
+  viewResetToken?: number;
 }
 
 /* Leaflet canvas paths cannot be styled through CSS classes — colors are read
@@ -158,6 +168,9 @@ export default function CommunePaintLayer({
   onChange,
   onStrokeStart,
   onCommunesLoaded,
+  onPaintingChange,
+  onAtMinZoomChange,
+  viewResetToken,
 }: CommunePaintLayerProps) {
   const map = useMap();
   const [pendingDepts, setPendingDepts] = useState<number | null>(null);
@@ -177,9 +190,14 @@ export default function CommunePaintLayer({
   onStrokeStartRef.current = onStrokeStart;
   const onCommunesLoadedRef = useRef(onCommunesLoaded);
   onCommunesLoadedRef.current = onCommunesLoaded;
+  const onPaintingChangeRef = useRef(onPaintingChange);
+  onPaintingChangeRef.current = onPaintingChange;
+  const onAtMinZoomChangeRef = useRef(onAtMinZoomChange);
+  onAtMinZoomChangeRef.current = onAtMinZoomChange;
   const strokeRef = useRef<"paint" | "erase" | null>(null);
   const strokeSnapshottedRef = useRef(false);
   const panPointRef = useRef<{ x: number; y: number } | null>(null);
+  const homeViewRef = useRef<{ center: L.LatLng; zoom: number } | null>(null);
 
   const addSelectionFill = (code: string) => {
     if (selectionLayersRef.current.has(code)) return;
@@ -198,8 +216,27 @@ export default function CommunePaintLayer({
     let departementsLayer: L.GeoJSON | null = null;
 
     // The map is created with bounds fitting metropolitan France — forbid
-    // zooming out further than that initial fit.
+    // zooming out further than that initial fit, and remember that view as
+    // the "home" position viewResetToken snaps back to.
     map.setMinZoom(map.getZoom());
+    homeViewRef.current = { center: map.getCenter(), zoom: map.getZoom() };
+
+    // Report whether the view is settled fully zoomed out — deduped,
+    // initial state included (the map starts at its minimum zoom). A zoom
+    // in flight is never "at min zoom": cleared as soon as a zoom starts,
+    // re-synced when it ends — otherwise a quick zoom-in + scroll-down
+    // would still read as "at min zoom" until the first zoomend.
+    let atMinZoom: boolean | null = null;
+    const reportAtMinZoom = (next: boolean) => {
+      if (next === atMinZoom) return;
+      atMinZoom = next;
+      onAtMinZoomChangeRef.current?.(next);
+    };
+    const syncAtMinZoom = () => reportAtMinZoom(map.getZoom() <= map.getMinZoom());
+    const clearAtMinZoom = () => reportAtMinZoom(false);
+    syncAtMinZoom();
+    map.on("zoomstart", clearAtMinZoom);
+    map.on("zoomend", syncAtMinZoom);
 
     // Departments render in a dedicated pane below the selection overlay.
     if (!map.getPane("franceBase")) {
@@ -471,6 +508,8 @@ export default function CommunePaintLayer({
       themeObserver.disconnect();
       clearTimeout(detailTimer);
       map.off("zoomend", syncCityLabels);
+      map.off("zoomstart", clearAtMinZoom);
+      map.off("zoomend", syncAtMinZoom);
       map.off("moveend", scheduleDetailSync);
       contoursLayer?.remove();
       communeLabelMarkers.forEach((marker) => marker.remove());
@@ -508,6 +547,16 @@ export default function CommunePaintLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
+  // Snap back to the initial nationwide view. animate: false, twice over:
+  // the change happens behind the home exit blur anyway, and an instant
+  // jump cannot be left half-done by an interrupted zoom animation.
+  useEffect(() => {
+    if (!viewResetToken) return;
+    const home = homeViewRef.current;
+    if (home) map.setView(home.center, home.zoom, { animate: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewResetToken]);
+
   // Mouse interactions: left = paint, right = erase, middle drag = pan.
   useEffect(() => {
     const container = map.getContainer();
@@ -528,7 +577,15 @@ export default function CommunePaintLayer({
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const visible = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
+      // Being inside the rectangle is not enough: embedded on the home page
+      // the map also lives as a non-interactive background layer
+      // (pointer-events: none) — only show the brush when the cursor
+      // actually reaches the map.
+      const hit =
+        x >= 0 && y >= 0 && x <= rect.width && y <= rect.height
+          ? document.elementFromPoint(e.clientX, e.clientY)
+          : null;
+      const visible = hit !== null && container.contains(hit);
       brush.style.display = visible ? "block" : "none";
       brush.style.transform = `translate(${x - BRUSH_RADIUS_PX}px, ${y - BRUSH_RADIUS_PX}px)`;
     };
@@ -577,12 +634,14 @@ export default function CommunePaintLayer({
         strokeRef.current = "paint";
         strokeSnapshottedRef.current = false;
         setBrushAppearance(false);
+        onPaintingChangeRef.current?.(true);
         stamp(e, false);
         e.preventDefault();
       } else if (e.button === 2) {
         strokeRef.current = "erase";
         strokeSnapshottedRef.current = false;
         setBrushAppearance(true);
+        onPaintingChangeRef.current?.(true);
         stamp(e, true);
         e.preventDefault();
       } else if (e.button === 1) {
@@ -604,6 +663,7 @@ export default function CommunePaintLayer({
       strokeRef.current = null;
       panPointRef.current = null;
       setBrushAppearance(false);
+      onPaintingChangeRef.current?.(false);
     };
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     const onMouseLeave = () => {

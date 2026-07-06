@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CVData } from "@/lib/api/types";
 import CVDetailSection from "./CVDetailSection";
+import HomeMapSection from "./HomeMapSection";
 import LibrarySection from "./LibrarySection";
-import UploadSection from "./UploadSection";
 
 interface OptimisticUpload {
   thumbnailUrl: string;
@@ -70,10 +70,12 @@ export default function HomeClient() {
 
   return (
     <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
-      <UploadSection
-        onUploadComplete={handleUploadComplete}
-        onAnimationComplete={handleAnimationComplete}
-        libraryAccessible={libraryAccessible}
+      <HomeMapSection
+        uploadProps={{
+          onUploadComplete: handleUploadComplete,
+          onAnimationComplete: handleAnimationComplete,
+          libraryAccessible,
+        }}
       />
       <LibrarySection
         refreshTrigger={uploadCount}
