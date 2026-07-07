@@ -39,6 +39,10 @@ interface Props {
   onCvsChange?: (cvs: CVData[]) => void;
   /** The CV currently shown in the detail section — highlighted with the accent border. */
   selectedCvId?: string | null;
+  /** Scrolls to the home/upload section; calls onLanded once the scroll has
+   * settled (or immediately if the scroll can't be determined). Owned by the
+   * parent so this component doesn't need to know about a sibling's DOM id. */
+  onScrollToHome?: (onLanded: () => void) => void;
 }
 
 export default function LibrarySection({
@@ -49,6 +53,7 @@ export default function LibrarySection({
   onCvSelect,
   onCvsChange,
   selectedCvId = null,
+  onScrollToHome,
 }: Props) {
   const isAuthenticated        = useIsAuthenticated();
   const [cvs, setCvs]          = useState<CVData[]>([]);
@@ -140,26 +145,11 @@ export default function LibrarySection({
 
   // Scroll back up to the map/upload section first so the file picker opens
   // in a familiar context, then trigger the browse dialog once the scroll has
-  // actually landed — "scrollend" covers both the animated case and
-  // prefers-reduced-motion (an instant jump still fires it); the timeout is
-  // only a safety net for the rare browser without scrollend support.
+  // landed. The scroll itself (and knowledge of the home section's DOM id)
+  // belongs to the parent — this component only asks to be told when it's safe.
   const handleAddClick = () => {
-    const home = document.getElementById("home");
-    const scrollContainer = home?.closest("main");
-    if (!home || !scrollContainer) {
-      fileInputRef.current?.click();
-      return;
-    }
-    let opened = false;
-    const openPicker = () => {
-      if (opened) return;
-      opened = true;
-      scrollContainer.removeEventListener("scrollend", openPicker);
-      fileInputRef.current?.click();
-    };
-    scrollContainer.addEventListener("scrollend", openPicker, { once: true });
-    setTimeout(openPicker, 900);
-    home.scrollIntoView({ behavior: "smooth" });
+    if (!onScrollToHome) { fileInputRef.current?.click(); return; }
+    onScrollToHome(() => fileInputRef.current?.click());
   };
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -188,6 +178,8 @@ export default function LibrarySection({
       await fetchCvs();
     } catch (err) {
       console.error("[LibrarySection] add CV failed", err);
+      setUploadError("Échec de l'import, réessayez.");
+      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
     } finally {
       setUploading(false);
     }

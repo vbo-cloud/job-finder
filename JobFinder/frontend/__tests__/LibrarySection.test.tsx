@@ -15,6 +15,11 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+// Component import must come after the jest.mock calls above: Jest hoists
+// jest.mock to the top of the file regardless of where it's written, but the
+// import below is what actually pulls in the module tree that needs mocking —
+// keeping it after the mocks here matches evaluation order and avoids the
+// temptation to "clean up" by moving it to the top.
 import LibrarySection from "@/app/_components/LibrarySection";
 import type { CVData } from "@/lib/api/types";
 
