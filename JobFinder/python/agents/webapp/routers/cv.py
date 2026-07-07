@@ -618,6 +618,45 @@ def _remove_cv_from_rome_codes(session: Session, cv_id: uuid.UUID, user_id: str)
     profile.rome_codes = {code: data for code, data in updated.items() if data["cv_ids"]}
 
 
+def _delete_cv(session: Session, cv: CV, user_id: str) -> None:
+    """Delete a CV's blobs, matches, and row, and prune it from rome_codes.
+
+    Caller owns the commit — lets delete_account commit once for the whole
+    account instead of once per CV. Matches are removed first to satisfy the
+    FK constraint on matches.cv_id (no CASCADE DELETE is defined on it).
+
+    Args:
+        session: Active database session (caller owns commit).
+        cv: The CV row to delete.
+        user_id: Owner of the CV, used to update rome_codes.
+
+    Raises:
+        HTTPException 503: If Azure Blob Storage is unavailable.
+        SQLAlchemyError: On any database error.
+    """
+    # Blobs are deleted before the DB commit. If commit() fails after this point
+    # the CV row survives but its storage objects are permanently gone — a known
+    # inconsistency accepted as a trade-off (no compensating-transaction / saga).
+    # The inverse order (commit first, then delete blobs) is equally lossy: a blob
+    # leak is harder to detect than a row whose blob is missing.
+    try:
+        _delete_blob(cv.blob_url, CV_BLOB_CONTAINER)
+        if cv.thumbnail_url:
+            _delete_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
+        if cv.thumbnail_url_lg:
+            _delete_blob(cv.thumbnail_url_lg, CV_BLOB_CONTAINER)
+    except AzureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage unavailable — CV deletion failed",
+        ) from e
+
+    # Delete matches first — FK constraint on matches.cv_id has no CASCADE.
+    session.execute(delete(Match).where(Match.cv_id == cv.id))
+    session.delete(cv)
+    _remove_cv_from_rome_codes(session, cv.id, user_id)
+
+
 @router.delete("/{cv_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_cv(
     cv_id: uuid.UUID,
@@ -650,28 +689,8 @@ def delete_cv(
     if cv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
 
-    # Blobs are deleted before the DB commit. If commit() fails after this point
-    # the CV row survives but its storage objects are permanently gone — a known
-    # inconsistency accepted as a trade-off (no compensating-transaction / saga).
-    # The inverse order (commit first, then delete blobs) is equally lossy: a blob
-    # leak is harder to detect than a row whose blob is missing.
     try:
-        _delete_blob(cv.blob_url, CV_BLOB_CONTAINER)
-        if cv.thumbnail_url:
-            _delete_blob(cv.thumbnail_url, CV_BLOB_CONTAINER)
-        if cv.thumbnail_url_lg:
-            _delete_blob(cv.thumbnail_url_lg, CV_BLOB_CONTAINER)
-    except AzureError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Storage unavailable — CV deletion failed",
-        ) from e
-
-    try:
-        # Delete matches first — FK constraint on matches.cv_id has no CASCADE.
-        session.execute(delete(Match).where(Match.cv_id == cv_id))
-        session.delete(cv)
-        _remove_cv_from_rome_codes(session, cv_id, user_id)
+        _delete_cv(session, cv, user_id)
         session.commit()
     except SQLAlchemyError:
         logger.error("cv_delete_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)

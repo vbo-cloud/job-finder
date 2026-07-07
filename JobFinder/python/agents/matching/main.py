@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import receive_message, send_message
-from shared.config import MATCHING_SCORE_THRESHOLD
+from shared.config import INTENT_EMBEDDING_WEIGHT, MATCHING_SCORE_THRESHOLD
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, Offer
 from shared.telemetry import configure_telemetry
@@ -32,8 +32,13 @@ def _get_all_matches(session: Session) -> list[dict]:
     Returns:
         List of dicts with cv_id, offer_id, score.
 
-    Note: scores are computed as (1 - cosine_distance). OpenAI text-embedding-3-small
-    produces normalized vectors, so scores are bounded in [0, 1] in practice.
+    Note: scores are computed as (1 - cosine_distance) between the CV and offer
+    embeddings, blended with (1 - cosine_distance) against the profile's
+    intent_embedding (experience/search query/candidate description) when one
+    exists — weighted INTENT_EMBEDDING_WEIGHT / (1 - INTENT_EMBEDDING_WEIGHT).
+    Falls back to the CV-only score when the profile has no intent_embedding.
+    OpenAI text-embedding-3-small produces normalized vectors, so scores are
+    bounded in [0, 1] in practice.
 
     Raises:
         SQLAlchemyError: If the database query fails.
@@ -41,16 +46,25 @@ def _get_all_matches(session: Session) -> list[dict]:
     logger.info("matching_batch_query_started", threshold=MATCHING_SCORE_THRESHOLD)
     result = session.execute(
         text("""
-            SELECT
-                c.id AS cv_id,
-                o.id AS offer_id,
-                (1 - (o.embedding <=> c.embedding)) AS score
-            FROM cvs c
-            JOIN offers o ON o.embedding IS NOT NULL
-            WHERE c.embedding IS NOT NULL
-              AND (1 - (o.embedding <=> c.embedding)) >= :threshold
+            WITH scored AS (
+                SELECT
+                    c.id AS cv_id,
+                    o.id AS offer_id,
+                    CASE
+                        WHEN up.intent_embedding IS NOT NULL THEN
+                            (1 - :intent_weight) * (1 - (o.embedding <=> c.embedding))
+                            + :intent_weight * (1 - (o.embedding <=> up.intent_embedding))
+                        ELSE
+                            1 - (o.embedding <=> c.embedding)
+                    END AS score
+                FROM cvs c
+                JOIN offers o ON o.embedding IS NOT NULL
+                LEFT JOIN user_profiles up ON up.user_id = c.user_id
+                WHERE c.embedding IS NOT NULL
+            )
+            SELECT cv_id, offer_id, score FROM scored WHERE score >= :threshold
         """),
-        {"threshold": MATCHING_SCORE_THRESHOLD},
+        {"threshold": MATCHING_SCORE_THRESHOLD, "intent_weight": INTENT_EMBEDDING_WEIGHT},
     )
 
     return [
