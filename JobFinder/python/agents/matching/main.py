@@ -11,14 +11,17 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from azure.servicebus.exceptions import ServiceBusError
+
 from shared.bus import receive_message, send_message
-from shared.config import INTENT_EMBEDDING_WEIGHT, MATCHING_SCORE_THRESHOLD
+from shared.config import INTENT_EMBEDDING_WEIGHT, MATCH_ANALYSIS_AUTO_TOP_N, MATCHING_SCORE_THRESHOLD
 from shared.db import get_session, run_migrations
-from shared.models import CV, Match, Offer
+from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
 
 OFFER_READY_QUEUE = "offer-ready"
 MATCH_READY_QUEUE = "match-ready"
+MATCH_ANALYSIS_QUEUE = "match-analysis"
 
 logger = structlog.get_logger()
 
@@ -111,6 +114,55 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
     return new_count
 
 
+def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
+    """Insert pending match_analyses rows for each CV's current top-N unanalyzed matches.
+
+    Ranking uses ALL of a CV's matches, not just those touched by this run — a match that
+    climbs into the top N because a higher-ranked offer expired must still be captured
+    (see ADR-018). on_conflict_do_nothing makes this safe if two matching runs overlap;
+    RETURNING match_id ensures only genuinely new rows trigger a Service Bus message.
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit).
+        top_n: Number of top-ranked unanalyzed matches to enqueue per CV.
+
+    Returns:
+        List of match IDs newly enqueued for analysis.
+    """
+    now = datetime.now(timezone.utc)
+    ranked = session.execute(
+        text("""
+            WITH ranked AS (
+                SELECT m.id AS match_id,
+                       ROW_NUMBER() OVER (PARTITION BY m.cv_id ORDER BY m.score DESC) AS rn
+                FROM matches m
+            )
+            SELECT r.match_id
+            FROM ranked r
+            LEFT JOIN match_analyses ma ON ma.match_id = r.match_id
+            WHERE r.rn <= :top_n AND ma.id IS NULL
+        """),
+        {"top_n": top_n},
+    ).all()
+    if not ranked:
+        return []
+    values = [
+        {
+            "id": uuid.uuid4(),
+            "match_id": row.match_id,
+            "status": "pending",
+            "triggered_by": "auto_top_n",
+            "matched_skills": [],
+            "requested_at": now,
+        }
+        for row in ranked
+    ]
+    insert_stmt = pg_insert(MatchAnalysis).values(values).on_conflict_do_nothing(
+        constraint="uq_match_analyses_match_id"
+    ).returning(MatchAnalysis.match_id)
+    return [row.match_id for row in session.execute(insert_stmt)]
+
+
 def main() -> None:
     """Consume one offer-ready message and run matching for all CVs."""
     configure_telemetry("matching")
@@ -128,6 +180,7 @@ def main() -> None:
         all_matches: list[dict] = []
         new_matches = 0
         offers_available: int = 0
+        newly_enqueued: list[uuid.UUID] = []
         try:
             with get_session() as session:
                 offers_available = session.execute(
@@ -136,6 +189,7 @@ def main() -> None:
                 all_matches = _get_all_matches(session)
                 if all_matches:
                     new_matches = _upsert_matches(all_matches, session)
+                newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
                 # Advance CVs whose analysis is complete ("done") to "matched" so the
                 # frontend can distinguish "matching in progress" from "0 real results".
                 session.execute(
@@ -145,6 +199,14 @@ def main() -> None:
         except SQLAlchemyError:
             logger.error("matching_failed", exc_info=True)
             raise
+
+        # Dispatched after commit — fire-and-forget, never fails the matching run
+        # (same trade-off as cv_upload_analysis_trigger_failed in routers/cv.py).
+        for match_id in newly_enqueued:
+            try:
+                send_message(MATCH_ANALYSIS_QUEUE, {"match_id": str(match_id)})
+            except ServiceBusError:
+                logger.error("matching_analysis_dispatch_failed", match_id=str(match_id), exc_info=True)
 
         if not all_matches:
             logger.info("matching_no_cvs_found")
