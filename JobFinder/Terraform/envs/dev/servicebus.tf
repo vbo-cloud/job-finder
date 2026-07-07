@@ -2,9 +2,10 @@
 # Service Bus
 # ==============================================================================
 # Queues:
-#   offer-ready  — agent cv-analysis → job-matching
-#   match-ready  — job-matching → notification utilisateur + futur agent cv-review
-#   cv-analysis  — POST /cv/upload → agent cv-analysis (extrait les codes ROME)
+#   offer-ready     — agent cv-analysis → job-matching
+#   match-ready     — job-matching → notification utilisateur
+#   cv-analysis     — POST /cv/upload → agent cv-analysis (codes ROME + qualité du CV)
+#   match-analysis  — job-matching (top N auto) + POST /matches/.../analyze → agent match-analysis
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -21,6 +22,7 @@ module "servicebus" {
     "offer-ready",
     "match-ready",
     "cv-analysis",
+    "match-analysis",
   ]
 }
 
