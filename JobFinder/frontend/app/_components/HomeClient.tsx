@@ -21,6 +21,7 @@ export default function HomeClient() {
   const [cvList, setCvList]                       = useState<CVData[]>([]);
   const [zoneVersion, setZoneVersion]             = useState(0);
   const detailRef                                  = useRef<HTMLElement>(null);
+  const mainRef                                    = useRef<HTMLElement>(null);
 
   // Holds the cv_id from POST /cv/upload so we can set it on the optimistic
   // entry even if the POST response arrives before the animation ends.
@@ -71,6 +72,26 @@ export default function HomeClient() {
     document.getElementById("library")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  // Scrolls to the home/upload section, then calls onLanded once the scroll
+  // has settled — "scrollend" covers both the animated case and
+  // prefers-reduced-motion (an instant jump still fires it); the timeout is
+  // only a safety net for the rare browser without scrollend support.
+  const handleScrollToHome = useCallback((onLanded: () => void) => {
+    const home = document.getElementById("home");
+    const container = mainRef.current;
+    if (!home || !container) { onLanded(); return; }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      container.removeEventListener("scrollend", finish);
+      onLanded();
+    };
+    container.addEventListener("scrollend", finish, { once: true });
+    setTimeout(finish, 900);
+    home.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
   const handleZoneSaved = useCallback(() => {
     setZoneVersion((v) => v + 1);
     setLibraryRefreshTrigger((n) => n + 1);
@@ -83,7 +104,7 @@ export default function HomeClient() {
   }, []);
 
   return (
-    <main className="h-dvh snap-y snap-mandatory overflow-y-scroll">
+    <main ref={mainRef} className="h-dvh snap-y snap-mandatory overflow-y-scroll">
       <HomeMapSection
         uploadProps={{
           onUploadComplete: handleUploadComplete,
@@ -99,6 +120,8 @@ export default function HomeClient() {
         onOptimisticConsumed={handleOptimisticConsumed}
         onCvSelect={handleCvSelect}
         onCvsChange={setCvList}
+        selectedCvId={selectedCvId}
+        onScrollToHome={handleScrollToHome}
       />
       {selectedCvId && (
         <CVDetailSection

@@ -3880,3 +3880,42 @@ Trois chantiers distincts sur `/profile`, cadrés séparément avec Claude Cowor
 - **`_delete_cv` sans commit interne** : laisse `delete_account` committer une seule fois pour l'ensemble du compte plutôt qu'une fois par CV — évite un état partiellement supprimé si une erreur survient au milieu d'une boucle sur plusieurs CVs.
 - **Pas de saga / transaction compensatoire pour les blobs Azure**, à l'échelle du compte entier : même trade-off déjà assumé pour `delete_cv` (PR antérieure) — un blob supprimé avant un `commit()` qui échouerait ensuite reste supprimé, accepté tel quel plutôt que de complexifier avec une logique de compensation.
 - **Nettoyage de branche en 6 commits atomiques** avant ouverture de la PR : `git reset --soft` sur `origin/dev` puis recommits ciblés par fichier/concern (champs profil, blend matching, refactor `_delete_cv`, route `DELETE /profile`, tokens de thème, page + composants frontend) — même technique que PR #155, l'historique linéaire de plus de 25 commits (itérations de copy, de couleurs, de layout) n'apportant aucune valeur de revue une fois le résultat final connu.
+
+---
+
+## PR #159 — feat(frontend): redesign de la bibliothèque — grille, en-tête, bouton de suppression, indicateurs de scroll
+
+**Date :** 2026-07-07
+**Branche :** `feature/library-redesign` → `dev`
+
+### Contexte
+
+La bibliothèque utilisait une grille figée (`grid-cols-5`, cartes compactes), sans mise en avant du CV actuellement affiché dans le détail et sans moyen d'ajouter un CV directement depuis la page. Le bouton de suppression sur chaque carte cumulait plusieurs défauts visuels remontés en revue : icône générique rognée par le bord de la carte au repos, fil de connexion carte→poubelle mal attaché, aucun lien visuel entre la poubelle et les boutons annuler/confirmer, et un bref chevauchement où le bouton apparaissait par-dessus la carte au clic avant d'avoir fini de se déplacer.
+
+### Ce qui a été fait
+
+**Grille et en-tête (`LibrarySection.tsx`) :**
+- Grille remplacée par `grid-template-columns: repeat(auto-fill, minmax(180px,1fr))` à lignes de hauteur fixe (352px), au lieu du `grid-cols-5` figé.
+- Nouveau slot « Ajouter un CV » dans la grille — bouton pointillé qui scrolle vers `#home` (nouvel `id` sur `HomeMapSection`) puis ouvre le sélecteur de fichier, upload direct sans quitter la bibliothèque.
+- Carte du CV actuellement affiché en détail mise en évidence (`selectedCvId` remonté depuis `HomeClient`, bordure et halo accentués sur `CVCard`).
+- En-tête (titre, description, compteur « CV IMPORTÉS x/10 ») sorti du flux normal (`absolute`) : son espacement vertical n'affecte plus la position de la grille en dessous, qui reste centrée dans toute la section quelle que soit la hauteur de l'en-tête.
+- Compteur « x / 10 » recoloré pour matcher le libellé « CV IMPORTÉS » (même gris, au lieu d'un blanc plus soutenu).
+- Ajout de deux indicateurs de scroll animés, sur le modèle de « CARTE »/« BIBLIOTHÈQUE » déjà présents sur l'accueil : « ACCUEIL » en haut (flèche `⌃`) et « CORRESPONDANCES » en bas (flèche `⌄`).
+- Distance flèche↔bord de section réduite de moitié (36px → 18px) sur les 4 indicateurs concernés (accueil et bibliothèque), et alignée sur celui de `CVDetailSection` (spacer réduit de 6px à 3px) — écart flèche↔bord désormais cohérent partout ; l'écart flèche↔libellé (`gap-1`) l'était déjà.
+
+**Cartes de la grille (`CVCardOptimistic.tsx`, `CVCardPlaceholder.tsx`, `CVCardSkeleton.tsx`) :** layout aligné sur le nouveau format de carte (coins `14px`, padding `9px`, zone d'aperçu en `flex-1`) pour rester visuellement cohérentes avec `CVCard` dans la nouvelle grille.
+
+**Bouton de suppression (`CVCard.tsx`) :**
+- Icônes remplacées par `lucide-react` (`Trash2`, `X`, `Check`) à la place des SVG faits main.
+- Correction du rognage de l'icône au repos : mesure en conditions réelles (DOM rects) a montré que l'icône (14px) a besoin de 20px de dégagement sous la carte pour ne pas être coupée par son bord (6px de marge fixe + 14px de hauteur), alors que le palier de repos ne sortait que de 14px. Tous les paliers de révélation (repos, survol carte, survol icône, armé) relevés en conséquence.
+- Ajout de fils de connexion horizontaux entre la poubelle et les boutons annuler/confirmer (seul le fil vertical carte→poubelle existait auparavant), avec les mêmes animations d'apparition/disparition. Les fils touchent maintenant réellement les boutons (l'espacement de la rangée flottait autour d'eux auparavant) ; épaisseur uniforme à 1px sur les trois fils.
+- Correction d'un chevauchement visuel au clic : le bouton passait au-dessus de la carte (`z-index`) instantanément, avant d'avoir fini son changement de forme/position (~300ms), et apparaissait donc brièvement par-dessus l'aperçu du CV. Le passage au-dessus est désormais différé (`transition-delay` sur `z-index`) jusqu'à la fin du mouvement, uniquement à l'armement — l'annulation reste immédiate, ce qui est correct pour que le bouton se rétracte bien derrière la carte.
+- Animation de retour après annulation accélérée ×2 (délai de fermeture 240ms→120ms, animations de sortie 0.16s→0.08s, morph du bouton 300ms→150ms au retour uniquement — l'armement garde sa vitesse d'origine).
+
+**Tests :** `LibrarySection.test.tsx` (nouveau, couvre la grille et le slot d'ajout). `CVCard.test.tsx` mis à jour pour refléter que le bouton reste monté en permanence (visibilité pilotée par le parent) et que l'annulation joue une animation de fermeture avant de revenir à l'état idle.
+
+### Décisions techniques
+
+- **En-tête en `absolute` plutôt qu'en flux** : découplé de la grille, qui restait auparavant dans le même `flex-col` — chaque ajustement de l'espacement de l'un déplaçait l'autre alors que les deux ont été itérés indépendamment.
+- **Seuil de révélation du bouton poubelle dérivé de la géométrie réelle** plutôt qu'ajusté à l'oeil : mesuré directement via les DOM rects de la carte réelle en conditions réelles, après plusieurs itérations à l'aveugle infructueuses.
+- **`z-index` différé uniquement à l'armement, jamais à la fermeture** : dissymétrie volontaire — passer au-dessus de la carte doit attendre que le bouton l'ait quittée (sinon chevauchement visible), mais repasser en dessous doit rester immédiat pour que le bouton se cache correctement derrière elle en se rétractant.

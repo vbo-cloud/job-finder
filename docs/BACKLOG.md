@@ -618,3 +618,40 @@ Le `catch` de `handleConfirmDelete` affiche le même message générique pour un
 réseau et un 503 backend. Envisager de distinguer via le status HTTP de la réponse pour
 un message plus actionnable (ex. suggérer un retry sur 503 vs vérifier la connexion sur
 timeout).
+
+---
+
+## Bibliothèque — grille et bouton de suppression (feature/library-redesign, PR #159) — suites identifiées en review
+
+### [optional] `MAX_PDF_BYTES` dupliqué entre frontend et backend
+`LibrarySection.tsx`/`UploadSection.tsx` (frontend) et `routers/cv.py` (backend)
+définissent chacun `MAX_PDF_BYTES = 10 * 1024 * 1024` séparément — actuellement identiques
+(vérifié), mais rien n'empêche une dérive silencieuse si l'une des deux valeurs change sans
+l'autre : le rejet client resterait à 10 Mo alors que le serveur accepterait/refuserait à un
+seuil différent, ou l'inverse. Une constante partagée (ex. exposée par un endpoint de config,
+ou documentée en commentaire croisé dans les deux fichiers) fermerait ce risque.
+
+### [optional] `POST /cv/upload` — fichier entièrement bufferisé avant la vérification de taille
+`routers/cv.py` lit tout le corps (`await file.read()`) avant de comparer sa taille à
+`MAX_PDF_BYTES` et de renvoyer 413. Un upload volontairement surdimensionné consomme donc
+mémoire et bande passante avant d'être rejeté. À durcir avec une vérification de
+`Content-Length` ou une lecture par chunks avec arrêt anticipé, si l'endpoint est exposé à un
+trafic non fiable.
+
+### [optional] Durées d'animation de fermeture dupliquées en dur dans `CVCard.tsx`
+`CLOSING_MS` (délai JS avant retour à `idle`) et les durées CSS inline des animations de
+sortie (`emgLOut`/`emgROut`/`lineOutH`/`lineOut`, `.08s`) sont ajustées en cohérence à la
+main plutôt que dérivées d'une seule source — si `CLOSING_MS` change, les durées
+`animation` des `style` inline ne suivent pas automatiquement. Une custom property CSS
+(`--closing-ms`) posée à côté du style inline et référencée par les keyframes
+fermerait ce risque de désynchronisation ; impact actuel nul, les deux valeurs sont
+cohérentes aujourd'hui.
+
+### [optional] `scrollend` — course possible avec un autre scroll concurrent
+`handleScrollToHome` (`HomeClient.tsx`) écoute `scrollend` sur le conteneur de scroll une
+seule fois (`{ once: true }`) après avoir déclenché `home.scrollIntoView()`. Si un autre
+scroll (utilisateur ou composant tiers) survient entre l'appel et l'événement, `finish()`
+se déclenche sur ce scroll-là au lieu du nôtre — le sélecteur de fichier s'ouvrirait avant
+que la page ait réellement atterri sur la section d'accueil. Cas limite jugé peu probable
+en pratique (aucun autre scroll programmatique concurrent dans le flux actuel) ; à
+surveiller si un futur scroll automatique est ajouté ailleurs sur la page.

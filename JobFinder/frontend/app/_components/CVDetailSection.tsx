@@ -70,13 +70,13 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
         className="h-dvh snap-start bg-page flex flex-col"
       >
         {/* BIBLIOTHÈQUE — dans le flux, centré, pousse le body en dessous */}
-        <div className="flex-none flex justify-center pt-1.5">
+        <div className="flex-none flex justify-center pt-[3px]">
           <button
             onClick={onClose}
             aria-label="Retour à la bibliothèque"
             className="flex flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer focus-visible:outline-none"
           >
-            <span className="animate-bounce text-sm text-hint">⌃</span>
+            <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
             <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
           </button>
         </div>
