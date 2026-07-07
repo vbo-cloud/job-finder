@@ -1,6 +1,7 @@
 """Tests for agents/cv_analysis/main.py.
 
-Covers: _extract_rome_codes, _get_cv_text, _set_cv_status, _merge_rome_codes.
+Covers: _extract_rome_codes, _get_cv_text, _set_cv_status, _merge_rome_codes,
+_get_profile_intent, _analyze_cv_quality, _upsert_cv_analysis.
 
 The module is loaded via importlib under the unique name 'cv_analysis_main' to
 avoid sys.modules collision with the matching agent's main.py.
@@ -27,6 +28,9 @@ _extract_rome_codes = _mod._extract_rome_codes
 _get_cv_text = _mod._get_cv_text
 _set_cv_status = _mod._set_cv_status
 _merge_rome_codes = _mod._merge_rome_codes
+_get_profile_intent = _mod._get_profile_intent
+_analyze_cv_quality = _mod._analyze_cv_quality
+_upsert_cv_analysis = _mod._upsert_cv_analysis
 
 _TEST_REFERENTIEL: dict[str, str] = {
     "M1805": "Études et développement informatique",
@@ -279,3 +283,176 @@ class TestMergeRomeCodes:
                 "cv-uuid-1",
                 [{"code": "M1805", "label": "Dev info"}],
             )
+
+
+# ---------------------------------------------------------------------------
+# _get_profile_intent
+# ---------------------------------------------------------------------------
+
+
+class TestGetProfileIntent:
+    def test_returns_intent_fields_when_profile_exists(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = (
+            "2-5",
+            "Recherche un poste cloud",
+        )
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        experience_level, candidate_description = _get_profile_intent("user-123")
+
+        assert experience_level == "2-5"
+        assert candidate_description == "Recherche un poste cloud"
+
+    def test_returns_none_tuple_when_no_profile(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = None
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        assert _get_profile_intent("user-missing") == (None, None)
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _get_profile_intent("user-123")
+
+
+# ---------------------------------------------------------------------------
+# _analyze_cv_quality
+# ---------------------------------------------------------------------------
+
+_QUALITY_JSON = (
+    '{"ats_score": 72, "points_forts": ["Structure claire"], '
+    '"points_faibles": ["Objectif absent"], "suggestions": ["Ajouter un titre"], '
+    '"coherence_intention": "Cohérent avec le profil senior."}'
+)
+
+
+class TestAnalyzeCvQuality:
+    def test_returns_parsed_result_on_valid_json(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        result = _analyze_cv_quality("cv text", "5+", "Recherche un poste cloud")
+
+        assert result == {
+            "ats_score": 72,
+            "points_forts": ["Structure claire"],
+            "points_faibles": ["Objectif absent"],
+            "suggestions": ["Ajouter un titre"],
+            "coherence_intention": "Cohérent avec le profil senior.",
+        }
+
+    def test_retries_on_invalid_json_then_succeeds(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        good = MagicMock()
+        good.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        result = _analyze_cv_quality("cv text", None, None)
+
+        assert result["ats_score"] == 72
+        assert mock_create.call_count == 2
+
+    def test_clamps_ats_score_out_of_bounds(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = (
+            '{"ats_score": 150, "points_forts": [], "points_faibles": [], '
+            '"suggestions": [], "coherence_intention": ""}'
+        )
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        assert _analyze_cv_quality("cv text", None, None)["ats_score"] == 100
+
+    def test_raises_value_error_after_max_attempts(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "never valid json"
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        with pytest.raises(ValueError):
+            _analyze_cv_quality("cv text", None, None)
+
+        assert mock_create.call_count == _mod.MAX_ATTEMPTS
+
+    def test_reraises_openai_error_immediately_without_retry(self, mocker):
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions,
+            "create",
+            side_effect=OpenAIError("API failure"),
+        )
+
+        with pytest.raises(OpenAIError):
+            _analyze_cv_quality("cv text", "0-2", None)
+
+        assert mock_create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _upsert_cv_analysis
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertCvAnalysis:
+    def _run(self, mocker, status: str, **fields) -> tuple[MagicMock, MagicMock]:
+        """Run _upsert_cv_analysis with pg_insert and the session mocked."""
+        mock_pg_insert = mocker.patch.object(_mod, "pg_insert")
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _upsert_cv_analysis("cv-uuid-1", status, **fields)
+
+        return mock_pg_insert, mock_session
+
+    def test_sets_completed_at_for_done(self, mocker):
+        mock_pg_insert, mock_session = self._run(mocker, "done", ats_score=72)
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert values_kwargs["status"] == "done"
+        assert values_kwargs["ats_score"] == 72
+        assert values_kwargs["completed_at"] is not None
+        set_kwargs = (
+            mock_pg_insert.return_value.values.return_value.on_conflict_do_update.call_args.kwargs
+        )
+        assert "completed_at" in set_kwargs["set_"]
+        mock_session.commit.assert_called_once()
+
+    def test_sets_completed_at_for_error(self, mocker):
+        mock_pg_insert, _ = self._run(mocker, "error")
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert "completed_at" in values_kwargs
+
+    def test_does_not_set_completed_at_for_processing(self, mocker):
+        mock_pg_insert, mock_session = self._run(mocker, "processing")
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert "completed_at" not in values_kwargs
+        set_kwargs = (
+            mock_pg_insert.return_value.values.return_value.on_conflict_do_update.call_args.kwargs
+        )
+        assert "completed_at" not in set_kwargs["set_"]
+        mock_session.commit.assert_called_once()
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mocker.patch.object(_mod, "pg_insert")
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _upsert_cv_analysis("cv-uuid-1", "done")
