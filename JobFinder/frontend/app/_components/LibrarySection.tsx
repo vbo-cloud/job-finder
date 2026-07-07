@@ -55,7 +55,13 @@ export default function LibrarySection({
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef           = useRef<HTMLInputElement>(null);
+  const uploadErrorTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
+  }, []);
 
   const handleCvDeleted = useCallback((id: string) => {
     setCvs((prev) => prev.filter((cv) => cv.id !== id));
@@ -133,17 +139,46 @@ export default function LibrarySection({
   const showGrid          = showOptimistic || cvs.length > 0;
 
   // Scroll back up to the map/upload section first so the file picker opens
-  // in a familiar context, then trigger the browse dialog once the smooth
-  // scroll has had time to land.
+  // in a familiar context, then trigger the browse dialog once the scroll has
+  // actually landed — "scrollend" covers both the animated case and
+  // prefers-reduced-motion (an instant jump still fires it); the timeout is
+  // only a safety net for the rare browser without scrollend support.
   const handleAddClick = () => {
-    document.getElementById("home")?.scrollIntoView({ behavior: "smooth" });
-    setTimeout(() => fileInputRef.current?.click(), 650);
+    const home = document.getElementById("home");
+    const scrollContainer = home?.closest("main");
+    if (!home || !scrollContainer) {
+      fileInputRef.current?.click();
+      return;
+    }
+    let opened = false;
+    const openPicker = () => {
+      if (opened) return;
+      opened = true;
+      scrollContainer.removeEventListener("scrollend", openPicker);
+      fileInputRef.current?.click();
+    };
+    scrollContainer.addEventListener("scrollend", openPicker, { once: true });
+    setTimeout(openPicker, 900);
+    home.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file || file.type !== "application/pdf" || file.size > MAX_PDF_BYTES) return;
+    if (!file) return;
+
+    if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
+    if (file.type !== "application/pdf") {
+      setUploadError("Le fichier doit être un PDF.");
+      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
+      return;
+    }
+    if (file.size > MAX_PDF_BYTES) {
+      setUploadError("Le fichier dépasse la taille maximale autorisée (10 Mo).");
+      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
+      return;
+    }
+    setUploadError(null);
 
     setUploading(true);
     const formData = new FormData();
@@ -167,13 +202,13 @@ export default function LibrarySection({
       )}
     >
       <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-        <span className="animate-bounce text-sm text-hint">⌃</span>
+        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
         <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
       </div>
 
       <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
         <span className="text-[9px] tracking-widest text-label">CORRESPONDANCES</span>
-        <span className="animate-bounce text-sm text-hint">⌄</span>
+        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
       </div>
 
       {/* Header is taken out of flow (absolute) so its own vertical offset
@@ -230,13 +265,15 @@ export default function LibrarySection({
                     type="button"
                     onClick={handleAddClick}
                     disabled={uploading}
+                    aria-busy={uploading}
+                    aria-label={uploading ? "Import du CV en cours" : "Ajouter un CV"}
                     className={cn(
                       "flex h-full flex-col items-center justify-center gap-[11px] rounded-[14px] border-[1.5px] border-dashed border-soft bg-transparent text-hint transition-colors",
                       uploading ? "cursor-wait opacity-60" : "cursor-pointer hover:border-accent hover:bg-accent-muted hover:text-accent",
                     )}
                   >
                     <div className="flex h-10 w-10 items-center justify-center rounded-full border-[1.5px] border-current pb-[2px] text-[22px] leading-none">+</div>
-                    <span className="text-[13px] font-semibold">Ajouter un CV</span>
+                    <span className="text-[13px] font-semibold">{uploading ? "Import en cours…" : "Ajouter un CV"}</span>
                   </button>
                 )}
                 {Array.from({ length: placeholderCount }).map((_, i) => (
@@ -247,6 +284,10 @@ export default function LibrarySection({
 
             {isAuthenticated && error && (
               <p className="mt-4 text-xs text-destructive">Impossible de charger les CVs.</p>
+            )}
+
+            {uploadError && (
+              <p role="alert" className="mt-4 text-xs text-destructive">{uploadError}</p>
             )}
           </div>
         </div>

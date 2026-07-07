@@ -76,7 +76,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
             aria-label="Retour à la bibliothèque"
             className="flex flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer focus-visible:outline-none"
           >
-            <span className="animate-bounce text-sm text-hint">⌃</span>
+            <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
             <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
           </button>
         </div>

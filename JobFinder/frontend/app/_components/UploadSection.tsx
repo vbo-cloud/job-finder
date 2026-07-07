@@ -142,7 +142,7 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
           to the profile, which requires being signed in. */}
       {isAuthenticated && (
         <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-          <span className="animate-bounce text-sm text-hint">⌃</span>
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
           <span className="text-[9px] tracking-widest text-label">CARTE</span>
         </div>
       )}
@@ -150,7 +150,7 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
       {libraryAccessible && (
         <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
           <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
-          <span className="animate-bounce text-sm text-hint">⌄</span>
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
         </div>
       )}
     </div>
