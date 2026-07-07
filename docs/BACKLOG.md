@@ -552,3 +552,69 @@ préoccupations (tri, filtres, sélection, sauvegarde).
 propre module ; si un troisième router a un jour besoin du filtre géographique, déplacer
 la fonction vers un module partagé (ex. `shared/db_filters.py`) pour rendre la dépendance
 explicite plutôt que de laisser les routers s'importer mutuellement.
+
+---
+
+## Profil expérience/description, blend intention et suppression de compte (feature/profile-experience-search-fields, PR #158) — suites identifiées en review
+
+### [optional] Contraintes DB sur `experience_level` et `candidate_description`
+`experience_level` (`String`) et `candidate_description` (`Text`) n'ont aucune contrainte
+au niveau base — seule la couche Pydantic (`Literal["0-2", "2-5", "5+"]`,
+`Field(max_length=1000)`) protège contre des valeurs invalides, et uniquement pour les
+écritures passant par l'API. Un `CHECK (experience_level IN ('0-2', '2-5', '5+'))` et un
+`CHECK (char_length(candidate_description) <= 1000)` (ou `sa.Enum`/`VARCHAR(1000)`)
+fermeraient cette faille pour un accès direct DB ou un futur outil admin. Risque faible tant
+que l'API reste le seul point d'écriture.
+
+### [optional] Index vectoriel sur `intent_embedding`
+La colonne `user_profiles.intent_embedding` (migration 016) n'a pas d'index `ivfflat`/`hnsw`.
+Sans impact tant que le nombre d'utilisateurs reste faible ; à ajouter dans une migration
+dédiée une fois la colonne peuplée en volume et si `matching/main.py` fait des recherches de
+similarité dessus (pas le cas aujourd'hui — c'est un blend scalaire, pas une recherche ANN).
+
+### [optional] Suppression de blobs non transactionnelle dans `delete_account`
+`_delete_cv` supprime les blobs Azure avant le commit DB (trade-off documenté dans
+`routers/cv.py` et `routers/profile.py`). Pour un compte avec N CVs, un échec DB après le
+Nᵉ appel laisse les blobs des CVs déjà traités définitivement supprimés alors que leurs
+lignes DB sont rollback. Amélioration possible : collecter toutes les URLs de blobs,
+committer la transaction DB d'abord, supprimer les blobs ensuite — échange contre des
+lignes orphelines (plus faciles à détecter et nettoyer) plutôt que des blobs orphelins. Le
+cas d'échec mi-boucle est déjà loggé (`account_delete_blob_failed` avec
+`deleted_blob_urls`) pour un nettoyage manuel en attendant.
+
+### [optional] N+1 requêtes `rome_codes` dans la boucle `delete_account`
+`_delete_cv` recharge et réécrit `user_profiles.rome_codes` à chaque CV plutôt que de
+batcher les N CVs d'un compte en une seule opération. Sans impact aux volumes actuels par
+utilisateur ; prévoir un chemin de suppression en lot si ce nombre grossit significativement.
+
+### [optional] `intent_embedding` recalculé même si la valeur résultante ne change pas
+`put_profile` relance un appel d'embedding Azure OpenAI dès qu'un champ intent
+(`experience_level`/`candidate_description`) est présent dans le body, même si la valeur
+résolue est identique à l'existante. Coût = un appel embed superflu par sauvegarde
+inchangée ; à court-circuiter en comparant `intent_text` à la valeur stockée avant d'appeler
+`embed()`, si ça devient un poste de coût notable.
+
+### [optional] Allowlist explicite pour `set_` dans l'upsert `ON CONFLICT`
+`put_profile` passe le dict `updated` complet en `set_=updated` sur `on_conflict_do_update`.
+Aucun risque aujourd'hui (`ProfileUpdate` n'expose que des champs sûrs), mais si un futur
+champ de `ProfileUpdate` ne doit jamais être modifiable sur conflit (ex. un équivalent de
+`created_at`), il s'y glisserait silencieusement. Une allowlist explicite des colonnes
+modifiables serait plus sûre à long terme.
+
+### [a11y] `InfoTooltip` — dismiss clavier et positionnement sur petit écran
+`InfoTooltip.tsx` s'affiche au survol/focus mais n'a pas de gestion `Escape` (contrairement
+à la modale de `DeleteAccountSection`), et son positionnement `bottom-full left-full` peut
+déborder de l'écran sur viewport étroit selon l'emplacement du bouton `?`. Cosmétique/a11y
+mineur, pas de blocage fonctionnel.
+
+### [optional] Modale de suppression de compte — focus trap `Tab` incomplet
+`DeleteAccountSection.tsx` gère `Escape` pour fermer la modale mais ne piège pas la
+navigation `Tab` — le focus peut sortir vers des éléments situés derrière l'overlay. Une
+lib de focus-trap ou une gestion manuelle de `tabIndex` fermerait ce gap a11y ; faible
+priorité pour un projet portfolio.
+
+### [optional] `DeleteAccountSection` — erreurs réseau et 503 indifférenciées
+Le `catch` de `handleConfirmDelete` affiche le même message générique pour un timeout
+réseau et un 503 backend. Envisager de distinguer via le status HTTP de la réponse pour
+un message plus actionnable (ex. suggérer un retry sur 503 vs vérifier la connexion sur
+timeout).
