@@ -265,7 +265,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
   }, [flushSave]);
 
   return (
-    <section ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page">
+    <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page">
       <div className="absolute inset-0" style={cvLayerStyle(mode)}>
         <UploadSection {...uploadProps} />
       </div>

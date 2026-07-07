@@ -70,7 +70,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
         className="h-dvh snap-start bg-page flex flex-col"
       >
         {/* BIBLIOTHÈQUE — dans le flux, centré, pousse le body en dessous */}
-        <div className="flex-none flex justify-center pt-1.5">
+        <div className="flex-none flex justify-center pt-[3px]">
           <button
             onClick={onClose}
             aria-label="Retour à la bibliothèque"

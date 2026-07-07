@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsAuthenticated } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
@@ -14,6 +14,10 @@ import CVCardSkeleton from "./CVCardSkeleton";
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_CVS = 10;
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+
+const GRID_CLASSES =
+  "grid gap-x-[18px] gap-y-[52px] [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))] [grid-auto-rows:352px]";
 
 interface OptimisticUpload {
   thumbnailUrl: string;
@@ -33,6 +37,8 @@ interface Props {
   onCvSelect?: (id: string) => void;
   /** Called after each successful fetch so the parent can keep a mirror of the CV list. */
   onCvsChange?: (cvs: CVData[]) => void;
+  /** The CV currently shown in the detail section — highlighted with the accent border. */
+  selectedCvId?: string | null;
 }
 
 export default function LibrarySection({
@@ -42,11 +48,14 @@ export default function LibrarySection({
   onOptimisticConsumed,
   onCvSelect,
   onCvsChange,
+  selectedCvId = null,
 }: Props) {
   const isAuthenticated        = useIsAuthenticated();
   const [cvs, setCvs]          = useState<CVData[]>([]);
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef           = useRef<HTMLInputElement>(null);
 
   const handleCvDeleted = useCallback((id: string) => {
     setCvs((prev) => prev.filter((cv) => cv.id !== id));
@@ -117,50 +126,139 @@ export default function LibrarySection({
 
   // When showing the optimistic card, it occupies the first slot; real CVs fill the rest.
   const optimisticCount  = showOptimistic ? 1 : 0;
-  const realCvs          = showOptimistic ? cvs.slice(0, MAX_CVS - 1) : cvs.slice(0, MAX_CVS);
-  const placeholderCount = Math.max(0, MAX_CVS - optimisticCount - realCvs.length);
-  const showGrid         = showOptimistic || cvs.length > 0;
+  const realCvs           = showOptimistic ? cvs.slice(0, MAX_CVS - 1) : cvs.slice(0, MAX_CVS);
+  const used              = optimisticCount + realCvs.length;
+  const canAdd            = used < MAX_CVS;
+  const placeholderCount  = Math.max(0, MAX_CVS - used - (canAdd ? 1 : 0));
+  const showGrid          = showOptimistic || cvs.length > 0;
+
+  // Scroll back up to the map/upload section first so the file picker opens
+  // in a familiar context, then trigger the browse dialog once the smooth
+  // scroll has had time to land.
+  const handleAddClick = () => {
+    document.getElementById("home")?.scrollIntoView({ behavior: "smooth" });
+    setTimeout(() => fileInputRef.current?.click(), 650);
+  };
+
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || file.type !== "application/pdf" || file.size > MAX_PDF_BYTES) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await apiClient.post("/cv/upload", formData);
+      await fetchCvs();
+    } catch (err) {
+      console.error("[LibrarySection] add CV failed", err);
+    } finally {
+      setUploading(false);
+    }
+  }, [fetchCvs]);
 
   return (
     <section
       id="library"
       className={cn(
-        "relative h-dvh bg-page flex flex-col items-center justify-center px-6 py-8",
+        "relative h-dvh bg-page flex flex-col",
         accessible ? "snap-start" : "hidden",
       )}
     >
-      <p className="absolute top-8 text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</p>
+      <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+        <span className="animate-bounce text-sm text-hint">⌃</span>
+        <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
+      </div>
 
-      {/* Skeleton only on initial load, before any CV (real or optimistic) is known */}
-      {loading && !showGrid && (
-        <div className="grid grid-cols-5 gap-x-5 gap-y-2">
-          {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
+      <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+        <span className="text-[9px] tracking-widest text-label">CORRESPONDANCES</span>
+        <span className="animate-bounce text-sm text-hint">⌄</span>
+      </div>
+
+      {/* Header is taken out of flow (absolute) so its own vertical offset
+          doesn't push the grid below down — the grid stays centered in the
+          full section regardless of how far down the header sits. */}
+      <div className="absolute inset-x-0 top-0 px-10 pt-40">
+        <div className="mx-auto w-full max-w-[1080px]">
+          <div className="flex items-end justify-between gap-5">
+            <div className="min-w-0">
+              <h1 className="m-0 text-[22px] font-normal tracking-[-0.015em] leading-[1.05] text-strong">Bibliothèque</h1>
+              <p className="mt-[9px] text-[13.5px] text-hint">Sélectionnez un CV pour visualiser ses correspondances.</p>
+            </div>
+            <div className="flex flex-none items-center gap-[9px]">
+              <span className="text-[9px] tracking-widest text-label">CV IMPORTÉS</span>
+              <span className="text-[9px] tracking-widest text-label">
+                {Math.min(cvs.length, MAX_CVS)} / {MAX_CVS}
+              </span>
+            </div>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* Grid: optimistic slot + real CVs + empty placeholders */}
-      {showGrid && (
-        <div className="grid grid-cols-5 gap-x-5 gap-y-2">
-          {showOptimistic && (
-            <CVCardOptimistic thumbnailUrl={optimisticUpload!.thumbnailUrl} />
-          )}
-          {realCvs.map((cv) => (
-            <CVCard
-              key={cv.id}
-              cv={cv}
-              onDeleted={handleCvDeleted}
-              onSelect={() => onCvSelect?.(cv.id)}
-            />
-          ))}
-          {Array.from({ length: placeholderCount }).map((_, i) => (
-            <CVCardPlaceholder key={`placeholder-${i}`} />
-          ))}
+      <div className="flex-1 min-h-0 overflow-y-auto px-10 pb-16 [scrollbar-gutter:stable_both-edges]">
+        {/* min-h-full + justify-center vertically centers short content without
+            the classic flex-centering bug where overflow gets clipped at the
+            top when there are enough CVs to fill more than one viewport. */}
+        <div className="min-h-full flex flex-col justify-center">
+          <div className="mx-auto w-full max-w-[1080px]">
+
+            {/* Skeleton only on initial load, before any CV (real or optimistic) is known */}
+            {loading && !showGrid && (
+              <div className={GRID_CLASSES}>
+                {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
+              </div>
+            )}
+
+            {/* Grid: optimistic slot + real CVs + add slot + empty placeholders */}
+            {showGrid && (
+              <div className={GRID_CLASSES}>
+                {showOptimistic && (
+                  <CVCardOptimistic thumbnailUrl={optimisticUpload!.thumbnailUrl} />
+                )}
+                {realCvs.map((cv) => (
+                  <CVCard
+                    key={cv.id}
+                    cv={cv}
+                    onDeleted={handleCvDeleted}
+                    onSelect={() => onCvSelect?.(cv.id)}
+                    active={cv.id === selectedCvId}
+                  />
+                ))}
+                {canAdd && (
+                  <button
+                    type="button"
+                    onClick={handleAddClick}
+                    disabled={uploading}
+                    className={cn(
+                      "flex h-full flex-col items-center justify-center gap-[11px] rounded-[14px] border-[1.5px] border-dashed border-soft bg-transparent text-hint transition-colors",
+                      uploading ? "cursor-wait opacity-60" : "cursor-pointer hover:border-accent hover:bg-accent-muted hover:text-accent",
+                    )}
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full border-[1.5px] border-current pb-[2px] text-[22px] leading-none">+</div>
+                    <span className="text-[13px] font-semibold">Ajouter un CV</span>
+                  </button>
+                )}
+                {Array.from({ length: placeholderCount }).map((_, i) => (
+                  <CVCardPlaceholder key={`placeholder-${i}`} />
+                ))}
+              </div>
+            )}
+
+            {isAuthenticated && error && (
+              <p className="mt-4 text-xs text-destructive">Impossible de charger les CVs.</p>
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
-      {isAuthenticated && error && (
-        <p className="mt-4 text-xs text-destructive">Impossible de charger les CVs.</p>
-      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf"
+        className="sr-only"
+        onChange={(e) => void handleFileChange(e)}
+      />
     </section>
   );
 }

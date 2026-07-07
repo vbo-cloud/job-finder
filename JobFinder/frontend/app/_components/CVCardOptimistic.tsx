@@ -4,9 +4,9 @@ interface Props {
 
 export default function CVCardOptimistic({ thumbnailUrl }: Props) {
   return (
-    <div className="flex w-44 flex-shrink-0 flex-col">
-      <div className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4">
-        <div className="relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg bg-overlay">
+    <div className="relative h-full">
+      <div className="flex h-full flex-col overflow-hidden rounded-[14px] border border-subtle bg-card p-[9px]">
+        <div className="relative flex flex-1 min-h-0 items-center justify-center overflow-hidden rounded-[9px] border border-faint bg-card">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={thumbnailUrl}
@@ -25,12 +25,10 @@ export default function CVCardOptimistic({ thumbnailUrl }: Props) {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
         </div>
-        <div className="h-4" />
-        <div className="h-3.5" />
-        <p className="text-[10px] text-hint">Analyse en cours…</p>
+        <div className="flex-none pt-[11px] px-[5px] pb-[3px]">
+          <p className="text-[12px] text-hint">Analyse en cours…</p>
+        </div>
       </div>
-      {/* Spacer matching CVCard's always-present delete controls */}
-      <div className="h-[42px]" />
     </div>
   );
 }

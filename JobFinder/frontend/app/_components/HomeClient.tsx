@@ -99,6 +99,7 @@ export default function HomeClient() {
         onOptimisticConsumed={handleOptimisticConsumed}
         onCvSelect={handleCvSelect}
         onCvsChange={setCvList}
+        selectedCvId={selectedCvId}
       />
       {selectedCvId && (
         <CVDetailSection
