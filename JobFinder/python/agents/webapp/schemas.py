@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 CVStatus = Literal["pending", "processing", "done", "matched", "error"]
 
@@ -44,11 +44,51 @@ class OfferOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CvAnalysisOut(BaseModel):
+    """Global CV quality analysis — structure, formulation, ATS score, coherence with profile intent."""
+
+    status: Literal["pending", "processing", "done", "error"]
+    ats_score: int | None = None
+    points_forts: list[str] = []
+    points_faibles: list[str] = []
+    suggestions: list[str] = []
+    coherence_intention: str | None = None
+
+    # JSONB list columns are NULL until the agent writes a "done" row — a
+    # pending/processing/error row must still validate.
+    @field_validator("points_forts", "points_faibles", "suggestions", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v: list[str] | None) -> list[str]:
+        return v if v is not None else []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MatchAnalysisOut(BaseModel):
+    """GPT-4o-mini analysis of a single CV<->offer pair — see ADR-018."""
+
+    status: Literal["pending", "processing", "done", "error"]
+    matched_skills: list[str] = []
+    points_forts: list[str] = []
+    points_amelioration: list[str] = []
+    synthese: str | None = None
+
+    # JSONB list columns are NULL until the agent writes a "done" row — a
+    # pending/processing/error row must still validate.
+    @field_validator("matched_skills", "points_forts", "points_amelioration", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v: list[str] | None) -> list[str]:
+        return v if v is not None else []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MatchOut(BaseModel):
     """CV-to-offer match returned by the API."""
 
     score: float
     offer: OfferOut
+    analysis: MatchAnalysisOut | None = None
     seen_at: datetime | None = Field(default=None, exclude=True)
 
     @computed_field

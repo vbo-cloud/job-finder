@@ -1,20 +1,26 @@
 """Matches endpoint — returns ranked job offers for the authenticated user's CV."""
 
 import uuid
+from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import ColumnElement, and_, or_, select
+from azure.servicebus.exceptions import ServiceBusError
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import ColumnElement, and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from shared.bus import send_message
 from shared.geo import department_from_commune, regions_intersecting
-from shared.models import CV, Match, Offer, UserProfile
+from shared.models import CV, Match, MatchAnalysis, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
 from schemas import MatchOut, MatchesOut
 
 DEPT_TOKEN_PREFIX = "dept:"
+ANALYSIS_CREDIT_COST = 1
+MATCH_ANALYSIS_QUEUE = "match-analysis"
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 logger = structlog.get_logger()
@@ -115,7 +121,7 @@ def get_matches(
             select(Match)
             .join(CV, Match.cv_id == CV.id)
             .where(CV.user_id == user_id)
-            .options(selectinload(Match.offer))
+            .options(selectinload(Match.offer), selectinload(Match.analysis))
             .order_by(Match.score.desc())
         )
         # Hard geographic filter — offers outside the user's painted commune
@@ -172,7 +178,7 @@ def get_matches_for_cv(
         stmt = (
             select(Match)
             .where(Match.cv_id == cv_id)
-            .options(selectinload(Match.offer))
+            .options(selectinload(Match.offer), selectinload(Match.analysis))
             .order_by(Match.score.desc())
         )
         # Hard geographic filter — same behaviour as GET /matches.
@@ -190,3 +196,106 @@ def get_matches_for_cv(
         raise
     logger.info("cv_matches_fetch_done", user_id=user_id, cv_id=str(cv_id), count=len(matches))
     return MatchesOut(rome_codes=rome_codes, matches=matches)
+
+
+@router.post("/{cv_id}/offers/{offer_id}/analyze", status_code=status.HTTP_202_ACCEPTED)
+def request_match_analysis(
+    cv_id: uuid.UUID,
+    offer_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Manually trigger a GPT-4o-mini analysis for one CV<->offer match — consumes one credit.
+
+    Idempotent: re-triggers the analysis (reset to pending/manual) even if one already
+    exists in any status — lets a user retry a failed analysis or refresh a stale one.
+
+    Args:
+        cv_id: UUID of the CV that owns this match.
+        offer_id: UUID of the offer (identifies the match uniquely within a CV).
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the match does not exist or is not owned by the user.
+        HTTPException 402: If the user has no analysis credits remaining.
+    """
+    logger.info("match_analysis_request_started", user_id=user_id, cv_id=str(cv_id), offer_id=str(offer_id))
+    try:
+        match = session.execute(
+            select(Match)
+            .join(CV, Match.cv_id == CV.id)
+            .where(Match.cv_id == cv_id, Match.offer_id == offer_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+
+        if match is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
+
+        # Atomic conditional decrement — one SQL statement, no SELECT ... FOR UPDATE
+        # (see ADR-018 addendum). rowcount == 0 means no credits left.
+        result = session.execute(
+            update(UserProfile)
+            .where(
+                UserProfile.user_id == user_id,
+                UserProfile.analysis_credits_remaining >= ANALYSIS_CREDIT_COST,
+            )
+            .values(
+                analysis_credits_remaining=UserProfile.analysis_credits_remaining
+                - ANALYSIS_CREDIT_COST
+            )
+        )
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="No analysis credits remaining",
+            )
+
+        # Reuse the existing row if the auto top-N or a previous attempt created one.
+        now = datetime.now(timezone.utc)
+        insert_stmt = pg_insert(MatchAnalysis).values(
+            id=uuid.uuid4(),
+            match_id=match.id,
+            status="pending",
+            triggered_by="manual",
+            matched_skills=[],
+            requested_at=now,
+        )
+        session.execute(
+            insert_stmt.on_conflict_do_update(
+                constraint="uq_match_analyses_match_id",
+                set_={
+                    "status": "pending",
+                    "triggered_by": "manual",
+                    "requested_at": now,
+                    "completed_at": None,
+                },
+            )
+        )
+        session.commit()
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        logger.error(
+            "match_analysis_request_db_failed",
+            user_id=user_id,
+            cv_id=str(cv_id),
+            offer_id=str(offer_id),
+            exc_info=True,
+        )
+        raise
+
+    # Dispatched after commit — fire-and-forget. The credit is already consumed;
+    # a Service Bus failure must not fail the request (same trade-off as
+    # cv_upload_analysis_trigger_failed in routers/cv.py).
+    try:
+        send_message(MATCH_ANALYSIS_QUEUE, {"match_id": str(match.id)})
+    except ServiceBusError:
+        logger.error(
+            "match_analysis_request_dispatch_failed",
+            user_id=user_id,
+            cv_id=str(cv_id),
+            offer_id=str(offer_id),
+            exc_info=True,
+        )
+
+    logger.info("match_analysis_request_done", user_id=user_id, cv_id=str(cv_id), offer_id=str(offer_id))

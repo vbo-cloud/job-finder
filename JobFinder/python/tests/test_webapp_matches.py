@@ -3,7 +3,8 @@
 A minimal FastAPI test app is created here (no lifespan, no run_migrations)
 with dependency overrides for get_current_user and get_db.
 
-Covers: GET /matches, GET /matches/cv/{cv_id}.
+Covers: GET /matches, GET /matches/cv/{cv_id},
+POST /matches/{cv_id}/offers/{offer_id}/analyze.
 """
 import re
 import sys
@@ -24,6 +25,7 @@ for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
 
 from auth import get_current_user  # noqa: E402
 from dependencies import get_db  # noqa: E402
+from routers import matches as matches_router_module  # noqa: E402
 from routers.matches import commune_zone_condition, router  # noqa: E402
 
 TEST_USER_ID = "test-user-abc123"
@@ -52,7 +54,18 @@ def _make_match(score: float = 0.85) -> MagicMock:
     match = MagicMock()
     match.score = score
     match.offer = _make_offer()
+    match.analysis = None
     return match
+
+
+def _make_analysis(status: str = "done") -> MagicMock:
+    analysis = MagicMock()
+    analysis.status = status
+    analysis.matched_skills = ["Python", "Docker"]
+    analysis.points_forts = ["Expérience solide"]
+    analysis.points_amelioration = ["Certifications absentes"]
+    analysis.synthese = "Cette offre est pertinente pour vous."
+    return analysis
 
 
 def _make_profile(
@@ -135,6 +148,62 @@ class TestGetMatches:
         resp = test_client.get("/matches")
 
         assert resp.status_code == 500
+
+    def test_serializes_null_analysis(self, test_client, mock_session):
+        profile = _make_profile()
+        match = _make_match(0.9)
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        assert resp.json()["matches"][0]["analysis"] is None
+
+    def test_serializes_non_null_analysis(self, test_client, mock_session):
+        profile = _make_profile()
+        match = _make_match(0.9)
+        match.analysis = _make_analysis()
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        analysis = resp.json()["matches"][0]["analysis"]
+        assert analysis["status"] == "done"
+        assert analysis["matched_skills"] == ["Python", "Docker"]
+        assert analysis["points_forts"] == ["Expérience solide"]
+        assert analysis["points_amelioration"] == ["Certifications absentes"]
+        assert analysis["synthese"] == "Cette offre est pertinente pour vous."
+
+    def test_serializes_pending_analysis_with_null_lists(self, test_client, mock_session):
+        # The agent has not run yet: JSONB list columns are still NULL in the
+        # row created by the enqueuer — the schema must coerce them to [].
+        profile = _make_profile()
+        match = _make_match(0.9)
+        analysis = _make_analysis(status="pending")
+        analysis.matched_skills = []
+        analysis.points_forts = None
+        analysis.points_amelioration = None
+        analysis.synthese = None
+        match.analysis = analysis
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        body = resp.json()["matches"][0]["analysis"]
+        assert body["status"] == "pending"
+        assert body["points_forts"] == []
+        assert body["points_amelioration"] == []
 
     def test_filters_by_commune_when_zone_is_defined(self, test_client, mock_session):
         profile = _make_profile(commune_codes=["75101", "75102"])
@@ -284,6 +353,109 @@ class TestGetMatchesForCv:
         resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
 
         assert resp.status_code == 500
+
+    def test_serializes_non_null_analysis(self, test_client, mock_session):
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        profile = _make_profile()
+        match = _make_match(0.75)
+        match.analysis = _make_analysis()
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 200
+        analysis = resp.json()["matches"][0]["analysis"]
+        assert analysis["status"] == "done"
+        assert analysis["matched_skills"] == ["Python", "Docker"]
+
+
+# ---------------------------------------------------------------------------
+# POST /matches/{cv_id}/offers/{offer_id}/analyze
+# ---------------------------------------------------------------------------
+
+
+class TestRequestMatchAnalysis:
+    TEST_OFFER_ID = uuid.uuid4()
+    TEST_MATCH_ID = uuid.uuid4()
+
+    def _make_owned_match(self) -> MagicMock:
+        match = MagicMock()
+        match.id = self.TEST_MATCH_ID
+        return match
+
+    def test_returns_404_when_match_not_found(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(matches_router_module, "send_message")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.post(f"/matches/{TEST_CV_ID}/offers/{self.TEST_OFFER_ID}/analyze")
+
+        assert resp.status_code == 404
+        mock_send.assert_not_called()
+
+    def test_returns_402_when_no_credits_remaining(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(matches_router_module, "send_message")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": self._make_owned_match()}),
+            MagicMock(rowcount=0),  # conditional credit decrement matched no row
+        ]
+
+        resp = test_client.post(f"/matches/{TEST_CV_ID}/offers/{self.TEST_OFFER_ID}/analyze")
+
+        assert resp.status_code == 402
+        mock_send.assert_not_called()
+        mock_session.commit.assert_not_called()
+
+    def test_happy_path_decrements_credit_and_dispatches(
+        self, test_client, mock_session, mocker
+    ):
+        mock_send = mocker.patch.object(matches_router_module, "send_message")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": self._make_owned_match()}),
+            MagicMock(rowcount=1),  # credit decremented
+            MagicMock(),            # match_analyses upsert
+        ]
+
+        resp = test_client.post(f"/matches/{TEST_CV_ID}/offers/{self.TEST_OFFER_ID}/analyze")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_called_once()
+        mock_send.assert_called_once_with(
+            "match-analysis", {"match_id": str(self.TEST_MATCH_ID)}
+        )
+        # The credit decrement is a conditional UPDATE on user_profiles.
+        stmt = str(mock_session.execute.call_args_list[1].args[0])
+        assert "UPDATE user_profiles" in stmt
+        assert "analysis_credits_remaining" in stmt
+
+    def test_returns_202_even_if_dispatch_fails(self, test_client, mock_session, mocker):
+        from azure.servicebus.exceptions import ServiceBusError
+
+        mocker.patch.object(
+            matches_router_module, "send_message", side_effect=ServiceBusError("boom")
+        )
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": self._make_owned_match()}),
+            MagicMock(rowcount=1),
+            MagicMock(),
+        ]
+
+        resp = test_client.post(f"/matches/{TEST_CV_ID}/offers/{self.TEST_OFFER_ID}/analyze")
+
+        assert resp.status_code == 202
+
+    def test_returns_500_on_db_error(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(matches_router_module, "send_message")
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post(f"/matches/{TEST_CV_ID}/offers/{self.TEST_OFFER_ID}/analyze")
+
+        assert resp.status_code == 500
+        mock_send.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

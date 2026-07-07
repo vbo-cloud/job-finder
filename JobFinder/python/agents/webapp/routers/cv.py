@@ -25,11 +25,11 @@ from sqlalchemy.orm import Session
 from shared.bus import send_message
 from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
-from shared.models import CV, Match, Offer, UserProfile
+from shared.models import CV, CvAnalysis, Match, MatchAnalysis, Offer, UserProfile
 from auth import get_current_user
 from dependencies import get_db
 from routers.matches import commune_zone_condition
-from schemas import CVListItemOut, CVUploadOut
+from schemas import CVListItemOut, CVUploadOut, CvAnalysisOut
 
 router = APIRouter(prefix="/cv", tags=["cv"])
 logger = structlog.get_logger()
@@ -304,6 +304,8 @@ async def upload_cv(
                 user_id=user_id,
                 rome_codes={},
                 commune_codes=[],
+                analysis_credits_remaining=30,
+                analysis_credits_reset_at=None,
                 created_at=now,
             ).on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
         )
@@ -404,6 +406,58 @@ def list_cvs(
     ]
     logger.info("cv_list_done", user_id=user_id, count=len(result))
     return result
+
+
+@router.get("/{cv_id}/analysis", response_model=CvAnalysisOut)
+def get_cv_analysis(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> CvAnalysisOut:
+    """Return the CV quality analysis for a CV owned by the authenticated user.
+
+    Returns status="pending" (all other fields empty/None) if the CV exists but the
+    cv_analysis agent has not written a row yet — the row is only created by the
+    agent itself, never at upload time.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Returns:
+        CvAnalysisOut with the analysis status and results.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+    """
+    logger.info("cv_analysis_fetch_started", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+
+        if cv is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+        analysis = session.execute(
+            select(CvAnalysis).where(CvAnalysis.cv_id == cv_id)
+        ).scalar_one_or_none()
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        logger.error("cv_analysis_fetch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    logger.info(
+        "cv_analysis_fetch_done",
+        user_id=user_id,
+        cv_id=str(cv_id),
+        status=analysis.status if analysis else "pending",
+    )
+    if analysis is None:
+        return CvAnalysisOut(status="pending")
+    return CvAnalysisOut.model_validate(analysis)
 
 
 @router.get("/{cv_id}/thumbnail", response_class=Response)
@@ -651,8 +705,15 @@ def _delete_cv(session: Session, cv: CV, user_id: str) -> None:
             detail="Storage unavailable — CV deletion failed",
         ) from e
 
-    # Delete matches first — FK constraint on matches.cv_id has no CASCADE.
+    # Delete analyses first, then matches — the FK constraints on
+    # match_analyses.match_id, matches.cv_id, and cv_analyses.cv_id have no CASCADE.
+    session.execute(
+        delete(MatchAnalysis).where(
+            MatchAnalysis.match_id.in_(select(Match.id).where(Match.cv_id == cv.id))
+        )
+    )
     session.execute(delete(Match).where(Match.cv_id == cv.id))
+    session.execute(delete(CvAnalysis).where(CvAnalysis.cv_id == cv.id))
     session.delete(cv)
     _remove_cv_from_rome_codes(session, cv.id, user_id)
 
