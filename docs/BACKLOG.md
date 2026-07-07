@@ -637,3 +637,21 @@ ou documentée en commentaire croisé dans les deux fichiers) fermerait ce risqu
 mémoire et bande passante avant d'être rejeté. À durcir avec une vérification de
 `Content-Length` ou une lecture par chunks avec arrêt anticipé, si l'endpoint est exposé à un
 trafic non fiable.
+
+### [optional] Durées d'animation de fermeture dupliquées en dur dans `CVCard.tsx`
+`CLOSING_MS` (délai JS avant retour à `idle`) et les durées CSS inline des animations de
+sortie (`emgLOut`/`emgROut`/`lineOutH`/`lineOut`, `.08s`) sont ajustées en cohérence à la
+main plutôt que dérivées d'une seule source — si `CLOSING_MS` change, les durées
+`animation` des `style` inline ne suivent pas automatiquement. Une custom property CSS
+(`--closing-ms`) posée à côté du style inline et référencée par les keyframes
+fermerait ce risque de désynchronisation ; impact actuel nul, les deux valeurs sont
+cohérentes aujourd'hui.
+
+### [optional] `scrollend` — course possible avec un autre scroll concurrent
+`handleScrollToHome` (`HomeClient.tsx`) écoute `scrollend` sur le conteneur de scroll une
+seule fois (`{ once: true }`) après avoir déclenché `home.scrollIntoView()`. Si un autre
+scroll (utilisateur ou composant tiers) survient entre l'appel et l'événement, `finish()`
+se déclenche sur ce scroll-là au lieu du nôtre — le sélecteur de fichier s'ouvrirait avant
+que la page ait réellement atterri sur la section d'accueil. Cas limite jugé peu probable
+en pratique (aucun autre scroll programmatique concurrent dans le flux actuel) ; à
+surveiller si un futur scroll automatique est ajouté ailleurs sur la page.
