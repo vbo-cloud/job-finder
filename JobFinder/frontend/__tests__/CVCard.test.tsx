@@ -105,10 +105,16 @@ describe("CVCard", () => {
         <CVCard cv={baseCV} onDeleted={jest.fn()} />
       );
       const wrapper = container.firstChild as HTMLElement;
+      // The trash button is a single persistent DOM node (so it can morph in
+      // place — see delete-morph choreography) that stays mounted at all
+      // times; hover only toggles its row's opacity/pointer-events, not its
+      // presence in the DOM.
+      const trashButton = screen.getByRole("button", { name: "Supprimer ce CV" });
+      expect(trashButton).toBeInTheDocument();
+      expect(trashButton.parentElement).not.toBeVisible();
+
       fireEvent.mouseEnter(wrapper);
-      expect(
-        screen.getByRole("button", { name: "Supprimer ce CV" })
-      ).toBeInTheDocument();
+      expect(trashButton.parentElement).toBeVisible();
     });
 
     it("clicking trash button shows confirm and cancel buttons", () => {
@@ -144,7 +150,8 @@ describe("CVCard", () => {
       jest.useRealTimers();
     });
 
-    it("clicking cancel returns to idle state without calling delete", () => {
+    it("clicking cancel plays the reverse morph before returning to idle", () => {
+      jest.useFakeTimers();
       const { container } = render(
         <CVCard cv={baseCV} onDeleted={jest.fn()} />
       );
@@ -153,10 +160,21 @@ describe("CVCard", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Annuler la suppression" })
       );
+
+      // Reverse animation (emgLOut/emgROut/lineOut) still plays for CLOSING_MS —
+      // the button stays mounted until the morph back to a rectangle completes.
+      expect(
+        screen.getByRole("button", { name: "Confirmer la suppression" })
+      ).toBeInTheDocument();
+
+      act(() => jest.advanceTimersByTime(240));
+
       expect(
         screen.queryByRole("button", { name: "Confirmer la suppression" })
       ).not.toBeInTheDocument();
       expect((apiClient.delete as jest.Mock)).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
     });
   });
 

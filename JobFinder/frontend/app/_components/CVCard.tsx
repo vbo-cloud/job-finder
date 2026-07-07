@@ -1,20 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Check, Trash2, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVData } from "@/lib/api/types";
 
-type DeleteState = "idle" | "confirm" | "absorbing";
+type DeleteState = "idle" | "armed" | "closing" | "absorbing";
 
 interface CVCardProps {
   cv: CVData;
   onDeleted: (id: string) => void;
   onSelect?: () => void;
+  /** Highlights the card as the active CV (accent border + glow). */
+  active?: boolean;
 }
 
 const delay = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+const CLOSING_MS = 120;
 
 function AnimatedEllipsis() {
   const [step, setStep] = useState(1);
@@ -25,10 +29,9 @@ function AnimatedEllipsis() {
   return <span aria-hidden="true">{".".repeat(step)}</span>;
 }
 
-export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
+export default function CVCard({ cv, onDeleted, onSelect, active = false }: CVCardProps) {
   const isPending   = cv.status === "pending" || cv.status === "processing";
   const isSearching = cv.status === "done";
-  const isMatched   = cv.status === "matched";
   const isError     = cv.status === "error";
   const showSpinner = isPending || isSearching;
 
@@ -39,12 +42,12 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
     year: "numeric",
   });
 
-  const [thumbnailSrc, setThumbnailSrc]   = useState<string | null>(null);
-  const [isHovered, setIsHovered]         = useState(false);
-  const [deleteState, setDeleteState]     = useState<DeleteState>("idle");
-  const [unseenCount, setUnseenCount] = useState(cv.unseen_count);
+  const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
+  const [cardHovered, setCardHovered]   = useState(false);
+  const [trashHovered, setTrashHovered] = useState(false);
+  const [deleteState, setDeleteState]   = useState<DeleteState>("idle");
+  const [unseenCount, setUnseenCount]   = useState(cv.unseen_count);
 
-  // Thumbnail loading: has_thumbnail is set on the CV but blob fetch not complete yet.
   const isThumbnailLoading = cv.has_thumbnail && !thumbnailSrc;
   const showImageSpinner   = showSpinner || isThumbnailLoading;
 
@@ -52,9 +55,10 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
     setUnseenCount(cv.unseen_count);
   }, [cv.unseen_count]);
 
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const rowRef     = useRef<HTMLDivElement>(null);
-  const cardRef    = useRef<HTMLDivElement>(null);
+  const wrapperRef      = useRef<HTMLDivElement>(null);
+  const rowRef          = useRef<HTMLDivElement>(null);
+  const cardRef         = useRef<HTMLDivElement>(null);
+  const closingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!cv.has_thumbnail) return;
@@ -80,18 +84,27 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
     };
   }, [cv.id, cv.has_thumbnail]);
 
+  useEffect(() => () => {
+    if (closingTimerRef.current) clearTimeout(closingTimerRef.current);
+  }, []);
+
+  // Starts the reverse (rectangle) morph: side buttons + wire play their "out"
+  // animation, then after CLOSING_MS the trash button itself shrinks back.
+  const triggerCancel = () => {
+    setDeleteState((prev) => (prev === "armed" ? "closing" : prev));
+    closingTimerRef.current = setTimeout(() => {
+      setDeleteState((prev) => (prev === "closing" ? "idle" : prev));
+    }, CLOSING_MS);
+  };
+
   // Close confirm state on click outside the trash row
   useEffect(() => {
-    if (deleteState !== "confirm") return;
+    if (deleteState !== "armed") return;
 
     const handleMouseDown = (e: MouseEvent) => {
       const target = e.target as Node;
-      if (!wrapperRef.current?.contains(target)) {
-        setDeleteState("idle");
-        return;
-      }
-      if (!rowRef.current?.contains(target)) {
-        setDeleteState("idle");
+      if (!wrapperRef.current?.contains(target) || !rowRef.current?.contains(target)) {
+        triggerCancel();
       }
     };
 
@@ -125,21 +138,48 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
     onDeleted(cv.id);
   };
 
-  const showControls = (isHovered || deleteState !== "idle") && deleteState !== "absorbing";
+  const handleCardClick = () => {
+    if (deleteState === "armed") { triggerCancel(); return; }
+    if (deleteState !== "idle") return;
+    onSelect?.();
+  };
+
+  const confirming   = deleteState === "armed" || deleteState === "closing";
+  const rowVisible   = (cardHovered || confirming) && deleteState !== "absorbing";
+  // The icon sits a fixed 6px above the button's bottom edge (pb-[5px] + border),
+  // so the button needs to clear the card by at least 20px (6 + the icon's own
+  // 14px) before the icon is fully out from behind the card instead of being
+  // cropped at the top. Keeping every visible state at/above that threshold
+  // avoids the "cropped icon" look; trashHovered goes a bit further for a felt
+  // reaction to hovering the icon itself.
+  const rowY         = confirming ? 38 : cardHovered ? (trashHovered ? 26 : 20) : 20;
+  const closing      = deleteState === "closing";
 
   return (
     <div
       ref={wrapperRef}
-      className="flex w-44 flex-shrink-0 flex-col"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      className="relative h-full"
+      onMouseEnter={() => setCardHovered(true)}
+      onMouseLeave={() => setCardHovered(false)}
     >
       {/* Card */}
       <div
         ref={cardRef}
-        onClick={onSelect}
-        className="flex flex-col gap-2.5 rounded-xl border border-subtle bg-card p-4 cursor-pointer hover:border-soft transition-colors"
+        onClick={handleCardClick}
+        className={cn(
+          "relative z-[2] flex h-full flex-col overflow-hidden rounded-[14px] bg-card p-[9px] cursor-pointer transition-[border-color,box-shadow] duration-150",
+          active
+            ? "border-[1.5px] border-accent shadow-[0_8px_26px_var(--bg-accent-muted)]"
+            : "border border-subtle hover:border-soft hover:shadow-[0_6px_18px_rgba(0,0,0,.06)]",
+        )}
       >
+        {/* bg-card is a translucent tint (rgba) — on its own it doesn't hide
+            the trash tab tucked behind the card (see delrow below), it just
+            shows through it. This opaque backing sits under that tint, at the
+            bottom of the stack, so the tint keeps its usual look but the card
+            now actually occludes what's behind it. */}
+        <div className="absolute inset-0 -z-10 rounded-[14px] bg-page" />
+
         <div
           role={showImageSpinner ? "status" : undefined}
           aria-label={
@@ -149,7 +189,7 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
             undefined
           }
           className={cn(
-            "relative flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg",
+            "relative flex flex-1 min-h-0 items-center justify-center overflow-hidden rounded-[9px] border border-faint",
             !thumbnailSrc && showImageSpinner && "bg-card",
             !thumbnailSrc && !showImageSpinner && !isError && "bg-card-hover",
             isError && "bg-destructive-muted",
@@ -186,129 +226,148 @@ export default function CVCard({ cv, onDeleted, onSelect }: CVCardProps) {
 
           {isError && <span className="text-xs text-destructive">Erreur</span>}
           {!showImageSpinner && !isError && !thumbnailSrc && (
-            <span className="text-xs text-label">PDF</span>
+            <span className="text-xs text-label">aperçu du CV</span>
           )}
         </div>
 
-        <p className="truncate text-[11px] text-secondary" title={displayName}>{displayName}</p>
-        <p className="text-[10px] text-hint">{date}</p>
+        <div className="flex-none pt-[11px] px-[5px] pb-[3px]">
+          <p className="truncate text-[13.5px] font-normal text-strong" title={displayName}>{displayName}</p>
+          <p className="mt-[3px] text-[12px] text-hint">{date}</p>
 
-        {isPending && (
-          <p className="text-[10px] text-hint">Analyse en cours…</p>
-        )}
-        {isSearching && (
-          <p className="text-[10px] text-hint">
-            Recherche en cours<AnimatedEllipsis />
-          </p>
-        )}
-        {!showSpinner && !isError && (
-          <p className="text-[10px] text-muted">
-            {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
-            {unseenCount > 0 && (
-              <span className="ml-1 text-[9px] text-success">+{unseenCount}</span>
-            )}
-          </p>
-        )}
+          {isPending && (
+            <p className="mt-[9px] text-[12px] text-hint">Analyse en cours…</p>
+          )}
+          {isSearching && (
+            <p className="mt-[9px] text-[12px] text-hint">
+              Recherche en cours<AnimatedEllipsis />
+            </p>
+          )}
+          {!showSpinner && !isError && (
+            <div className="mt-[9px] flex items-center gap-[7px]">
+              <span className="text-[12.5px] font-medium text-secondary">
+                {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
+              </span>
+              <span
+                title={unseenCount > 0 ? `+${unseenCount} correspondances depuis la dernière analyse` : "Analyse en attente"}
+                className={cn(
+                  "text-[11.5px] font-light tabular-nums",
+                  unseenCount > 0 ? "text-success" : "text-label",
+                )}
+              >
+                {unseenCount > 0 ? `+${unseenCount}` : "—"}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Delete controls */}
+      {/* Delete controls: the trash button is a single persistent element that
+          morphs between a bottom-tab rectangle and an armed circle. */}
       <div
-        className={cn(
-          "flex flex-col items-center transition-opacity duration-150",
-          showControls ? "opacity-100" : "opacity-0 pointer-events-none",
-        )}
+        ref={rowRef}
+        className="absolute left-0 right-0 bottom-0 flex items-center justify-center"
+        style={{
+          opacity: rowVisible ? 1 : 0,
+          transform: `translateY(${rowY}px)`,
+          pointerEvents: rowVisible ? "auto" : "none",
+          // z-index only needs a transition-delay when freshly arming: without
+          // it, the button jumps above the card the instant you click, while
+          // it's still mid-flight (growing into the circle, sliding down) —
+          // for a frame or two it visibly floats over the card artwork instead
+          // of clearing it first. Delaying the flip until the move/resize is
+          // basically done avoids that. No delay needed on the way back down:
+          // dropping z-index immediately is what makes it tuck back behind the
+          // card correctly.
+          transition:
+            deleteState === "armed"
+              ? "opacity .16s ease, transform .3s cubic-bezier(.34,1.22,.64,1), z-index 0s .3s"
+              : "opacity .16s ease, transform .3s cubic-bezier(.34,1.22,.64,1)",
+          zIndex: confirming ? 9 : 1,
+        }}
       >
-        {/* Vertical wire from card bottom to trash row */}
-        <div className="h-3.5 w-px bg-interactive-hover" />
+        {confirming && (
+          <button
+            aria-label="Annuler la suppression"
+            onClick={(e) => { e.stopPropagation(); triggerCancel(); }}
+            className="flex flex-none h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-subtle bg-card text-secondary shadow-[0_8px_20px_rgba(0,0,0,.15)] transition-colors hover:bg-interactive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+            style={{ animation: closing ? "emgLOut .08s ease both" : "emgL .26s cubic-bezier(.34,1.42,.64,1) .12s both" }}
+          >
+            <X aria-hidden="true" width={14} height={14} strokeWidth={1.75} />
+          </button>
+        )}
 
-        {/* Horizontal row: [cancel] ─ [trash] ─ [confirm] */}
-        <div ref={rowRef} className="flex items-center">
+        {/* Wire from cancel button to the trash button */}
+        {confirming && (
+          <div
+            className="h-px w-[12.6px] flex-none rounded-full bg-[var(--border-soft)]"
+            style={{
+              transformOrigin: "right",
+              animation: closing ? "lineOutH .08s ease both" : "lineInH .2s ease .04s both",
+            }}
+          />
+        )}
 
-          {/* Cancel button + wire to trash (left side) */}
-          {deleteState === "confirm" && (
-            <>
-              <button
-                aria-label="Annuler la suppression"
-                onClick={() => setDeleteState("idle")}
-                className="flex items-center justify-center rounded-md bg-interactive px-3 py-1.5 transition-colors hover:bg-interactive-hover active:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  width="14"
-                  height="14"
-                  className="text-primary"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              {/* Wire: right of cancel → left of trash */}
-              <div className="h-px w-2 bg-interactive-hover" />
-            </>
+        {/* Trash button gets its own positioning context so the card→trash
+            wire is always centered on it, independent of its neighbors. */}
+        <div className="relative flex flex-none">
+          {/* Wire from card bottom edge to the trash button */}
+          {confirming && (
+            <div
+              className="absolute bottom-full left-1/2 h-1 w-px -translate-x-1/2 rounded-full bg-[var(--border-soft)]"
+              style={{
+                transformOrigin: "top",
+                animation: closing ? "lineOut .08s ease both" : "lineIn .2s ease .04s both",
+              }}
+            />
           )}
 
-          {/* Trash button */}
           <button
             aria-label="Supprimer ce CV"
-            disabled={deleteState === "confirm"}
-            aria-disabled={deleteState === "confirm"}
-            onClick={() => setDeleteState("confirm")}
+            disabled={confirming}
+            aria-disabled={confirming}
+            onMouseEnter={() => setTrashHovered(true)}
+            onMouseLeave={() => setTrashHovered(false)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (deleteState === "idle") setDeleteState("armed");
+            }}
             className={cn(
-              "group flex h-7 w-7 items-center justify-center rounded-full border border-subtle bg-card transition-colors hover:border-transparent hover:bg-solid-destructive-hover active:bg-solid-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:cursor-not-allowed disabled:opacity-60",
-              deleteState === "confirm" && "border-transparent bg-solid-destructive",
+              "flex flex-none justify-center border transition-[width,height,border-radius,background-color,border-color,color] ease-out",
+              confirming
+                ? "h-[34px] w-[34px] items-center rounded-full border-transparent bg-solid-destructive text-on-solid shadow-[0_6px_16px_rgba(165,13,38,.42)] cursor-default duration-300"
+                : cn(
+                    "h-[30px] w-[54px] items-end pb-[5px] rounded-b-[10px] border-t-0 shadow-[0_7px_14px_rgba(0,0,0,.11)] cursor-pointer duration-150",
+                    trashHovered
+                      ? "border-solid-destructive-hover bg-solid-destructive-hover text-on-solid"
+                      : "border-subtle bg-card text-hint",
+                  ),
             )}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              width="14"
-              height="14"
-              className={cn(
-                "transition-colors",
-                deleteState === "confirm" ? "text-strong" : "text-muted group-hover:text-strong",
-              )}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-              />
-            </svg>
+            <Trash2 aria-hidden="true" width={14} height={14} strokeWidth={1.75} />
           </button>
-
-          {/* Wire + confirm button (right side) */}
-          {deleteState === "confirm" && (
-            <>
-              {/* Wire: right of trash → left of confirm */}
-              <div className="h-px w-2 bg-interactive-hover" />
-              <button
-                aria-label="Confirmer la suppression"
-                onClick={() => void handleConfirmDelete()}
-                className="flex items-center justify-center rounded-md bg-solid-confirm px-3 py-1.5 transition-colors hover:bg-solid-confirm-hover active:bg-solid-confirm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  width="14"
-                  height="14"
-                  className="text-strong"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                </svg>
-              </button>
-            </>
-          )}
-
         </div>
+
+        {/* Wire from trash button to the confirm button */}
+        {confirming && (
+          <div
+            className="h-px w-[12.6px] flex-none rounded-full bg-[var(--border-soft)]"
+            style={{
+              transformOrigin: "left",
+              animation: closing ? "lineOutH .08s ease both" : "lineInH .2s ease .04s both",
+            }}
+          />
+        )}
+
+        {confirming && (
+          <button
+            aria-label="Confirmer la suppression"
+            onClick={(e) => { e.stopPropagation(); void handleConfirmDelete(); }}
+            className="flex flex-none h-[34px] w-[34px] items-center justify-center rounded-[10px] border-none bg-solid-confirm text-on-solid shadow-[0_8px_20px_rgba(47,158,68,.34)] transition-colors hover:bg-solid-confirm-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm"
+            style={{ animation: closing ? "emgROut .08s ease both" : "emgR .26s cubic-bezier(.34,1.42,.64,1) .12s both" }}
+          >
+            <Check aria-hidden="true" width={15} height={15} strokeWidth={2.25} />
+          </button>
+        )}
       </div>
     </div>
   );

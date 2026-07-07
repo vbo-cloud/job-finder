@@ -106,3 +106,39 @@
 @keyframes shine {
   to { background-position: 200% 0; }
 }
+
+/* CVCard delete-morph choreography (LibrarySection) — the trash button stays
+   a single DOM node that resizes; only the connecting line and the two side
+   buttons (cancel/confirm) mount/unmount, so they get in/out keyframes. */
+@keyframes lineIn {
+  from { opacity: 0; transform: scaleY(0); }
+  to   { opacity: 1; transform: scaleY(1); }
+}
+@keyframes lineOut {
+  from { opacity: 1; transform: scaleY(1); }
+  to   { opacity: 0; transform: scaleY(0); }
+}
+@keyframes lineInH {
+  from { opacity: 0; transform: scaleX(0); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+@keyframes lineOutH {
+  from { opacity: 1; transform: scaleX(1); }
+  to   { opacity: 0; transform: scaleX(0); }
+}
+@keyframes emgL {
+  from { opacity: 0; transform: translateX(24px) scale(.4); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes emgR {
+  from { opacity: 0; transform: translateX(-24px) scale(.4); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes emgLOut {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(24px) scale(.4); }
+}
+@keyframes emgROut {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(-24px) scale(.4); }
+}
