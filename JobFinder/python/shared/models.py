@@ -73,6 +73,9 @@ class UserProfile(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     rome_codes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     commune_codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    experience_level: Mapped[str | None] = mapped_column(String, nullable=True)
+    candidate_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

@@ -24,6 +24,8 @@ export interface ProfileData {
   user_id: string;
   rome_codes: Record<string, RomeCodeEntry>;
   commune_codes: string[];
+  experience_level: "0-2" | "2-5" | "5+" | null;
+  candidate_description: string | null;
 }
 
 export interface OfferOut {

@@ -32,6 +32,9 @@ const config: Config = {
         "dot-active":            "var(--bg-dot-active)",
         "match-skill":           "var(--bg-match-skill)",
         "new-offer":             "var(--bg-new-offer)",
+        "profile-page":          "var(--bg-profile-page)",
+        "profile-surface":       "var(--bg-profile-surface)",
+        "profile-destructive-hover": "var(--bg-profile-destructive-hover)",
       },
       textColor: {
         empty:       "var(--text-empty)",
@@ -49,6 +52,7 @@ const config: Config = {
         "match-skill": "var(--text-match-skill)",
         "new-offer":   "var(--text-new-offer)",
         "on-solid":    "var(--text-on-solid)",
+        "profile-muted": "var(--text-profile-muted)",
       },
       borderColor: {
         faint:   "var(--border-faint)",
@@ -59,6 +63,7 @@ const config: Config = {
         active:  "var(--border-active)",
         accent:  "var(--border-accent)",
         match:   "var(--border-match)",
+        profile: "var(--border-profile)",
       },
       ringColor: {
         subtle:      "var(--border-subtle)",

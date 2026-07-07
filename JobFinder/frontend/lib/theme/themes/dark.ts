@@ -61,6 +61,14 @@ export const darkTheme: Theme = {
   "--border-match":    "rgb(22, 163, 74)",
   "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
 
+  /* Profile page (design handoff palette) — no dark variant specified in the
+     handoff, so these reuse the app's existing dark-mode equivalents. */
+  "--bg-profile-page":              "#0a0a0f",
+  "--bg-profile-surface":           "#1a1a22",
+  "--border-profile":               "rgba(255, 255, 255, 0.25)",
+  "--text-profile-muted":           "rgba(255, 255, 255, 0.35)",
+  "--bg-profile-destructive-hover": "rgba(239, 68, 68, 0.08)",
+
   /* Canvas */
   "--canvas-ambient": "200, 210, 230",
   "--canvas-orbit": "170, 210, 255",

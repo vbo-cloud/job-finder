@@ -61,6 +61,13 @@ export const lightTheme: Theme = {
   "--border-match":    "#1c7a56",
   "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
 
+  /* Profile page (design handoff palette) */
+  "--bg-profile-page":              "rgb(245, 245, 245)",
+  "--bg-profile-surface":           "#ffffff",
+  "--border-profile":               "#e2ddd6",
+  "--text-profile-muted":           "#b0aaa2",
+  "--bg-profile-destructive-hover": "#fdf3f3",
+
   /* Canvas */
   "--canvas-ambient": "40, 60, 100",
   "--canvas-orbit": "20, 80, 200",

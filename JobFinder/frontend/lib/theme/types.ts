@@ -64,6 +64,13 @@ export type Theme = {
   "--border-match": string;     /* border of selected/expanded offer card */
   "--text-on-solid": string;    /* text on solid-color buttons (bg-solid-* family) — always light */
 
+  /* Profile page (design handoff palette) */
+  "--bg-profile-page": string;             /* page backdrop + textarea background */
+  "--bg-profile-surface": string;          /* top bar, form section, toggle buttons, delete button */
+  "--border-profile": string;              /* field borders (toggle, textarea, delete button, separator) */
+  "--text-profile-muted": string;          /* micro-labels, character counter */
+  "--bg-profile-destructive-hover": string; /* delete-account button hover fill */
+
   /* Canvas (OrbitAnimation — not usable as Tailwind utilities) */
   "--canvas-ambient": string;   /* RGB channels for ambient particle rgba() */
   "--canvas-orbit": string;     /* RGB channels for orbit particle rgba() */

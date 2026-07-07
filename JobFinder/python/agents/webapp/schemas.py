@@ -14,9 +14,16 @@ class ProfileUpdate(BaseModel):
 
     rome_codes is intentionally absent — it is managed exclusively by
     the GPT-4o-mini CV analysis agent and must never be overwritten by the user.
+
+    Every field defaults to None (never [] or {}) so that
+    model_dump(exclude_unset=True) can distinguish "field absent from the
+    request" from "field sent empty" — required for PUT /profile to be a
+    real partial update across the /profile and home-page callers.
     """
 
-    commune_codes: list[str] = []
+    commune_codes: list[str] | None = None
+    experience_level: Literal["0-2", "2-5", "5+"] | None = None
+    candidate_description: str | None = Field(default=None, max_length=1000)
 
 
 class OfferOut(BaseModel):
@@ -65,6 +72,8 @@ class ProfileOut(BaseModel):
     user_id: str
     rome_codes: dict[str, RomeCodeEntry]
     commune_codes: list[str]
+    experience_level: Literal["0-2", "2-5", "5+"] | None
+    candidate_description: str | None
 
     model_config = ConfigDict(from_attributes=True)
 
