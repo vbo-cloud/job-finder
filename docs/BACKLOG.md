@@ -618,3 +618,22 @@ Le `catch` de `handleConfirmDelete` affiche le même message générique pour un
 réseau et un 503 backend. Envisager de distinguer via le status HTTP de la réponse pour
 un message plus actionnable (ex. suggérer un retry sur 503 vs vérifier la connexion sur
 timeout).
+
+---
+
+## Bibliothèque — grille et bouton de suppression (feature/library-redesign, PR #159) — suites identifiées en review
+
+### [optional] `MAX_PDF_BYTES` dupliqué entre frontend et backend
+`LibrarySection.tsx`/`UploadSection.tsx` (frontend) et `routers/cv.py` (backend)
+définissent chacun `MAX_PDF_BYTES = 10 * 1024 * 1024` séparément — actuellement identiques
+(vérifié), mais rien n'empêche une dérive silencieuse si l'une des deux valeurs change sans
+l'autre : le rejet client resterait à 10 Mo alors que le serveur accepterait/refuserait à un
+seuil différent, ou l'inverse. Une constante partagée (ex. exposée par un endpoint de config,
+ou documentée en commentaire croisé dans les deux fichiers) fermerait ce risque.
+
+### [optional] `POST /cv/upload` — fichier entièrement bufferisé avant la vérification de taille
+`routers/cv.py` lit tout le corps (`await file.read()`) avant de comparer sa taille à
+`MAX_PDF_BYTES` et de renvoyer 413. Un upload volontairement surdimensionné consomme donc
+mémoire et bande passante avant d'être rejeté. À durcir avec une vérification de
+`Content-Length` ou une lecture par chunks avec arrêt anticipé, si l'endpoint est exposé à un
+trafic non fiable.
