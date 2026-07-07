@@ -2586,7 +2586,7 @@ Même scope et même rôle que `subnet_cae_network_contributor` — cohérence a
 
 ---
 
-## PR #105 — fix(jumpbox): replace Standard_B1ms with Standard_B2s
+## PR #106 — fix(jumpbox): replace Standard_B1ms with Standard_B2s
 
 **Date :** 2026-06-25
 **Branche :** `fix/jumpbox-vm-size` → `dev`
@@ -2603,6 +2603,26 @@ Capacity Restrictions.
 ### Correctif
 
 Remplacement du default `vm_size` dans `modules/jumpbox/variables.tf` : `Standard_B1ms` → `Standard_B2s` (2 vCPU, 4 GB RAM). `Standard_B2s` est disponible en France Central et reste dans la gamme économique pour un jumpbox de dev.
+
+---
+
+## PR #107 — fix(jumpbox): use Standard_D2s_v3 in availability zone 2
+
+**Date :** 2026-06-25
+**Branche :** `fix/jumpbox-vm-size` → `dev`
+
+### Ce qui s'est passé
+
+`Standard_B2s` (PR #106) se heurtait à la même `SkuNotAvailable` que `Standard_B1ms`, cette fois pour la zone de disponibilité par défaut.
+
+### Correctif
+
+- `modules/jumpbox/variables.tf` : default `vm_size` relevé à `Standard_D2s_v3` (2 vCPU, 8 GB RAM).
+- `modules/jumpbox/main.tf` : zone de disponibilité épinglée explicitement (`zone = "2"`) plutôt que laissée au choix d'Azure.
+
+### Décision technique
+
+Même branche que PR #106 plutôt qu'une nouvelle : l'apply avait échoué une seconde fois dans la foulée sur la même feature en cours de stabilisation, pas une régression distincte méritant son propre ticket.
 
 ---
 
@@ -2664,6 +2684,21 @@ Permet à l'utilisateur de supprimer un CV depuis la bibliothèque.
 
 ---
 
+## PR #109 — fix(frontend): correct apiClient default import in CVCard
+
+**Date :** 2026-06-26
+**Branche :** `feature/cv-thumbnail-proxy` → `dev`
+
+### Ce qui s'est passé
+
+`CVCard.tsx` (PR #108) importait `apiClient` en named export (`import { apiClient } from "@/lib/api/client"`) alors que le module l'exporte en `export default` — erreur de build.
+
+### Correctif
+
+Import corrigé en `import apiClient from "@/lib/api/client"`.
+
+---
+
 ## PR #110 — feat(frontend): library unauthenticated state and skeleton loading
 
 **Date :** 2026-06-26
@@ -2689,7 +2724,7 @@ Deux corrections dans `LibrarySection.tsx` :
 
 ---
 
-## PR #111 — feat: Application Insights telemetry + monitoring alerts
+## PR #112 — feat: Application Insights telemetry + monitoring alerts
 
 **Date :** 2026-06-26
 **Branche :** `feature/monitoring-alerts` → `dev`
@@ -2940,6 +2975,25 @@ Le job matching gardait les 20 meilleures offres par CV (`MATCHING_TOP_K = 20`),
 ### Décision technique
 
 Un seuil de similarité cosinus à 0.8 signifie que le CV et l'offre partagent un champ sémantique très proche (80% de similarité). En pratique avec `text-embedding-3-small`, les bons matches métier se situent entre 0.75 et 0.90 — 0.8 est sélectif sans être trop restrictif. La valeur est configurable via env var pour ajuster sans redéploiement.
+
+---
+
+## PR #122 — feat(matching): lower score threshold from 0.8 to 0.6
+
+**Date :** 2026-06-28
+
+### Contexte
+
+Le seuil `0.8` introduit en PR #121 s'est révélé trop sélectif en usage réel : trop peu de matches remontaient pour la plupart des CVs testés.
+
+### Ce qui a été fait
+
+- `shared/config.py` : valeur par défaut de `MATCHING_SCORE_THRESHOLD` abaissée de `0.8` à `0.6`.
+- `envs/dev/container_apps.tf` : variable d'env `MATCHING_SCORE_THRESHOLD` alignée sur `0.6`.
+
+### Décision technique
+
+`0.6` reste au-dessus du bruit sémantique pur tout en laissant remonter des matches pertinents mais moins évidents lexicalement — ajusté à l'usage plutôt que recalculé analytiquement, cohérent avec le choix de PR #121 de garder ce seuil configurable par env var justement pour ce genre d'itération sans redéploiement de code.
 
 ---
 
@@ -3277,6 +3331,30 @@ Environ 50 % des liens de matchs ouvrerts depuis le site menaient sur "L'offre n
 
 ---
 
+## PR #137 — feat: unit test suite — backend agents and frontend components
+
+**Date :** 2026-07-01
+**Branche :** `feature/unit-tests` → `dev`
+
+### Contexte
+
+Le projet n'avait aucun test automatisé — chaque changement backend ou frontend ne pouvait être vérifié que manuellement.
+
+### Ce qui a été fait
+
+- **Frontend (`__tests__/`)** : suite Jest + Testing Library — `CVCard.test.tsx`, `MatchItem.test.tsx`, `MatchList.test.tsx`, `useTheme.test.tsx`, `utils.test.ts`. `jest.config.js`/`jest.setup.ts` ajoutés, dépendances de test ajoutées à `package.json`.
+- **Backend (`python/tests/`)** : suite pytest — `test_cv_analysis.py`, `test_ft_client.py`, `test_matching.py`, `test_webapp_cv.py`, `test_webapp_matches.py`, `test_webapp_profile.py`, `conftest.py` (fixtures partagées), `pytest.ini`, `requirements-dev.txt`.
+- `agents/cleanup/tests/test_cleanup.py` : suite existante ajustée pour rester cohérente avec le nouveau `conftest.py`.
+- `MatchList.tsx` : léger ajustement pour rendre le composant testable (pas de changement de comportement visible).
+- `__tests__/README.md` et `python/tests/README.md` : conventions de test documentées par couche.
+
+### Décisions techniques
+
+- **Une suite par couche plutôt qu'un runner unique** : Jest pour le frontend (déjà l'écosystème Next.js), pytest pour le backend — pas d'outillage cross-stack qui aurait ajouté de la complexité pour peu de bénéfice sur un mono-repo à deux stacks distinctes.
+- **`conftest.py` centralisé** : fixtures DB/mocks partagées entre les modules de test backend plutôt que dupliquées par fichier.
+
+---
+
 ## PR #139 — feat(frontend): progression matching sur les cartes CV
 
 **Date :** 2026-07-01
@@ -3306,6 +3384,45 @@ Après l'upload d'un CV, la carte affichait immédiatement `0 matchs` alors que 
 - **`status === "done"` comme signal de searching** : `"done"` signifie « analyse terminée, matching pas encore passé ». `"matched"` est le statut terminal après matching. Cette lecture du statut seul (sans heuristique sur `match_count`) est plus robuste et lisible.
 - **Migration CHECK constraint nécessaire** : la colonne `status` avait un CHECK constraint en base (`ck_cvs_status`), contrairement à l'hypothèse initiale. La migration `010` drop et recrée le constraint avec `'matched'` inclus.
 - **Ellipse animée en React plutôt que CSS keyframes** : le cycle `.` → `..` → `...` est contrôlé par un `setInterval` dans `AnimatedEllipsis`, colocalisé dans `CVCard.tsx`. Évite d'étendre `tailwind.config.ts` pour une animation ponctuelle.
+
+---
+
+## PR #140 — feat(ci): add unit tests workflow
+
+**Date :** 2026-07-01
+**Branche :** `feature/ci-unit-tests` → `dev`
+
+### Contexte
+
+La suite de tests ajoutée en PR #137 ne tournait qu'en local — rien n'empêchait une régression non testée d'être mergée.
+
+### Ce qui a été fait
+
+`.github/workflows/unitTests.yml` : nouveau workflow déclenché sur chaque PR (`pull_request`).
+- `detect-changes` : diff des fichiers modifiés entre la base et la tête de la PR pour déterminer si les couches Python et/ou frontend sont concernées.
+- `test-python` / `test-frontend` : jobs conditionnés (`if: needs.detect-changes.outputs.<layer> == 'true'`), exécutant pytest et `jest` respectivement.
+- `unit-tests-gate` : unique check requis en branch protection, quel que soit le sous-ensemble de jobs réellement exécuté.
+
+### Décisions techniques
+
+- **Change detection plutôt que tout exécuter systématiquement** : évite de faire tourner pytest sur une PR purement frontend (et inversement) — plus rapide, sans perte de couverture puisque le layer non modifié n'a naturellement rien à régresser.
+- **Un gate unique (`unit-tests-gate`)** : la branch protection référence un seul check requis, indépendant du nombre de jobs conditionnels réellement déclenchés — évite de devoir mettre à jour la config de protection à chaque ajout de job.
+
+---
+
+## PR #143 — fix(backend): add matched to CVStatus in webapp schemas
+
+**Date :** 2026-07-01
+**Branche :** `fix/cv-schemas-matched-status` → `dev`
+
+### Contexte
+
+PR #139 ajoutait le statut `"matched"` côté DB (migration 010) et côté frontend (`lib/api/types.ts`), mais pas dans le schéma Pydantic backend (`schemas.py`) — `CVStatus` y restait `Literal["pending", "processing", "done", "error"]`, sans `"matched"`.
+
+### Ce qui a été fait
+
+- `webapp/schemas.py` : `"matched"` ajouté à `CVStatus`.
+- `python/tests/test_schemas.py` (nouveau) : test paramétré vérifiant que `CVListItemOut` accepte tous les statuts valides (y compris `"matched"`) et rejette un statut inconnu — garde-fou pour qu'un futur statut ajouté en DB/matching sans mise à jour du schéma soit détecté immédiatement.
 
 ---
 
