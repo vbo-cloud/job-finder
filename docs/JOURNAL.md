@@ -4208,6 +4208,8 @@ Réécriture de `MATCH_ANALYSIS_SYSTEM_PROMPT` (seul changement — schéma JSON
 
 Conservé tel quel : la règle absolue `company_summary` (désormais première puce du bloc « règles absolues » qui l'étend aux lacunes), la contrainte de variation d'ouverture de `synthese`, le ton coach bienveillant, le bloc JSON de sortie.
 
+**Complément (retour de revue) :** les règles 2 et 5 étaient formulées de façon purement déclarative alors qu'elles vont contre un biais naturel du modèle (décomposer un score en pourcentages, produire des conseils de carrière génériques). Un exemple ❌/✅ de 2-3 lignes a été ajouté immédiatement après chacune de ces deux règles — exemples illustratifs génériques (pas de profil réel), ton coach conservé. Les règles 1, 3, 4, 6 et le format JSON restent sans exemple, non signalés comme à risque — l'objectif est de renforcer les deux règles fragiles sans gonfler le prompt au point de diluer l'attention sur le reste.
+
 **Vérification :** `pytest tests/test_match_analysis.py` — 15 passed sans modification (les tests n'assertent que la forme des données). Relecture de cohérence interne du prompt : non-redondance compatible avec la consigne d'ouverture de `synthese` ; l'exemple « Match élevé (87 %) » cite le score sans le décomposer. Le test manuel recommandé (rejouer le cas junior/DevOps et juger la sortie à l'œil) reste à faire en environnement réel — LLM non déterministe, non automatisable.
 
 ### Décisions techniques
