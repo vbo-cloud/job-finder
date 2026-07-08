@@ -82,6 +82,7 @@ class CvAnalysis(Base):
     points_faibles: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     suggestions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     coherence_intention: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synthese: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

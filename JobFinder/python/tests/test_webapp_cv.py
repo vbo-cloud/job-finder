@@ -315,6 +315,7 @@ class TestGetCvAnalysis:
         analysis = MagicMock()
         analysis.status = "done"
         analysis.ats_score = 72
+        analysis.synthese = "Un CV bien structuré et lisible."
         analysis.points_forts = ["Structure claire"]
         analysis.points_faibles = ["Objectif absent"]
         analysis.suggestions = ["Ajouter un titre"]
@@ -330,6 +331,7 @@ class TestGetCvAnalysis:
         body = resp.json()
         assert body["status"] == "done"
         assert body["ats_score"] == 72
+        assert body["synthese"] == "Un CV bien structuré et lisible."
         assert body["points_forts"] == ["Structure claire"]
         assert body["coherence_intention"] == "Cohérent avec le profil."
 
@@ -340,6 +342,7 @@ class TestGetCvAnalysis:
         analysis = MagicMock()
         analysis.status = "error"
         analysis.ats_score = None
+        analysis.synthese = None
         analysis.points_forts = None
         analysis.points_faibles = None
         analysis.suggestions = None

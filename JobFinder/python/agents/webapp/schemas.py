@@ -49,6 +49,7 @@ class CvAnalysisOut(BaseModel):
 
     status: Literal["pending", "processing", "done", "error"]
     ats_score: int | None = None
+    synthese: str | None = None
     points_forts: list[str] = []
     points_faibles: list[str] = []
     suggestions: list[str] = []
