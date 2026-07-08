@@ -131,6 +131,27 @@ class UserProfile(Base):
     )
 
 
+class TermStat(Base):
+    """Corpus-wide document frequency of a lexeme across all offer descriptions.
+
+    Entièrement recalculée (remplacement complet) à la fin de chaque run
+    offer_fetching via ts_stat() de Postgres sur to_tsvector('french',
+    description). Le matching pondère les termes partagés CV<->offre par leur
+    rareté (1 - doc_frequency / total_offers) et écarte les termes
+    quasi universels au-dessus de TERM_STOPWORD_THRESHOLD (mots vides de fait).
+    total_offers est stocké avec chaque terme pour que le ratio reste exact par
+    rapport au snapshot du corpus qui a produit les fréquences.
+    """
+
+    __tablename__ = "term_stats"
+
+    term: Mapped[str] = mapped_column(Text, primary_key=True)
+    doc_frequency: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_offers: Mapped[int] = mapped_column(Integer, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class Match(Base):
     """Similarity score between a CV and a job offer."""
 

@@ -38,3 +38,9 @@ EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
 # and-skills-signal.md, étape 0.1). Valeur = bonus maximal atteignable à recouvrement complet ;
 # toujours additionné, jamais soustrait — voir contrainte de conception dans le prompt B2.
 TECH_KEYWORDS_WEIGHT = float(os.getenv("TECH_KEYWORDS_WEIGHT", "0.1"))
+# Seuil d'exclusion des termes trop universels pour discriminer quoi que ce soit (mots vides de fait,
+# même s'ils sont techniquement des mots précis) — un terme présent dans plus de cette proportion des
+# offres est totalement écarté du bonus de compétences, pas juste moins pondéré. Volontairement un seuil
+# élevé et un couperet net plutôt qu'une pondération continue, pour ne pas pénaliser un terme modérément
+# fréquent mais réellement différenciant (ex. "Terraform" dans un corpus encore mono-sectoriel tech).
+TERM_STOPWORD_THRESHOLD = float(os.getenv("TERM_STOPWORD_THRESHOLD", "0.75"))
