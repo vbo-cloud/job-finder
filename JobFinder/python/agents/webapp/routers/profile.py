@@ -157,9 +157,9 @@ def put_profile(
         old_description = existing.candidate_description if existing else None
         new_experience = updated.get("experience_level", old_experience)
         new_description = updated.get("candidate_description", old_description)
-        intent_changed = (
-            new_experience != old_experience or new_description != old_description
-        )
+        experience_changed = new_experience != old_experience
+        description_changed = new_description != old_description
+        intent_changed = experience_changed or description_changed
         intent_text = _build_intent_text(new_experience, new_description)
         if intent_text:
             embedded = embed([intent_text])
@@ -219,6 +219,14 @@ def put_profile(
 
     # Sent after commit: matching must see the new intent_embedding when it runs.
     if intent_changed:
+        # Field values are deliberately not logged — candidate_description is
+        # personal data; the boolean flags are enough to trace the dispatch.
+        logger.info(
+            "profile_intent_changed",
+            user_id=user_id,
+            experience_changed=experience_changed,
+            description_changed=description_changed,
+        )
         _dispatch_offer_ready(user_id, now.date().isoformat())
 
     logger.info("profile_put_completed", user_id=user_id)
