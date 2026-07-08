@@ -71,4 +71,36 @@ describe("CVDetailSection — accordéon d'analyse du CV", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.getElementById("cv-analysis-panel")).not.toBeInTheDocument();
   });
+
+  it("does not collapse after a resize drag on the banner", async () => {
+    renderSection();
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV.id}`),
+    );
+
+    const toggle = screen.getByRole("button", { name: /Analyse de votre CV/i });
+    // Drag beyond DRAG_THRESHOLD_PX, then the click the browser fires after
+    // pointerup must be swallowed instead of collapsing the panel.
+    fireEvent.pointerDown(toggle, { clientY: 300 });
+    fireEvent.pointerMove(toggle, { clientY: 250 });
+    fireEvent.pointerUp(toggle, { clientY: 250 });
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("cv-analysis-panel")).toBeInTheDocument();
+  });
+
+  it("still collapses on a press-and-release without movement", async () => {
+    renderSection();
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV.id}`),
+    );
+
+    const toggle = screen.getByRole("button", { name: /Analyse de votre CV/i });
+    fireEvent.pointerDown(toggle, { clientY: 300 });
+    fireEvent.pointerUp(toggle, { clientY: 300 });
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
 });
