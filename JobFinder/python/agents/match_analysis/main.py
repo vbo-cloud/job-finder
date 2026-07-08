@@ -163,8 +163,10 @@ def _parse_analysis_payload(data: dict) -> dict:
     Defensive coercion, same policy as the existing fields: text fields are cast
     to str (None preserved — the columns are nullable and company_summary is
     legitimately null when the offer says nothing about the company), list
-    fields to lists of str. A points_amelioration item missing one of its two
-    expected keys is silently dropped rather than failing the whole analysis.
+    fields to lists of str. A points_amelioration item without a constat is
+    silently dropped rather than failing the whole analysis; a missing
+    suggestion_concrete becomes None, matching what the API already accepts
+    for legacy pre-020 rows.
 
     Args:
         data: Parsed JSON object returned by the model.
@@ -176,16 +178,22 @@ def _parse_analysis_payload(data: dict) -> dict:
         value = data.get(key)
         return str(value) if value is not None else None
 
-    points_amelioration = [
-        {"constat": str(item["constat"]), "suggestion_concrete": str(item["suggestion_concrete"])}
-        for item in data.get("points_amelioration") or []
-        if isinstance(item, dict) and "constat" in item and "suggestion_concrete" in item
-    ]
+    points_amelioration = []
+    for item in data.get("points_amelioration") or []:
+        if not isinstance(item, dict) or "constat" not in item:
+            continue
+        suggestion = item.get("suggestion_concrete")
+        points_amelioration.append(
+            {
+                "constat": str(item["constat"]),
+                "suggestion_concrete": str(suggestion) if suggestion is not None else None,
+            }
+        )
     return {
         "matched_skills": [str(x) for x in data.get("matched_skills") or []],
         "points_forts": [str(x) for x in data.get("points_forts") or []],
         "points_amelioration": points_amelioration,
-        "synthese": str(data.get("synthese", "")),
+        "synthese": _text("synthese"),
         "verdict": _text("verdict"),
         "company_summary": _text("company_summary"),
         "mission_summary": _text("mission_summary"),

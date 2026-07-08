@@ -149,7 +149,9 @@ class TestAnalyzeMatch:
             "questions_entretien_potentielles": ["Comment gérez-vous les migrations ?"],
         }
 
-    def test_drops_points_amelioration_items_missing_expected_keys(self, mocker):
+    def test_coerces_partial_points_amelioration_items(self, mocker):
+        # An item without constat is dropped; a missing suggestion_concrete is
+        # kept as None — same shape the API accepts for legacy pre-020 rows.
         payload = (
             '{"points_amelioration": ['
             '{"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}, '
@@ -165,8 +167,11 @@ class TestAnalyzeMatch:
         result = _analyze_match(_make_context())
 
         assert result["points_amelioration"] == [
-            {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}
+            {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."},
+            {"constat": "Sans suggestion", "suggestion_concrete": None},
         ]
+        # An absent synthese stays None (nullable column), never "".
+        assert result["synthese"] is None
 
     def test_includes_match_score_in_user_content(self, mocker):
         mock_response = MagicMock()
