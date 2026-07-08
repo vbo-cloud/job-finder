@@ -4583,3 +4583,30 @@ Suite directe de la PR #179, sur demande utilisateur : doter l'onglet Sauvegard�
 
 - **Incident de flux git** : la PR #179 a été mergée pendant l'implémentation — le push est arrivé après le merge et a recréé la branche distante supprimée. Le commit a été cherry-pické sur une nouvelle branche `feature/correspondances-saved-pagination` basée sur `dev` à jour. La branche recréée `feature/correspondances-saved-tab-fix` reste à supprimer manuellement (`git push origin --delete`), la suppression distante ayant été refusée en mode auto.
 - **État de page séparé par onglet** plutôt que partagé : changer de page sur un onglet ne perturbe pas la position de l'autre, et le clamp existant gère les listes qui rétrécissent (offre retirée des favoris en dernière page).
+
+---
+
+## PR #180 — feat(matching): pondération par rareté relative au corpus pour le bonus de compétences
+
+**Date :** 2026-07-08
+**Branche :** `feature/matching-corpus-relative-skills-weighting` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-matching-corpus-relative-term-weighting.md`. La liste figée `shared/tech_keywords.json` (~140 termes, PR #177) est structurellement limitée au secteur tech, alors que l'application doit servir tout candidat de tout secteur. Décision de conception actée : pondérer les termes partagés CV↔offre par leur **rareté relative au corpus d'offres** (principe proche de l'IDF), sans aucune liste de vocabulaire à maintenir.
+
+### Ce qui a été fait
+
+- **Table `term_stats`** (migration 025 + modèle `TermStat`) : fréquence documentaire de chaque lexème français racinisé sur l'ensemble des descriptions d'offres, avec le snapshot `total_offers` et l'horodatage du calcul. PK naturelle `term` (exception documentée dans `conventions-sql.md`).
+- **`offer_fetching`** : `_refresh_term_stats()` via `ts_stat()` de Postgres sur `to_tsvector('french', description)` — signature validée contre la doc Postgres 16 réelle, jamais devinée. Remplacement complet (`TRUNCATE` + `INSERT`) en une transaction, à chaque fin de run de fetch, avant l'envoi d'`offer-ready` pour que le matching déclenché voie des stats fraîches. Calcul batch uniquement, jamais à la volée pendant le matching.
+- **`matching`** : le bonus de compétences devient la part de la masse de rareté de l'offre couverte par le CV — chaque lexème partagé pèse `1 - doc_frequency/total_offers`, les termes présents dans plus de `TERM_STOPWORD_THRESHOLD` (0.75) des offres sont totalement exclus (mots vides de fait, couperet net). `SHARED_TERM_BONUS_WEIGHT` (0.1) remplace `TECH_KEYWORDS_WEIGHT`. Strictement additif, plafonné à 1.0 — jamais un malus.
+
+**Vérification (Postgres 16 réel, Docker pgvector) :** cycle upgrade/downgrade/upgrade de la migration OK ; cas synthétique cross-secteur (40 offres tech + 40 santé + 1 compta, CV infirmier + CV tech) : termes universels exclus, `terraform`/`kubernet`/`ci/cd` conservés (`CI/CD` survit comme lexème unique à la tokenisation française), bonus moyen du CV infirmier 0.032 sur la santé et 0.000 sur le tech (symétrique côté tech), jamais-un-malus vérifié sur les 162 paires, bonus exactement 0 sans terme partagé, dégradation propre avec `term_stats` vide. `pytest` 230/230.
+
+### Décisions techniques
+
+- **Remplacer, pas compléter** : le bonus `tech_keywords` du matching est remplacé (deux signaux conceptuellement identiques seraient redondants), mais `shared/tech_keywords.py`/`.json`, ses tests, les colonnes et l'extraction à l'ingestion/upload sont conservés intacts — leur suppression mérite une discussion dédiée.
+- **`tsvector` calculés à la volée** dans la requête de matching : à ~4600 offres et 2 runs/jour, une colonne précalculée + index GIN n'est pas encore justifiée.
+- **Retours de review appliqués** : `TRUNCATE` au lieu de `DELETE` pour le full-replace (pas de verrou ligne à ligne ni de WAL par ligne) ; commentaires explicitant le choix de `tsvector_to_array` et la déduplication des lexèmes par construction (les `SUM(rarity)` ne double-comptent jamais).
+- **Retours de review écartés (assumés)** : `total_offers` répété sur chaque ligne (une table meta séparée serait plus propre mais sans intérêt pratique à ce volume) ; `created_at`/`computed_at` toujours égaux (les deux conservés — `created_at` exigé par les conventions SQL, `computed_at` porte la sémantique métier du snapshot).
+- **Validation post-déploiement à faire** (corpus réel probablement mono-sectoriel tech, cf. backlog) : vérifier après le premier run de fetch que les termes discriminants ne sont pas exclus par le seuil 0.75 — `SELECT term, doc_frequency, total_offers FROM term_stats WHERE term IN ('terraform','ci/cd');` — et valider le classement sur de vraies offres d'un secteur non-tech dès qu'un profil non-tech existe en base.

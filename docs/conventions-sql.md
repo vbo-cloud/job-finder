@@ -2,6 +2,10 @@
 
 ## Modèles SQLAlchemy
 - Clés primaires : UUID v4 (`uuid.uuid4`) — jamais d'autoincrement
+  - Exception : une table de type cache/statistiques entièrement recalculée et remplacée en bloc à
+    chaque cycle (pas d'`ON CONFLICT`, pas de référence entrante depuis une autre table) peut utiliser
+    sa clé naturelle comme clé primaire (ex. `term_stats.term`) — un UUID surrogate n'apporterait
+    aucune valeur puisque la ligne est identifiée et retrouvée uniquement par cette valeur.
 - Toutes les tables ont `created_at` (DateTime, default `utcnow`, `nullable=False`)
 - Nommage des tables : snake_case pluriel (`offers`, `cvs`, `matches`)
 - `nullable=True` et `nullable=False` toujours explicites — jamais implicites

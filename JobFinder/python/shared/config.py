@@ -32,9 +32,15 @@ ANALYSIS_SEED = int(os.getenv("ANALYSIS_SEED", "42"))
 # faire disparaître l'offre — voir docs/prompts/prompt-matching-experience-penalty-and-skills-signal.md.
 EXPERIENCE_PENALTY_PER_YEAR_GAP = float(os.getenv("EXPERIENCE_PENALTY_PER_YEAR_GAP", "0.03"))
 EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
-# Bonus de score (jamais un malus) quand CV et offre partagent des mots-clés techniques précis —
-# repli gratuit et lexical, choisi après vérification que seulement 15 % des offres ont un champ
-# "compétences" structuré exploitable côté France Travail (voir prompt-matching-experience-penalty-
-# and-skills-signal.md, étape 0.1). Valeur = bonus maximal atteignable à recouvrement complet ;
-# toujours additionné, jamais soustrait — voir contrainte de conception dans le prompt B2.
-TECH_KEYWORDS_WEIGHT = float(os.getenv("TECH_KEYWORDS_WEIGHT", "0.1"))
+# Bonus de score (jamais un malus) quand CV et offre partagent des termes rares dans le corpus
+# d'offres — généralisation sector-agnostic du bonus tech_keywords (B2) : la rareté relative au
+# corpus (1 - doc_frequency/total_offers, cf. term_stats) remplace la liste figée de vocabulaire
+# tech. Valeur = bonus maximal atteignable quand le CV couvre toute la masse de rareté de l'offre ;
+# toujours additionné, jamais soustrait — même garantie que la pénalité d'expérience.
+SHARED_TERM_BONUS_WEIGHT = float(os.getenv("SHARED_TERM_BONUS_WEIGHT", "0.1"))
+# Seuil d'exclusion des termes trop universels pour discriminer quoi que ce soit (mots vides de fait,
+# même s'ils sont techniquement des mots précis) — un terme présent dans plus de cette proportion des
+# offres est totalement écarté du bonus de compétences, pas juste moins pondéré. Volontairement un seuil
+# élevé et un couperet net plutôt qu'une pondération continue, pour ne pas pénaliser un terme modérément
+# fréquent mais réellement différenciant (ex. "Terraform" dans un corpus encore mono-sectoriel tech).
+TERM_STOPWORD_THRESHOLD = float(os.getenv("TERM_STOPWORD_THRESHOLD", "0.75"))
