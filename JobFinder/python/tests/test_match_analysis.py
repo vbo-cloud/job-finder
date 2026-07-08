@@ -255,6 +255,19 @@ class TestAnalyzeMatch:
         assert "x" * (_mod.CV_TEXT_MAX_CHARS + 1) not in user_content
         assert "y" * (_mod.OFFER_TEXT_MAX_CHARS + 1) not in user_content
 
+    def test_pins_temperature_and_seed_for_determinism(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _ANALYSIS_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_match(_make_context())
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
+        assert kwargs["seed"] == _mod.ANALYSIS_SEED
+
 
 # ---------------------------------------------------------------------------
 # _update_match_analysis

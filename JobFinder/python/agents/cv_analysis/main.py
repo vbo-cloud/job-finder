@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from azure.servicebus.exceptions import ServiceBusError
 
 from shared.bus import receive_message, send_message
+from shared.config import ANALYSIS_SEED, ANALYSIS_TEMPERATURE
 from shared.db import get_session, run_migrations
 from shared.models import CV, CvAnalysis, UserProfile
 from shared.telemetry import configure_telemetry
@@ -282,18 +283,18 @@ Format de sortie JSON :
 }
 
 RÈGLE — non-redondance : chaque fait ou observation n'apparaît qu'une seule fois dans l'ensemble de la
-réponse, y compris à l'intérieur d'une même liste. Si le manque d'indication sur le télétravail est un
-point faible, il n'a besoin d'être mentionné qu'une fois dans points_faibles — ne le répète pas sous
-une autre formulation dans suggestions, et ne propose pas deux suggestions différentes qui reviennent
-au même correctif.
+réponse, y compris à l'intérieur d'une même liste. Si l'absence de résultats chiffrés est un point
+faible, il n'a besoin d'être mentionné qu'une fois dans points_faibles — ne le répète pas sous une
+autre formulation dans suggestions, et ne propose pas deux suggestions différentes qui reviennent au
+même correctif.
 ❌ Interdit (le même fait répété trois fois) :
-  points_faibles: ["Manque d'indication sur la préférence pour le télétravail"]
-  suggestions: ["Ajouter un objectif mentionnant la recherche d'un poste en télétravail",
-                 "Mettre en avant l'intérêt pour le télétravail dans une section dédiée"]
+  points_faibles: ["Les expériences ne mentionnent aucun résultat chiffré"]
+  suggestions: ["Ajouter des chiffres aux réalisations de chaque expérience",
+                 "Quantifier l'impact des projets dans une section dédiée"]
 ✅ Attendu (le fait une fois, une seule suggestion actionnable) :
-  points_faibles: ["Manque d'indication sur la préférence pour le télétravail"]
-  suggestions: ["Ajouter une ligne dans l'objectif professionnel précisant la recherche d'un poste en
-                 télétravail ou hybride"]
+  points_faibles: ["Les expériences ne mentionnent aucun résultat chiffré"]
+  suggestions: ["Ajouter un résultat mesurable à chaque expérience (ex. gain de temps obtenu, taille
+                 du projet, nombre d'utilisateurs)"]
 
 RÈGLE — ancrage dans le texte réel : points_forts et points_faibles doivent référencer un élément
 identifiable de CE CV (un intitulé de poste, un projet nommé, une compétence précise, une formulation
@@ -318,6 +319,24 @@ reconversion."
 RÈGLE — pas de décomposition inventée du score : si la synthese ou un autre champ évoque le score,
 reste qualitatif — ne prétends jamais décomposer ats_score en un détail de points gagnés/perdus par
 critère que tu ne connais pas réellement (ex. "75 = 40 points de structure + 35 de clarté" est interdit).
+
+RÈGLE — exhaustivité : ne te limite pas à quelques points représentatifs. Relis le CV section par
+section (objectif, expériences, formation, compétences, mise en forme) et note CHAQUE erreur ou
+faiblesse réelle que tu identifies — faute de frappe, date incohérente, verbe faible, répétition,
+information manquante, formulation ambiguë — même si cela produit une liste longue. Une liste courte
+n'est acceptable que si le CV est réellement irréprochable sur ce point ; ce n'est pas un objectif de
+longueur mais de couverture réelle. Ne t'arrête pas après 3 points par construction — continue tant
+qu'il reste une observation authentique à faire.
+
+RÈGLE — ne jamais suggérer d'ajouter une information personnelle ou une préférence (mode de travail,
+disponibilité, prétentions salariales, mobilité géographique...) qui n'est mentionnée ni dans le CV ni
+dans l'intention du candidat fournie ci-dessous. Si candidate_description est vide ou ne mentionne pas
+ce point, ne le soulève pas comme point faible ni comme suggestion — l'absence d'une information que
+l'utilisateur n'a jamais fournie n'est pas un défaut du CV. Par ailleurs, une préférence de télétravail
+ne se formule normalement pas sur un CV français (plutôt en lettre de motivation ou en entretien) — ne
+la recommande pas comme ajout au corps du CV même si elle est explicitement mentionnée dans l'intention
+du candidat ; dans ce cas, signale plutôt que cette préférence gagnerait à être mise en avant ailleurs
+dans la candidature (lettre de motivation, message de candidature), pas dans le CV lui-même.
 
 Ton : coach bienveillant et constructif, jamais un audit froid. Ne retourne rien d'autre que le JSON.
 """
@@ -391,6 +410,8 @@ def _analyze_cv_quality(
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
+                temperature=ANALYSIS_TEMPERATURE,
+                seed=ANALYSIS_SEED,
                 messages=[
                     {"role": "system", "content": CV_QUALITY_SYSTEM_PROMPT},
                     {

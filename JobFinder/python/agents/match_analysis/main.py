@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from shared.bus import receive_message
+from shared.config import ANALYSIS_SEED, ANALYSIS_TEMPERATURE
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, MatchAnalysis, Offer, UserProfile
 from shared.telemetry import configure_telemetry
@@ -321,6 +322,8 @@ def _analyze_match(context: dict) -> dict:
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
+                temperature=ANALYSIS_TEMPERATURE,
+                seed=ANALYSIS_SEED,
                 messages=[
                     {"role": "system", "content": MATCH_ANALYSIS_SYSTEM_PROMPT},
                     {"role": "user", "content": user_content},
