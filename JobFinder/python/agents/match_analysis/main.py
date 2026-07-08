@@ -45,17 +45,53 @@ _openai_client = AzureOpenAI(
     api_version="2024-02-01",
 )
 
-MATCH_ANALYSIS_SYSTEM_PROMPT = (
-    "Tu es un expert en recrutement. Compare le CV et l'offre d'emploi fournis, en tenant "
-    "compte de l'intention du candidat (expérience et description personnelle) si elle est "
-    "fournie. Retourne UNIQUEMENT un objet JSON valide de la forme "
-    '{"matched_skills": [...], "points_forts": [...], "points_amelioration": [...], '
-    '"synthese": "<texte>"}. matched_skills liste les compétences du CV qui correspondent aux '
-    "besoins de l'offre (courtes, affichables en badge). points_forts et points_amelioration "
-    "évaluent la pertinence du candidat pour cette offre précise. synthese est une phrase "
-    'unique de 1 à 2 lignes, orientée candidat, du type "Cette offre est pertinente pour vous '
-    'car...". Ne retourne rien d\'autre que le JSON.'
-)
+MATCH_ANALYSIS_SYSTEM_PROMPT = """\
+Tu es un coach carrière expert du marché de l'emploi français. Tu analyses la
+correspondance entre un CV et une offre d'emploi, et tu retournes UNIQUEMENT un
+objet JSON valide, structuré exactement comme décrit ci-dessous.
+
+RÈGLE ABSOLUE : n'invente aucune information sur l'entreprise qui ne figure pas
+explicitement dans le texte de l'offre fourni. Si l'offre ne dit rien sur
+l'entreprise au-delà de son nom, mets "company_summary": null plutôt que de
+deviner ou de compléter avec des connaissances générales.
+
+Le score de correspondance (fourni en entrée) est déjà calculé — tu ne le
+recalcules pas, tu l'expliques en langage clair à partir du contenu du CV et
+de l'offre.
+
+Format de sortie JSON :
+{
+  "verdict": string,
+  "synthese": string,               // ne commence JAMAIS par "Cette offre est
+                                    // pertinente pour vous car". Varie
+                                    // l'ouverture selon le point le plus
+                                    // marquant (score, compétence clé, ou
+                                    // écart bloquant). Exemples de styles :
+                                    //   "Profil solide sur les compétences
+                                    //    cœur — un point à travailler avant
+                                    //    de postuler."
+                                    //   "Match élevé (87%) : la mission
+                                    //    colle à votre profil sur presque
+                                    //    tous les points."
+                                    //   "Écart notable sur [compétence],
+                                    //    mais des atouts réels ailleurs."
+  "matched_skills": [string, ...],
+  "company_summary": string|null,
+  "mission_summary": string,
+  "why_good_fit_for_user": string,
+  "why_good_candidate": string,
+  "score_explanation": string,
+  "points_forts": [string, ...],
+  "points_amelioration": [
+    {"constat": string, "suggestion_concrete": string}
+  ],
+  "questions_entretien_potentielles": [string, ...]
+}
+
+Ton : coach bienveillant et constructif, jamais un audit froid.
+
+Ne retourne rien d'autre que le JSON.
+"""
 
 
 # ==============================================================================
@@ -71,7 +107,7 @@ def _get_match_context(match_id: str) -> dict:
 
     Returns:
         dict with keys cv_text, offer_title, offer_company, offer_description,
-        offer_skills, experience_level, candidate_description.
+        offer_skills, experience_level, candidate_description, match_score.
 
     Raises:
         ValueError: If the match no longer exists (CV or match deleted between
@@ -88,6 +124,7 @@ def _get_match_context(match_id: str) -> dict:
                     Offer.company,
                     Offer.description,
                     Offer.skills,
+                    Match.score,
                     UserProfile.experience_level,
                     UserProfile.candidate_description,
                 )
@@ -109,6 +146,7 @@ def _get_match_context(match_id: str) -> dict:
         "offer_company": row.company,
         "offer_description": row.description,
         "offer_skills": list(row.skills or []),
+        "match_score": row.score,
         "experience_level": row.experience_level,
         "candidate_description": row.candidate_description,
     }
@@ -117,6 +155,47 @@ def _get_match_context(match_id: str) -> dict:
 # ==============================================================================
 # Pair analysis
 # ==============================================================================
+
+
+def _parse_analysis_payload(data: dict) -> dict:
+    """Coerce the raw model JSON into MatchAnalysis column values.
+
+    Defensive coercion, same policy as the existing fields: text fields are cast
+    to str (None preserved — the columns are nullable and company_summary is
+    legitimately null when the offer says nothing about the company), list
+    fields to lists of str. A points_amelioration item missing one of its two
+    expected keys is silently dropped rather than failing the whole analysis.
+
+    Args:
+        data: Parsed JSON object returned by the model.
+
+    Returns:
+        dict whose keys map 1:1 to MatchAnalysis result columns.
+    """
+    def _text(key: str) -> str | None:
+        value = data.get(key)
+        return str(value) if value is not None else None
+
+    points_amelioration = [
+        {"constat": str(item["constat"]), "suggestion_concrete": str(item["suggestion_concrete"])}
+        for item in data.get("points_amelioration") or []
+        if isinstance(item, dict) and "constat" in item and "suggestion_concrete" in item
+    ]
+    return {
+        "matched_skills": [str(x) for x in data.get("matched_skills") or []],
+        "points_forts": [str(x) for x in data.get("points_forts") or []],
+        "points_amelioration": points_amelioration,
+        "synthese": str(data.get("synthese", "")),
+        "verdict": _text("verdict"),
+        "company_summary": _text("company_summary"),
+        "mission_summary": _text("mission_summary"),
+        "why_good_fit_for_user": _text("why_good_fit_for_user"),
+        "why_good_candidate": _text("why_good_candidate"),
+        "score_explanation": _text("score_explanation"),
+        "questions_entretien_potentielles": [
+            str(x) for x in data.get("questions_entretien_potentielles") or []
+        ],
+    }
 
 
 def _analyze_match(context: dict) -> dict:
@@ -129,8 +208,8 @@ def _analyze_match(context: dict) -> dict:
         context: Match context dict as returned by _get_match_context.
 
     Returns:
-        dict with keys matched_skills (list[str]), points_forts (list[str]),
-        points_amelioration (list[str]), synthese (str).
+        dict whose keys map 1:1 to MatchAnalysis result columns — see
+        _parse_analysis_payload.
 
     Raises:
         OpenAIError: If the API call fails.
@@ -153,6 +232,7 @@ def _analyze_match(context: dict) -> dict:
 
     user_content = (
         f"Intention du candidat :\n{intent_text}\n\n"
+        f"Score de correspondance déjà calculé : {context['match_score']:.0%}\n\n"
         f"CV :\n{context['cv_text'][:CV_TEXT_MAX_CHARS]}\n\n"
         f"Offre : {context['offer_title']} — {context['offer_company']}\n"
         f"Description :\n{context['offer_description'][:OFFER_TEXT_MAX_CHARS]}\n"
@@ -172,12 +252,7 @@ def _analyze_match(context: dict) -> dict:
                 ],
             )
             data = json.loads(response.choices[0].message.content)
-            result = {
-                "matched_skills": [str(x) for x in data.get("matched_skills", [])],
-                "points_forts": [str(x) for x in data.get("points_forts", [])],
-                "points_amelioration": [str(x) for x in data.get("points_amelioration", [])],
-                "synthese": str(data.get("synthese", "")),
-            }
+            result = _parse_analysis_payload(data)
             logger.info("match_analysis_succeeded", attempt=attempt, matched_skills_count=len(result["matched_skills"]))
             return result
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:

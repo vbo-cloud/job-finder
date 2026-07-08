@@ -43,6 +43,7 @@ def _make_context(**overrides) -> dict:
         "offer_company": "ACME",
         "offer_description": "Description complète de l'offre.",
         "offer_skills": ["Python", "Docker"],
+        "match_score": 0.87,
         "experience_level": "2-5",
         "candidate_description": "Recherche un poste cloud",
     }
@@ -63,6 +64,7 @@ class TestGetMatchContext:
         row.company = "ACME"
         row.description = "Description de l'offre."
         row.skills = ["Python"]
+        row.score = 0.87
         row.experience_level = "2-5"
         row.candidate_description = "Recherche cloud"
         mock_session = MagicMock()
@@ -77,6 +79,7 @@ class TestGetMatchContext:
             "offer_company": "ACME",
             "offer_description": "Description de l'offre.",
             "offer_skills": ["Python"],
+            "match_score": 0.87,
             "experience_level": "2-5",
             "candidate_description": "Recherche cloud",
         }
@@ -104,8 +107,16 @@ class TestGetMatchContext:
 
 _ANALYSIS_JSON = (
     '{"matched_skills": ["Python", "Docker"], "points_forts": ["Expérience solide"], '
-    '"points_amelioration": ["Certifications absentes"], '
-    '"synthese": "Cette offre est pertinente pour vous car votre profil correspond."}'
+    '"points_amelioration": [{"constat": "Certifications absentes", '
+    '"suggestion_concrete": "Passer la certification AZ-104."}], '
+    '"synthese": "Profil solide sur les compétences cœur.", '
+    '"verdict": "À tenter", '
+    '"company_summary": null, '
+    '"mission_summary": "Développement backend Python.", '
+    '"why_good_fit_for_user": "Poste aligné avec votre recherche cloud.", '
+    '"why_good_candidate": "4 ans d\'expérience Python.", '
+    '"score_explanation": "Le score de 87% reflète une forte couverture des compétences.", '
+    '"questions_entretien_potentielles": ["Comment gérez-vous les migrations ?"]}'
 )
 
 
@@ -122,9 +133,52 @@ class TestAnalyzeMatch:
         assert result == {
             "matched_skills": ["Python", "Docker"],
             "points_forts": ["Expérience solide"],
-            "points_amelioration": ["Certifications absentes"],
-            "synthese": "Cette offre est pertinente pour vous car votre profil correspond.",
+            "points_amelioration": [
+                {
+                    "constat": "Certifications absentes",
+                    "suggestion_concrete": "Passer la certification AZ-104.",
+                }
+            ],
+            "synthese": "Profil solide sur les compétences cœur.",
+            "verdict": "À tenter",
+            "company_summary": None,
+            "mission_summary": "Développement backend Python.",
+            "why_good_fit_for_user": "Poste aligné avec votre recherche cloud.",
+            "why_good_candidate": "4 ans d'expérience Python.",
+            "score_explanation": "Le score de 87% reflète une forte couverture des compétences.",
+            "questions_entretien_potentielles": ["Comment gérez-vous les migrations ?"],
         }
+
+    def test_drops_points_amelioration_items_missing_expected_keys(self, mocker):
+        payload = (
+            '{"points_amelioration": ['
+            '{"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}, '
+            '{"constat": "Sans suggestion"}, '
+            '"un simple texte"]}'
+        )
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = payload
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        result = _analyze_match(_make_context())
+
+        assert result["points_amelioration"] == [
+            {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}
+        ]
+
+    def test_includes_match_score_in_user_content(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _ANALYSIS_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_match(_make_context(match_score=0.87))
+
+        user_content = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Score de correspondance déjà calculé : 87%" in user_content
 
     def test_retries_on_invalid_json_then_succeeds(self, mocker):
         bad = MagicMock()
