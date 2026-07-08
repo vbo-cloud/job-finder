@@ -334,7 +334,9 @@ class TestGetProfileIntent:
 # ---------------------------------------------------------------------------
 
 _QUALITY_JSON = (
-    '{"ats_score": 72, "points_forts": ["Structure claire"], '
+    '{"ats_score": 72, '
+    '"synthese": "Un CV bien structuré, avec une reconversion cohérente vers le cloud.", '
+    '"points_forts": ["Structure claire"], '
     '"points_faibles": ["Objectif absent"], "suggestions": ["Ajouter un titre"], '
     '"coherence_intention": "Cohérent avec le profil senior."}'
 )
@@ -352,6 +354,7 @@ class TestAnalyzeCvQuality:
 
         assert result == {
             "ats_score": 72,
+            "synthese": "Un CV bien structuré, avec une reconversion cohérente vers le cloud.",
             "points_forts": ["Structure claire"],
             "points_faibles": ["Objectif absent"],
             "suggestions": ["Ajouter un titre"],

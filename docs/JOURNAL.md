@@ -4377,3 +4377,32 @@ Implémentation de deux prompts Claude Cowork enchaînés (`prompt-userprofile-d
 - **Écart assumé vs le prompt** : le prompt (rédigé avant la PR #170) spécifiait `default_profile_values(user_id: str)` et citait la capture email/nom comme motivation *future*. Cette fonctionnalité étant livrée (#170), le helper prend le `UserIdentity` et inclut `email`/`display_name` — les laisser aux deux call sites aurait conservé exactement la duplication que ce refactor supprime.
 - **`created_at` généré dans le helper** (au lieu du `now` externe des call sites) : chaque site capturait déjà son propre `now` juste avant l'upsert, aucune précision temporelle observable perdue — anticipé par le prompt.
 - **Empilement de PR** : merge dans l'ordre #169 → #170 → #171.
+
+
+---
+
+## PR #172 — feat(cv-analysis): synthèse en prose + règles de non-redondance/ancrage dans CV_QUALITY_SYSTEM_PROMPT
+
+**Date :** 2026-07-08
+**Branche :** `feature/cv-analysis-qualite-review` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-cv-analysis-qualite-review.md` : l'analyse qualité de CV produite par l'agent `cv_analysis` souffrait des mêmes défauts déjà corrigés sur `match_analysis` — un même fait répété jusqu'à trois fois entre `points_faibles` et `suggestions`, des points génériques applicables à n'importe quel CV ("structure claire avec des sections bien définies"), et un format tout en listes à puces là où l'utilisateur attend la lecture d'ensemble d'un vrai coach.
+
+### Ce qui a été fait
+
+- **Modèle + migration 022** : colonne `synthese` (Text, nullable) sur `cv_analyses` — le paragraphe de synthèse (3 à 5 phrases, ton coach) écrit par l'agent ; nullable car les analyses antérieures n'en ont pas.
+- **`CV_QUALITY_SYSTEM_PROMPT` réécrit** : format JSON documenté champ par champ, et les règles validées sur `match_analysis` avec leurs exemples few-shot ❌/✅ dès la première version (l'historique de `match_analysis` a montré que la règle déclarative seule ne suffit pas) — non-redondance (chaque fait une seule fois dans toute la réponse), ancrage dans un élément identifiable de CE CV, suggestions personnalisées à l'intention du candidat, interdiction de décomposer `ats_score` en points inventés.
+- **Chaîne API → UI** : `synthese` parsée dans `_analyze_cv_quality` (persistée sans changement via `**result`), exposée dans `CvAnalysisOut` (backend + types frontend), affichée dans `CvAnalysisCard` entre le score ATS et les listes de points — la lecture d'ensemble précède le détail. Même style et même garde d'affichage que `coherence_intention`.
+- **Correction doc au passage** : quatre références obsolètes à `POSTGRESQL_CONNECTION_STRING` (`.env.example`, `alembic.ini`, docstring et message d'erreur de `migrations/env.py`) alors que tout le code lit `DATABASE_URL` — un `.env` rempli depuis l'exemple plantait à l'import.
+
+**Vérification :** pytest `test_cv_analysis.py` + `test_webapp_cv.py` — 72 passed ; Jest `CvAnalysisCard` — 9 passed dont 3 nouveaux (synthèse rendue au-dessus des listes vérifiée par position DOM, bloc absent quand `""` et quand `null`) ; réversibilité de la migration 022 validée contre un Postgres 16 + pgvector jetable en Docker (`upgrade head` → `downgrade -1` → `upgrade head`).
+
+### Décisions techniques
+
+- **Écart assumé vs le prompt** : le prompt (rédigé avant la PR #170) demandait une migration `021`, déjà prise par `021_add_profile_identity.py` — la migration est `022` avec `down_revision = "021"`.
+- **`synthese` distincte des listes, pas un résumé** : la règle du prompt interdit qu'un même fait apparaisse à la fois dans la synthèse et dans un point — la synthèse apporte le fil conducteur du parcours et l'impression globale, les listes le détail actionnable.
+- **Aucun changement dans `_upsert_cv_analysis`** : la persistance passe par `**result`, ajouter la clé au dict retourné par `_analyze_cv_quality` suffit.
+- **Tests webapp : `synthese` posée explicitement sur les MagicMock** — Pydantic rejetterait l'attribut auto-mocké (ni `str` ni `None`) au moment de la validation `from_attributes`.
+- **Test manuel qualitatif en attente de déploiement** : relire une analyse générée sur le CV réel Cloud/Azure/AZ-104 — aucun fait répété entre `synthese`/`points_faibles`/`suggestions`, au moins un point ancré sur un élément nommé du CV, au moins une suggestion appuyée sur l'intention du profil.

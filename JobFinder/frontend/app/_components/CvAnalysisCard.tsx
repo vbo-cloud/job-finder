@@ -129,6 +129,14 @@ export default function CvAnalysisCard({ cvId }: Props) {
               </div>
             </div>
           )}
+          {analysis.synthese && (
+            <div>
+              <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-2">
+                Synthèse
+              </p>
+              <p className="text-[13px] text-body leading-relaxed">{analysis.synthese}</p>
+            </div>
+          )}
           <AnalysisPointsList title="Points forts" items={analysis.points_forts} variant="positive" />
           <AnalysisPointsList title="Points faibles" items={analysis.points_faibles} variant="negative" />
           <AnalysisPointsList title="Suggestions" items={analysis.suggestions} variant="suggestion" />

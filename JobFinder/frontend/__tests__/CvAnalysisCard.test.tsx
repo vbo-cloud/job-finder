@@ -15,6 +15,7 @@ function analysis(overrides: Partial<CvAnalysisOut> = {}): CvAnalysisOut {
   return {
     status: "done",
     ats_score: 72,
+    synthese: "Un CV bien structuré et lisible.",
     points_forts: ["Structure claire"],
     points_faibles: ["Objectif absent"],
     suggestions: ["Ajouter un titre"],
@@ -49,6 +50,28 @@ describe("CvAnalysisCard", () => {
     expect(screen.getByText("Objectif absent")).toBeInTheDocument();
     expect(screen.getByText("Ajouter un titre")).toBeInTheDocument();
     expect(screen.getByText("Cohérent avec le profil.")).toBeInTheDocument();
+  });
+
+  it("renders the synthese paragraph above the points lists when done", async () => {
+    (apiClient.get as jest.Mock).mockResolvedValue({ data: analysis() });
+
+    render(<CvAnalysisCard cvId={CV_ID} />);
+
+    const synthese = await screen.findByText("Un CV bien structuré et lisible.");
+    const pointsForts = screen.getByText("Structure claire");
+    expect(
+      synthese.compareDocumentPosition(pointsForts) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("Synthèse")).toBeInTheDocument();
+  });
+
+  it.each([[""], [null]])("omits the synthese block when it is %p", async (value) => {
+    (apiClient.get as jest.Mock).mockResolvedValue({ data: analysis({ synthese: value }) });
+
+    render(<CvAnalysisCard cvId={CV_ID} />);
+
+    await waitFor(() => expect(screen.getByText("72")).toBeInTheDocument());
+    expect(screen.queryByText("Synthèse")).not.toBeInTheDocument();
   });
 
   it("shows a silent error message when the fetch itself fails", async () => {

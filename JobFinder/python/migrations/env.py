@@ -1,7 +1,7 @@
 """Alembic migration environment — online mode only.
 
 Configures Alembic to use the shared SQLAlchemy engine from shared.db
-(driven by POSTGRESQL_CONNECTION_STRING) and the ORM metadata from
+(driven by DATABASE_URL) and the ORM metadata from
 shared.models so Alembic can inspect the live schema and apply migrations.
 The sqlalchemy.url in alembic.ini is intentionally left as a placeholder —
 the real connection is always provided by get_engine() at runtime.
@@ -23,7 +23,7 @@ def run_migrations_offline() -> None:
     """
     raise NotImplementedError(
         "Offline migrations are not supported in this project. "
-        "Ensure POSTGRESQL_CONNECTION_STRING is set and run in online mode."
+        "Ensure DATABASE_URL is set and run in online mode."
     )
 
 
