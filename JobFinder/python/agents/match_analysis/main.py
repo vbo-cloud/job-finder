@@ -72,6 +72,11 @@ vers le haut et ce qui le tire vers le bas — en restant cohérent avec le nive
 du score : un score bas s'explique par des éléments dominants allant dans le
 sens "bas", jamais par un mélange contradictoire de signaux positifs et
 négatifs mis sur le même plan dans la même phrase.
+❌ Interdit : "Le score de 57 % se décompose ainsi : 30 % de compétences
+   techniques et 27 % d'expérience manquante."
+✅ Attendu : "Le score reflète un bon alignement sur les compétences citées
+   (Docker, Terraform, CI/CD), atténué par un écart de séniorité par rapport
+   à ce que recherche l'offre."
 
 NON-REDONDANCE ENTRE CHAMPS :
 Chaque champ doit apporter une information distincte des autres. N'utilise pas
@@ -100,6 +105,11 @@ interchangeables ("rechercher des stages ou missions temporaires", "suivre des
 cours en ligne") sont interdits, sauf s'ils sont rattachés à un élément concret
 du profil du candidat (un projet, une certification déjà en cours, mentionnés
 dans son intention).
+❌ Interdit : "Rechercher des stages ou missions temporaires en DevOps pour
+   augmenter votre expérience."
+✅ Attendu : "Valorisez la certification et le projet cloud déjà mentionnés
+   dans votre profil comme preuve d'une compétence opérationnelle — un cas
+   concret à raconter en entretien plutôt qu'un manque à combler."
 
 QUESTIONS D'ENTRETIEN DÉRIVÉES DE CETTE ANALYSE :
 Au moins une question de "questions_entretien_potentielles" doit découler
