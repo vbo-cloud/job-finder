@@ -20,11 +20,13 @@ for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-from auth import get_current_user  # noqa: E402
+from auth import UserIdentity, get_current_identity, get_current_user  # noqa: E402
 from dependencies import get_db  # noqa: E402
 from routers.profile import router  # noqa: E402
 
 TEST_USER_ID = "test-user-profile"
+TEST_EMAIL = "vincent@example.test"
+TEST_NAME = "Vincent Test"
 _FAKE_EMBEDDING = [0.1] * 1536
 
 
@@ -54,13 +56,21 @@ def mock_send_message() -> MagicMock:
         yield mock
 
 
-@pytest.fixture()
-def test_client(mock_session) -> TestClient:
+def _build_client(mock_session, identity: UserIdentity | None = None) -> TestClient:
+    ident = identity or UserIdentity(
+        user_id=TEST_USER_ID, email=TEST_EMAIL, display_name=TEST_NAME
+    )
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
+    app.dependency_overrides[get_current_user] = lambda: ident.user_id
+    app.dependency_overrides[get_current_identity] = lambda: ident
     app.dependency_overrides[get_db] = lambda: (yield mock_session)
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture()
+def test_client(mock_session) -> TestClient:
+    return _build_client(mock_session)
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +302,36 @@ class TestPutProfile:
 
         assert resp.status_code == 200
         mock_send_message.assert_not_called()
+
+    def test_put_refreshes_identity_claims_in_upsert(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        # _post_values_clause is SQLAlchemy-private but stable: it holds the
+        # ON CONFLICT DO UPDATE SET pairs passed to on_conflict_do_update(set_=...).
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["email"] == TEST_EMAIL
+        assert set_clause["display_name"] == TEST_NAME
+
+    def test_put_with_claimless_token_does_not_clobber_stored_identity(self, mock_session):
+        client = _build_client(
+            mock_session,
+            UserIdentity(user_id=TEST_USER_ID, email=None, display_name=None),
+        )
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "email" not in set_clause
+        assert "display_name" not in set_clause
 
     def test_offer_ready_dispatch_failure_does_not_fail_request(
         self, test_client, mock_session, mock_send_message

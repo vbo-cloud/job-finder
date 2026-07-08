@@ -14,7 +14,13 @@ from sqlalchemy.orm import Session
 from shared.bus import send_message
 from shared.embedder import embed
 from shared.models import CV, UserProfile
-from auth import get_current_admin_user, get_current_user, is_admin
+from auth import (
+    UserIdentity,
+    get_current_admin_user,
+    get_current_identity,
+    get_current_user,
+    is_admin,
+)
 from dependencies import get_db
 from routers.cv import _delete_cv
 from schemas import CreditsRefillOut, ProfileOut, ProfileUpdate
@@ -119,7 +125,7 @@ def get_profile(
 @router.put("", response_model=ProfileOut)
 def put_profile(
     body: ProfileUpdate,
-    user_id: str = Depends(get_current_user),
+    identity: UserIdentity = Depends(get_current_identity),
     session: Session = Depends(get_db),
 ) -> ProfileOut:
     """Create or update the job search profile for the authenticated user.
@@ -133,12 +139,13 @@ def put_profile(
 
     Args:
         body: New profile preferences.
-        user_id: Authenticated user ID from the JWT sub claim.
+        identity: Authenticated identity claims from the JWT (sub, email, name).
         session: Active database session.
 
     Returns:
         ProfileOut reflecting the stored profile after upsert.
     """
+    user_id = identity.user_id
     logger.info("profile_put_started", user_id=user_id)
 
     now = datetime.now(timezone.utc)
@@ -146,6 +153,15 @@ def put_profile(
     # the home page (commune_codes only) and a PUT from /profile (experience/
     # description only) coexist without clobbering each other's fields.
     updated = body.model_dump(exclude_unset=True)
+
+    # Identity claims are server-derived from the validated token (absent from
+    # ProfileUpdate, so never client input) and refreshed on every PUT so a
+    # renamed account or changed email converges. Only when present in the
+    # token: a claimless token must not null-out previously stored values.
+    if identity.email is not None:
+        updated["email"] = identity.email
+    if identity.display_name is not None:
+        updated["display_name"] = identity.display_name
 
     intent_embedding = None
     intent_changed = False
@@ -177,6 +193,8 @@ def put_profile(
     insert_values = {
         "id": uuid.uuid4(),
         "user_id": user_id,
+        "email": identity.email,
+        "display_name": identity.display_name,
         "rome_codes": {},
         "commune_codes": updated.get("commune_codes") or [],
         "experience_level": updated.get("experience_level"),

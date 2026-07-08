@@ -96,6 +96,12 @@ class UserProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Identity claims captured from the validated JWT (profile creation +
+    # refreshed on PUT). Best-effort: None when the Entra user flow does not
+    # emit them. They exist to give the operator a human-readable mapping for
+    # the otherwise opaque pairwise user_id — never used for authorization.
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     rome_codes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     commune_codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     experience_level: Mapped[str | None] = mapped_column(String, nullable=True)

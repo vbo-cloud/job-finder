@@ -2,6 +2,7 @@
 
 import os
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -44,6 +45,20 @@ _jwks_cache: dict[str, Any] = {}
 _jwks_cached_at: float = 0.0
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@dataclass(frozen=True)
+class UserIdentity:
+    """Identity claims extracted from a validated JWT.
+
+    email and display_name are None when the Entra External ID user flow does
+    not emit the corresponding claims in the access token — callers must treat
+    them as best-effort metadata, never as required fields.
+    """
+
+    user_id: str
+    email: str | None
+    display_name: str | None
 
 
 def _fetch_jwks() -> dict[str, Any]:
@@ -104,10 +119,10 @@ def _decode_token(token: str, jwks: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def get_current_user(
+def get_current_identity(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-) -> str:
-    """FastAPI dependency — validate the Bearer JWT and return the user ID.
+) -> UserIdentity:
+    """FastAPI dependency — validate the Bearer JWT and return identity claims.
 
     On a generic JWTError (signature verification failure), the cached JWKS is
     refreshed once and the decode is retried. This handles key rotation that
@@ -117,7 +132,8 @@ def get_current_user(
         credentials: HTTP Bearer credentials extracted from the Authorization header.
 
     Returns:
-        The ``sub`` claim from the validated JWT as a string (user ID).
+        UserIdentity with the ``sub`` claim as user_id, plus the email and
+        name claims when the token carries them (None otherwise).
 
     Raises:
         HTTPException: 401 if the token is absent, malformed, expired, or has invalid claims.
@@ -172,7 +188,36 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return user_id
+    email = payload.get("email")
+    if email is None:
+        # Some Entra External ID / B2C user flows emit a list-valued "emails"
+        # claim instead of the singular "email".
+        emails = payload.get("emails")
+        if isinstance(emails, list) and emails:
+            email = emails[0]
+
+    return UserIdentity(
+        user_id=user_id,
+        email=email,
+        display_name=payload.get("name"),
+    )
+
+
+def get_current_user(
+    identity: UserIdentity = Depends(get_current_identity),
+) -> str:
+    """FastAPI dependency — validate the Bearer JWT and return the user ID.
+
+    Thin wrapper over get_current_identity for the many endpoints that only
+    need the ``sub`` claim.
+
+    Args:
+        identity: Identity claims extracted from the validated JWT.
+
+    Returns:
+        The ``sub`` claim from the validated JWT as a string (user ID).
+    """
+    return identity.user_id
 
 
 def is_admin(user_id: str) -> bool:
