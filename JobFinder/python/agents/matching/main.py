@@ -20,7 +20,8 @@ from shared.config import (
     INTENT_EMBEDDING_WEIGHT,
     MATCH_ANALYSIS_AUTO_TOP_N,
     MATCHING_SCORE_THRESHOLD,
-    TECH_KEYWORDS_WEIGHT,
+    SHARED_TERM_BONUS_WEIGHT,
+    TERM_STOPWORD_THRESHOLD,
 )
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, MatchAnalysis, Offer
@@ -58,12 +59,21 @@ def _get_all_matches(session: Session) -> list[dict]:
     parseable experience label) never penalizes — absence of data is not a
     candidate or offer defect.
 
-    Finally a strictly additive lexical bonus rewards precise tech-keyword
-    overlap (shared/tech_keywords.py, extracted at ingestion/upload): the
-    fraction of the offer's tech_keywords also present in the CV's, weighted
-    by TECH_KEYWORDS_WEIGHT and capped so the total never exceeds 1.0. The
-    bonus is never negative — an empty keyword list on either side simply
-    yields no bonus, it never lowers the experience-penalized score.
+    Finally a strictly additive skills bonus rewards terms shared between the
+    CV text and the offer description, sector-agnostic by construction: both
+    sides are tokenized/stemmed by Postgres full-text search (French config)
+    and each shared lexeme is weighted by its rarity in the offer corpus,
+    1 - doc_frequency/total_offers from term_stats (recomputed after every
+    offer_fetching run). Lexemes present in more than TERM_STOPWORD_THRESHOLD
+    of all offers are de facto stopwords and fully excluded — a hard cutoff,
+    not a smooth downweighting, so moderately frequent but discriminating
+    terms keep full weight. The bonus is the CV-covered share of the offer's
+    total rarity mass, weighted by SHARED_TERM_BONUS_WEIGHT and capped so the
+    total never exceeds 1.0. It is never negative — no shared term, an empty
+    term_stats table, or an offer made only of stopwords all yield a zero
+    bonus, never lowering the experience-penalized score. Lexemes absent from
+    term_stats (offers newer than the last stats refresh) are ignored on both
+    sides of the ratio, keeping numerator and denominator consistent.
 
     Raises:
         SQLAlchemyError: If the database query fails.
@@ -87,9 +97,7 @@ def _get_all_matches(session: Session) -> list[dict]:
                         WHEN '2-5' THEN 5
                         ELSE NULL  -- '5+' ou profil sans experience_level : jamais pénalisé
                     END AS candidate_years_ceiling,
-                    o.experience_min_years,
-                    c.tech_keywords AS tech_keywords_cv,
-                    o.tech_keywords AS tech_keywords_offer
+                    o.experience_min_years
                 FROM cvs c
                 JOIN offers o ON o.embedding IS NOT NULL
                 LEFT JOIN user_profiles up ON up.user_id = c.user_id
@@ -102,8 +110,6 @@ def _get_all_matches(session: Session) -> list[dict]:
                 SELECT
                     cv_id,
                     offer_id,
-                    tech_keywords_cv,
-                    tech_keywords_offer,
                     GREATEST(
                         0,
                         base_score - LEAST(
@@ -113,26 +119,60 @@ def _get_all_matches(session: Session) -> list[dict]:
                     ) AS score
                 FROM scored
             ),
-            final AS (
-                -- Bonus lexical strictement additif : part des mots-clés techniques de
-                -- l'offre couverts par le CV (dénominateur = besoins de l'offre, pas
-                -- l'union). COALESCE(..., 0) couvre l'offre sans mot-clé détecté
-                -- (division par NULL sinon) — bonus nul, jamais un malus.
+            offer_terms AS (
+                -- Lexèmes français racinisés de chaque offre, pondérés par leur rareté
+                -- dans le corpus (1 - fréquence documentaire relative). INNER JOIN sur
+                -- term_stats : un lexème absent des stats (offre plus récente que le
+                -- dernier calcul batch) est ignoré des deux côtés du ratio. Les termes
+                -- quasi universels (au-delà du seuil) sont des mots vides de fait,
+                -- écartés totalement — couperet net, pas de pondération graduelle.
                 SELECT
-                    cv_id,
-                    offer_id,
+                    o.id AS offer_id,
+                    t.lexeme,
+                    1 - ts.doc_frequency::float / ts.total_offers AS rarity
+                FROM offers o
+                CROSS JOIN LATERAL unnest(tsvector_to_array(to_tsvector('french', o.description))) AS t(lexeme)
+                JOIN term_stats ts ON ts.term = t.lexeme
+                WHERE o.embedding IS NOT NULL
+                  AND ts.doc_frequency::float / ts.total_offers <= :stopword_threshold
+            ),
+            cv_terms AS (
+                SELECT c.id AS cv_id, t.lexeme
+                FROM cvs c
+                CROSS JOIN LATERAL unnest(tsvector_to_array(to_tsvector('french', c.raw_text))) AS t(lexeme)
+                WHERE c.embedding IS NOT NULL
+            ),
+            offer_rarity_mass AS (
+                SELECT offer_id, SUM(rarity) AS total_rarity
+                FROM offer_terms
+                GROUP BY offer_id
+            ),
+            covered_rarity AS (
+                SELECT ct.cv_id, ot.offer_id, SUM(ot.rarity) AS covered
+                FROM cv_terms ct
+                JOIN offer_terms ot ON ot.lexeme = ct.lexeme
+                GROUP BY ct.cv_id, ot.offer_id
+            ),
+            final AS (
+                -- Bonus strictement additif : part de la masse de rareté de l'offre
+                -- couverte par le CV (dénominateur = termes discriminants de l'offre,
+                -- pas l'union). COALESCE(..., 0) couvre l'absence de terme partagé,
+                -- une table term_stats vide ou une offre faite uniquement de mots
+                -- vides — bonus nul, jamais un malus.
+                SELECT
+                    ae.cv_id,
+                    ae.offer_id,
                     LEAST(
                         1.0,
-                        score + COALESCE(
-                            cardinality(ARRAY(
-                                SELECT UNNEST(tech_keywords_offer)
-                                INTERSECT
-                                SELECT UNNEST(tech_keywords_cv)
-                            ))::float / NULLIF(array_length(tech_keywords_offer, 1), 0),
+                        ae.score + COALESCE(
+                            cr.covered / NULLIF(orm.total_rarity, 0),
                             0
-                        ) * :tech_keywords_weight
+                        ) * :shared_term_weight
                     ) AS score
-                FROM after_experience
+                FROM after_experience ae
+                LEFT JOIN offer_rarity_mass orm ON orm.offer_id = ae.offer_id
+                LEFT JOIN covered_rarity cr
+                    ON cr.cv_id = ae.cv_id AND cr.offer_id = ae.offer_id
             )
             SELECT cv_id, offer_id, score FROM final WHERE score >= :threshold
         """),
@@ -141,7 +181,8 @@ def _get_all_matches(session: Session) -> list[dict]:
             "intent_weight": INTENT_EMBEDDING_WEIGHT,
             "penalty_per_year": EXPERIENCE_PENALTY_PER_YEAR_GAP,
             "max_penalty": EXPERIENCE_MAX_PENALTY,
-            "tech_keywords_weight": TECH_KEYWORDS_WEIGHT,
+            "stopword_threshold": TERM_STOPWORD_THRESHOLD,
+            "shared_term_weight": SHARED_TERM_BONUS_WEIGHT,
         },
     )
 
