@@ -128,10 +128,10 @@ class TestRefreshTermStats:
         result = _refresh_term_stats()
 
         assert result == 42
-        # Remplacement complet : DELETE puis INSERT ... FROM ts_stat(), un seul commit
+        # Remplacement complet : TRUNCATE puis INSERT ... FROM ts_stat(), un seul commit
         statements = [str(call.args[0]) for call in mock_session.execute.call_args_list]
         assert len(statements) == 2
-        assert "DELETE FROM term_stats" in statements[0]
+        assert "TRUNCATE term_stats" in statements[0]
         assert "INSERT INTO term_stats" in statements[1]
         assert "ts_stat" in statements[1]
         mock_session.commit.assert_called_once()

@@ -281,7 +281,10 @@ def _refresh_term_stats() -> int:
     logger.info("term_stats_refresh_started")
     try:
         with get_session() as session:
-            session.execute(text("DELETE FROM term_stats"))
+            # TRUNCATE plutôt que DELETE : transactionnel sous Postgres, pas de verrou
+            # ligne à ligne ni de WAL par ligne supprimée — la table n'a ni référence
+            # entrante ni autre écrivain que ce job.
+            session.execute(text("TRUNCATE term_stats"))
             result = session.execute(
                 text("""
                     INSERT INTO term_stats (term, doc_frequency, total_offers, computed_at, created_at)
