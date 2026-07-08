@@ -1,14 +1,15 @@
 """Tests for agents/webapp/routers/profile.py.
 
 Covers: GET /profile, PUT /profile (happy path, 404, 500, partial-update
-upsert behaviour, intent_embedding recomputation), DELETE /profile (account
-erasure).
+upsert behaviour, intent_embedding recomputation, offer-ready re-trigger on
+intent change), DELETE /profile (account erasure).
 """
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.servicebus.exceptions import ServiceBusError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
@@ -40,6 +41,13 @@ def _make_profile() -> MagicMock:
 @pytest.fixture()
 def mock_session() -> MagicMock:
     return MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def mock_send_message() -> MagicMock:
+    """Patch the Service Bus dispatch so no test ever reaches Azure."""
+    with patch("routers.profile.send_message") as mock:
+        yield mock
 
 
 @pytest.fixture()
@@ -213,6 +221,69 @@ class TestPutProfile:
 
         assert resp.status_code == 422
         mock_embed.assert_not_called()
+
+    def test_intent_change_dispatches_offer_ready(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile",
+                json={"experience_level": "2-5", "candidate_description": "profil autodidacte"},
+            )
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+        queue, body = mock_send_message.call_args.args
+        assert queue == "offer-ready"
+        assert body["trigger"] == "profile_update"
+        assert body["rome_codes"] == []
+
+    def test_unchanged_intent_values_do_not_dispatch_offer_ready(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.experience_level = "2-5"
+        profile.candidate_description = "profil autodidacte"
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile",
+                json={"experience_level": "2-5", "candidate_description": "profil autodidacte"},
+            )
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_commune_codes_only_does_not_dispatch_offer_ready(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_offer_ready_dispatch_failure_does_not_fail_request(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_send_message.side_effect = ServiceBusError("Service Bus unavailable")
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
