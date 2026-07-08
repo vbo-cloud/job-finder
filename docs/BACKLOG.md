@@ -655,3 +655,19 @@ se déclenche sur ce scroll-là au lieu du nôtre — le sélecteur de fichier s
 que la page ait réellement atterri sur la section d'accueil. Cas limite jugé peu probable
 en pratique (aucun autre scroll programmatique concurrent dans le flux actuel) ; à
 surveiller si un futur scroll automatique est ajouté ailleurs sur la page.
+
+## Re-matching sur changement d'intention du profil (feature/profile-intent-rematch, PR #161) — suites identifiées en review
+
+### [optional] Corrélation des logs via `bind_contextvars` plutôt que `user_id` en paramètre
+`_dispatch_offer_ready` (`routers/profile.py`) accepte `user_id` uniquement pour le logging.
+Si ce pattern d'helpers de dispatch se répand dans d'autres routers, préférer
+`structlog.contextvars.bind_contextvars(user_id=...)` en début de requête (ou un dict de
+contexte structuré) pour que les identifiants de corrélation suivent automatiquement tous
+les logs de la requête au lieu d'être threadés de fonction en fonction.
+
+### [optional] Élargir le catch fire-and-forget aux autres exceptions transitoires Azure
+Le `except ServiceBusError` de `_dispatch_offer_ready` couvre le contrat actuel, mais
+`send_message` pourrait aussi lever d'autres exceptions transitoires du SDK Azure (ex.
+`azure.core.exceptions.HttpResponseError` via le credential). Risque faible aujourd'hui vu
+le contrat fire-and-forget (le run planifié suivant rattrape) — à réexaminer si le SLA du
+matching se resserre : soit élargir le catch, soit remonter l'erreur avec retry.
