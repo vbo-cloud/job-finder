@@ -64,21 +64,51 @@ class CvAnalysisOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PointAmelioration(BaseModel):
+    """One improvement point of a match analysis — observation + concrete suggestion.
+
+    suggestion_concrete is None only for legacy rows analysed before migration
+    020, where points_amelioration items were plain strings.
+    """
+
+    constat: str
+    suggestion_concrete: str | None = None
+
+
 class MatchAnalysisOut(BaseModel):
     """GPT-4o-mini analysis of a single CV<->offer pair — see ADR-018."""
 
     status: Literal["pending", "processing", "done", "error"]
     matched_skills: list[str] = []
     points_forts: list[str] = []
-    points_amelioration: list[str] = []
+    points_amelioration: list[PointAmelioration] = []
     synthese: str | None = None
+    verdict: str | None = None
+    company_summary: str | None = None
+    mission_summary: str | None = None
+    why_good_fit_for_user: str | None = None
+    why_good_candidate: str | None = None
+    score_explanation: str | None = None
+    questions_entretien_potentielles: list[str] = []
 
     # JSONB list columns are NULL until the agent writes a "done" row — a
     # pending/processing/error row must still validate.
-    @field_validator("matched_skills", "points_forts", "points_amelioration", mode="before")
+    @field_validator(
+        "matched_skills", "points_forts", "questions_entretien_potentielles", mode="before"
+    )
     @classmethod
     def _none_to_empty_list(cls, v: list[str] | None) -> list[str]:
         return v if v is not None else []
+
+    # Same NULL coercion, plus: rows analysed before migration 020 store
+    # points_amelioration items as plain strings — coerce them so old and new
+    # rows serialize the same way.
+    @field_validator("points_amelioration", mode="before")
+    @classmethod
+    def _coerce_points_amelioration(cls, v: list | None) -> list:
+        if v is None:
+            return []
+        return [{"constat": item} if isinstance(item, str) else item for item in v]
 
     model_config = ConfigDict(from_attributes=True)
 

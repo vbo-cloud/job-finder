@@ -55,12 +55,25 @@ export interface CvAnalysisOut {
   coherence_intention: string | null;
 }
 
+export interface PointAmelioration {
+  constat: string;
+  /** null only for analyses produced before migration 020 (legacy plain-string items). */
+  suggestion_concrete: string | null;
+}
+
 export interface MatchAnalysisOut {
   status: "pending" | "processing" | "done" | "error";
   matched_skills: string[];
   points_forts: string[];
-  points_amelioration: string[];
+  points_amelioration: PointAmelioration[];
   synthese: string | null;
+  verdict: string | null;
+  company_summary: string | null;
+  mission_summary: string | null;
+  why_good_fit_for_user: string | null;
+  why_good_candidate: string | null;
+  score_explanation: string | null;
+  questions_entretien_potentielles: string[];
 }
 
 export interface MatchOut {

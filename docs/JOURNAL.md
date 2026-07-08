@@ -4109,3 +4109,34 @@ Le déclencheur existait déjà côté pipeline : l'agent `cv_analysis` envoie u
 - **`CreditsBadge` lie vers `/profile` plutôt que vers une page d'achat** : conforme à l'ADR-018, qui reporte le rachat de crédits à un flux concierge Stripe une fois la demande validée — le bouton rend visible un solde déjà existant en base sans construire de parcours d'achat.
 - **Hauteur explicite (`h-8`) sur les pastilles épinglées** (`AuthButton`, `CreditsBadge`) plutôt que hauteur pilotée par le contenu : la pastille authentifiée d'`AuthButton` est plus haute que le texte seul à cause de l'avatar circulaire (24px) — sans hauteur explicite partagée, les deux contrôles épinglés étaient visuellement dépareillés.
 - **Deux onglets renommés en cours de revue** (« Matchs » → « Correspondances », « Review » → « Analyse du CV ») : décision prise après la première implémentation — l'analyse du CV devait vivre dans un onglet dédié plutôt que sous la miniature, remplaçant le placeholder « offres à revoir » qui n'était qu'un texte statique sans fonctionnalité réelle.
+
+---
+
+## PR #164 — feat: prompt coach carrière et schéma enrichi pour l'analyse de correspondance
+
+**Date :** 2026-07-08
+**Branche :** `feature/enrich-match-analysis-prompt` → `dev`
+
+### Contexte
+
+Le prompt système de l'agent `match_analysis` (PR #162) était resté à sa version initiale : synthèses redondantes commençant toutes par « Cette offre est pertinente pour vous car... » et aucun des champs enrichis discutés avec Claude Cowork (ADR-018, section « prompt complet pour la review de l'offre vs CV »). Le reste de l'implémentation (migration 018, auto top-N dans `matching`, endpoint manuel à crédits) était correct et n'a pas été touché.
+
+### Ce qui a été fait
+
+**Migration 020 + `shared/models.py` :** 7 nouvelles colonnes nullable sur `match_analyses` — `verdict`, `company_summary`, `mission_summary`, `why_good_fit_for_user`, `why_good_candidate`, `score_explanation` (Text) et `questions_entretien_potentielles` (JSONB). Les colonnes existantes (`points_forts`, `points_amelioration`, `matched_skills`, `synthese`) gardent leur type — seule la forme des données de `points_amelioration` change (items `{constat, suggestion_concrete}` au lieu de plain strings).
+
+**Agent `match_analysis` :** nouveau `MATCH_ANALYSIS_SYSTEM_PROMPT` — persona coach carrière du marché français, contrat JSON strict, ouverture de synthèse variée selon le point le plus marquant (jamais l'ancienne formule), règle absolue de non-invention d'informations entreprise (`company_summary: null` si l'offre ne dit rien au-delà du nom), ton bienveillant. `_get_match_context` remonte désormais `Match.score` et `_analyze_match` l'injecte dans le user content (« Score de correspondance déjà calculé : 87% ») — le modèle explique le score pgvector, il ne le recalcule pas. L'extraction du JSON est déportée dans `_parse_analysis_payload` (la fonction dépassait 40 lignes sinon) : coercition défensive `str()` avec `None` préservé sur les champs texte nullable (y compris `synthese`, corrigé en revue — l'ancien fallback `""` était incohérent avec la colonne nullable), rejet silencieux des seuls items `points_amelioration` sans `constat` — une `suggestion_concrete` absente devient `None` (corrigé en revue : exiger les deux clés jetait silencieusement une réponse partielle valide, alors que le chemin de lecture accepte déjà cette forme pour les lignes legacy).
+
+**`MatchAnalysisOut` (webapp) — hors périmètre initial mais nécessaire :** sans adaptation, le typage `points_amelioration: list[str]` aurait fait renvoyer un 500 à `GET /matches` dès la première analyse au nouveau format (dicts). Le schéma expose les 7 nouveaux champs, et un validator `mode="before"` coerce les lignes legacy pré-020 (items plain string) vers `{constat, suggestion_concrete: null}` pour que anciennes et nouvelles lignes sérialisent pareil.
+
+**Frontend — adaptation minimale :** `PointAmelioration` + nouveaux champs dans `lib/api/types.ts`, `MatchAnalysisPanel` rend `constat — suggestion_concrete` sur une ligne dans la liste existante. L'affichage riche des nouveaux champs (verdict, résumés mission/entreprise, questions d'entretien) relève du chantier UI-UX mené séparément.
+
+**Tests :** `test_match_analysis.py` (payload enrichi, rejet d'items invalides, score dans le user content, `match_score` dans le contexte), `test_webapp_matches.py` (sérialisation des nouveaux champs + lignes legacy), `MatchItem.test.tsx` (nouveau format de fixture, rendu constat—suggestion).
+
+### Décisions techniques
+
+- **Adapter `MatchAnalysisOut` et le frontend malgré le périmètre annoncé (migration + modèle + prompt)** : laisser le typage API en `list[str]` rendait la branche inmergeable — 500 sur `GET /matches` à la première nouvelle analyse, crash React sur le rendu d'objets. Adaptation minimale des deux couches plutôt qu'un état intermédiaire cassé sur `dev`.
+- **Rétro-compatibilité des lignes pré-020 par coercition côté API, pas par migration de données** : les anciens items plain string deviennent `{constat: <texte>, suggestion_concrete: null}` à la sérialisation. Pas de réécriture des JSONB existants en migration — les données restent brutes, la normalisation vit dans le schéma Pydantic, et `suggestion_concrete` est nullable côté TS pour matérialiser ce cas.
+- **Un seul validator `mode="before"` pour `points_amelioration`** (NULL → `[]` + coercition legacy) plutôt que deux validators empilés : l'ordre d'exécution de deux before-validators sur le même champ est une subtilité Pydantic qu'un seul validator élimine.
+- **`questions_entretien_potentielles` ajoutée au validator NULL → `[]` existant** : même régime que les autres colonnes JSONB de liste — NULL tant que l'agent n'a pas écrit une ligne `done`, et NULL définitif sur les lignes analysées avant 020.
+- **Deux retours de revue déclinés, avec justification** : (1) l'asymétrie colonne nullable / défaut Pydantic `[]` sur `questions_entretien_potentielles` est exactement le régime existant de `points_forts`/`points_amelioration`, déjà documenté par le commentaire du validator — la faire diverger (colonne `default=list` façon `matched_skills`) créerait une incohérence avec la migration 020 (`NULL`) ; (2) les commentaires `//` dans le bloc JSON du prompt font partie du texte validé avec Claude Cowork — le restructurer passe par lui, et `response_format=json_object` garantit de toute façon une sortie sans commentaires.

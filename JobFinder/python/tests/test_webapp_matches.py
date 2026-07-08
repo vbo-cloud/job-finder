@@ -63,8 +63,17 @@ def _make_analysis(status: str = "done") -> MagicMock:
     analysis.status = status
     analysis.matched_skills = ["Python", "Docker"]
     analysis.points_forts = ["Expérience solide"]
-    analysis.points_amelioration = ["Certifications absentes"]
-    analysis.synthese = "Cette offre est pertinente pour vous."
+    analysis.points_amelioration = [
+        {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}
+    ]
+    analysis.synthese = "Profil solide sur les compétences cœur."
+    analysis.verdict = "À tenter"
+    analysis.company_summary = None
+    analysis.mission_summary = "Développement backend Python."
+    analysis.why_good_fit_for_user = "Poste aligné avec votre recherche cloud."
+    analysis.why_good_candidate = "4 ans d'expérience Python."
+    analysis.score_explanation = "Forte couverture des compétences demandées."
+    analysis.questions_entretien_potentielles = ["Comment gérez-vous les migrations ?"]
     return analysis
 
 
@@ -178,8 +187,37 @@ class TestGetMatches:
         assert analysis["status"] == "done"
         assert analysis["matched_skills"] == ["Python", "Docker"]
         assert analysis["points_forts"] == ["Expérience solide"]
-        assert analysis["points_amelioration"] == ["Certifications absentes"]
-        assert analysis["synthese"] == "Cette offre est pertinente pour vous."
+        assert analysis["points_amelioration"] == [
+            {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."}
+        ]
+        assert analysis["synthese"] == "Profil solide sur les compétences cœur."
+        assert analysis["verdict"] == "À tenter"
+        assert analysis["company_summary"] is None
+        assert analysis["score_explanation"] == "Forte couverture des compétences demandées."
+        assert analysis["questions_entretien_potentielles"] == [
+            "Comment gérez-vous les migrations ?"
+        ]
+
+    def test_serializes_legacy_analysis_with_plain_string_points(self, test_client, mock_session):
+        # Rows analysed before migration 020 store points_amelioration items as
+        # plain strings — the schema must coerce them to PointAmelioration dicts.
+        profile = _make_profile()
+        match = _make_match(0.9)
+        analysis = _make_analysis()
+        analysis.points_amelioration = ["Certifications absentes"]
+        match.analysis = analysis
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        body = resp.json()["matches"][0]["analysis"]
+        assert body["points_amelioration"] == [
+            {"constat": "Certifications absentes", "suggestion_concrete": None}
+        ]
 
     def test_serializes_pending_analysis_with_null_lists(self, test_client, mock_session):
         # The agent has not run yet: JSONB list columns are still NULL in the
