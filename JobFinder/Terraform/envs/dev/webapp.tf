@@ -96,5 +96,12 @@ module "webapp" {
       name  = "CORS_ALLOWED_ORIGINS"
       value = "http://localhost:3000"
     },
+    # Entra user IDs (JWT sub) granted in-app admin features. Opaque GUIDs,
+    # not credentials — authorization still requires a valid signed JWT for
+    # that sub, so a plain env var (not a secret) is intentional.
+    {
+      name  = "ADMIN_USER_IDS"
+      value = var.admin_user_ids
+    },
   ]
 }
