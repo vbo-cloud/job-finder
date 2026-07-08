@@ -12,17 +12,6 @@ import { type MatchItemData } from "./MatchItem";
 const ANALYSIS_POLL_INTERVAL_MS = 3000;
 const PAGE_SIZE = 20;
 
-type SortKey = "score" | "salary" | "az";
-type ContractFilter = "Tous" | "CDI" | "CDD";
-const SCORE_THRESHOLDS = [60, 70, 80] as const;
-type ScoreFilter = "Tous" | `${typeof SCORE_THRESHOLDS[number]}`;
-
-function parseSalaryMax(salary: string | null): number {
-  if (!salary) return 0;
-  const digits = salary.replace(/\D/g, "");
-  return digits ? parseInt(digits, 10) : 0;
-}
-
 function loadSeenIds(cvId: string): Set<string> {
   try {
     const raw = localStorage.getItem(`jf_seen_${cvId}`);
@@ -52,10 +41,6 @@ interface Props {
 export default function CorrespondancesPanel({ cvId, matches, loading, error, onMatchSeen }: Props) {
   const [tab, setTab]               = useState<"Offres" | "Sauvegardées">("Offres");
   const [query, setQuery]           = useState("");
-  const [sort, setSort]             = useState<SortKey>("score");
-  const [contract, setContract]     = useState<ContractFilter>("Tous");
-  const [minScore, setMinScore]     = useState<ScoreFilter>("Tous");
-  const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters]       = useState({ nouvelle: true, vue: true });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage]             = useState(1);
@@ -181,25 +166,19 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     if (q) arr = arr.filter((m) =>
       `${m.offer.title} ${m.offer.company} ${m.offer.location}`.toLowerCase().includes(q),
     );
-    if (contract !== "Tous") arr = arr.filter((m) => m.offer.contract_type === contract);
-    if (minScore !== "Tous") arr = arr.filter((m) => Math.round(m.score * 100) >= +minScore);
     arr = arr.filter((m) => {
       const novel = m.is_new && !seenIdsRef.current.has(m.offer.id);
       return novel ? filters.nouvelle : filters.vue;
     });
-    return [...arr].sort((a, b) =>
-      sort === "az"     ? a.offer.title.localeCompare(b.offer.title, "fr") :
-      sort === "salary" ? parseSalaryMax(b.offer.salary) - parseSalaryMax(a.offer.salary) :
-      b.score - a.score,
-    );
+    return [...arr].sort((a, b) => b.score - a.score);
     // `applied` is not a filter criterion today — add it here if "hide applied" is introduced
     // seenIdsRef intentionally absent from deps — it's a ref, not reactive state
-  }, [matches, rejected, query, contract, minScore, filters, sort]);
+  }, [matches, rejected, query, filters]);
 
   // Back to page 1 whenever the visible set is redefined by the user
   useEffect(() => {
     setPage(1);
-  }, [query, contract, minScore, filters, sort, cvId]);
+  }, [query, filters, cvId]);
 
   useEffect(() => {
     setSavedPage(1);
@@ -245,9 +224,9 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const items: MatchItemData[] = paginated.map(toItemData);
 
   // The Sauvegardées list is built from the full `matches` set (minus rejected
-  // offers), independent of the Offres tab's query/contract/score/Nouvelles-Vues
-  // filters — a saved offer stays visible here no matter how the Offres tab is
-  // currently narrowed. It has its own pagination, separate from the Offres one.
+  // offers), independent of the Offres tab's query/Nouvelles-Vues filters — a
+  // saved offer stays visible here no matter how the Offres tab is currently
+  // narrowed. It has its own pagination, separate from the Offres one.
   const savedMatches = matches.filter((m) => !rejected.has(m.offer.id) && saved.has(m.offer.id));
   const savedTotalPages = Math.max(1, Math.ceil(savedMatches.length / PAGE_SIZE));
   const savedCurrentPage = Math.min(savedPage, savedTotalPages);
@@ -261,8 +240,6 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const pagination = tab === "Sauvegardées"
     ? { page: savedCurrentPage, totalPages: savedTotalPages, onPageChange: goToSavedPage }
     : { page: currentPage, totalPages, onPageChange: goToPage };
-
-  const filterActive = !(filters.nouvelle && filters.vue);
 
   return (
     <section className="flex flex-1 flex-col overflow-hidden min-w-0">
@@ -308,58 +285,22 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
               className="border-none outline-none bg-transparent text-[13px] text-strong placeholder:text-muted w-full"
             />
           </div>
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="border border-soft rounded-[9px] px-2.5 py-2 text-[12.5px] text-body bg-page cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default">
-            <option value="score">Trier : Pertinence</option>
-            <option value="salary">Trier : Salaire</option>
-            <option value="az">Trier : A → Z</option>
-          </select>
-          <select value={contract} onChange={(e) => setContract(e.target.value as ContractFilter)} className="border border-soft rounded-[9px] px-2.5 py-2 text-[12.5px] text-body bg-page cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default">
-            <option value="Tous">Contrat : Tous</option>
-            <option value="CDI">CDI</option>
-            <option value="CDD">CDD</option>
-          </select>
-          <select value={minScore} onChange={(e) => setMinScore(e.target.value as ScoreFilter)} className="border border-soft rounded-[9px] px-2.5 py-2 text-[12.5px] text-body bg-page cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default">
-            <option value="Tous">Score : Tous</option>
-            {SCORE_THRESHOLDS.map((t) => (
-              <option key={t} value={t}>Score ≥ {t} %</option>
+          <div className="flex items-center gap-[10px] border border-soft rounded-[9px] px-3 py-2 bg-page">
+            <span className="text-[10.5px] font-bold tracking-[.07em] uppercase text-muted">Offres</span>
+            {([
+              { key: "nouvelle" as const, label: "Nouvelles" },
+              { key: "vue" as const, label: "Vues" },
+            ]).map(({ key, label }) => (
+              <label key={key} className="flex items-center gap-[7px] text-[12.5px] text-body cursor-pointer mr-[6px] last:mr-0">
+                <input
+                  type="checkbox"
+                  checked={filters[key]}
+                  onChange={() => setFilters((f) => ({ ...f, [key]: !f[key] }))}
+                  className="h-[15px] w-[15px] cursor-pointer"
+                />
+                {label}
+              </label>
             ))}
-          </select>
-          <div className="relative">
-            <button
-              onClick={() => setFilterOpen((o) => !o)}
-              className={cn(
-                "flex items-center gap-[7px] border rounded-[9px] px-[11px] py-2 text-[12.5px] text-body bg-page cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
-                filterOpen ? "border-default" : "border-soft",
-              )}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M3 5h18l-7 8v6l-4-2v-6z" />
-              </svg>
-              Filtre
-              {filterActive && <span className="h-1.5 w-1.5 rounded-full bg-new-offer" />}
-            </button>
-            {filterOpen && (
-              <>
-                <div onClick={() => setFilterOpen(false)} className="fixed inset-0 z-[29]" />
-                <div className="absolute top-[calc(100%+6px)] left-0 z-30 bg-surface border border-faint rounded-xl shadow-[0_12px_32px_rgba(0,0,0,.13)] p-2 min-w-[196px]">
-                  <p className="text-[10.5px] font-bold tracking-[.07em] uppercase text-muted px-2 pt-1.5 pb-2">Afficher</p>
-                  {([
-                    { key: "nouvelle" as const, label: "Nouvelles" },
-                    { key: "vue" as const, label: "Vues" },
-                  ]).map(({ key, label }) => (
-                    <label key={key} className="flex items-center gap-[9px] px-2 py-2 rounded-[7px] text-[13px] text-body cursor-pointer hover:bg-overlay">
-                      <input
-                        type="checkbox"
-                        checked={filters[key]}
-                        onChange={() => setFilters((f) => ({ ...f, [key]: !f[key] }))}
-                        className="h-[15px] w-[15px] cursor-pointer"
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
           </div>
         </div>
       )}
