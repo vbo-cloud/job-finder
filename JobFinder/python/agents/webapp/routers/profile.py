@@ -1,6 +1,5 @@
 """Profile endpoints — read and upsert the authenticated user's job search preferences."""
 
-import uuid
 from datetime import datetime, timezone
 
 import structlog
@@ -22,6 +21,7 @@ from auth import (
     is_admin,
 )
 from dependencies import get_db
+from profile_defaults import default_profile_values
 from routers.cv import _delete_cv
 from schemas import CreditsRefillOut, ProfileOut, ProfileUpdate
 
@@ -190,25 +190,15 @@ def put_profile(
         # normalizes to "no codes" instead of hitting a DB constraint error.
         updated["commune_codes"] = []
 
+    # Defaults (id, identity claims, rome_codes, credits, created_at) are only
+    # meaningful on the INSERT path: on conflict, set_ only contains `updated`,
+    # so an existing row's credits or embedding are never clobbered by them.
     insert_values = {
-        "id": uuid.uuid4(),
-        "user_id": user_id,
-        "email": identity.email,
-        "display_name": identity.display_name,
-        "rome_codes": {},
+        **default_profile_values(identity),
         "commune_codes": updated.get("commune_codes") or [],
         "experience_level": updated.get("experience_level"),
         "candidate_description": updated.get("candidate_description"),
-        # Only meaningful on the INSERT path (new profile). On conflict, set_
-        # only includes intent_embedding when an intent field was in the
-        # request body, so an existing row's embedding is never clobbered
-        # with this None default.
         "intent_embedding": intent_embedding,
-        # Credit keys are never in `updated` (absent from ProfileUpdate), so
-        # on_conflict_do_update never touches them for an existing profile.
-        "analysis_credits_remaining": 30,
-        "analysis_credits_reset_at": None,
-        "created_at": now,
     }
 
     try:
