@@ -4536,3 +4536,50 @@ Trois ajouts dans `CV_QUALITY_SYSTEM_PROMPT` (`agents/cv_analysis/main.py`), auc
 
 - **Écart mineur vs le prompt Cowork** : la règle de ton référençait l'interdiction de la formule d'ouverture générique comme « déjà proscrit plus haut », mais rien dans le prompt système ne la proscrivait explicitement — la règle ajoutée porte elle-même cette proscription au lieu d'y renvoyer.
 - **Test manuel décisif en attente de déploiement** : relancer l'analyse sur le CV aux deux inversions de dates → `points_faibles` doit en relever au moins une ; vérifier que la taille des listes varie entre CVs de qualité différente. Si la review reste superficielle, le prompt a probablement atteint le plafond de gpt-4o-mini sur ce type de vérification multi-angles — tester `gpt-4o` via `AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT` (simple variable d'environnement), mais tout changement de modèle par défaut est une décision de coût à valider côté Cowork (ADR-018), pas à automatiser.
+
+---
+
+## PR #179 — fix(frontend): onglet Sauvegardées découplé des filtres/pagination de l'onglet Offres + signet bleu
+
+**Date :** 2026-07-08
+**Branche :** `feature/correspondances-saved-tab-fix` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-correspondances-saved-tab-fix.md`. L'onglet Sauvegardées était dérivé de `items`, lui-même issu de `paginated`/`filtered` : une offre sauvegardée en page 2, ou masquée par le filtre Nouvelles/Vues, disparaissait silencieusement de l'onglet. Un commentaire documentait ce couplage comme un choix assumé — à tort. Second point : le signet coché utilisait les tokens verts des compétences matchées (`border-match bg-match-skill text-match-skill`), à passer en bleu.
+
+### Ce qui a été fait
+
+- **`CorrespondancesPanel.tsx`** : extraction du mapping match → `MatchItemData` dans une fonction `toItemData()`, utilisée à la fois par `items` (liste Offres paginée) et par une nouvelle liste `savedItems` construite depuis l'ensemble complet `matches` filtré uniquement sur `!rejected && saved` — indépendante de query/contrat/score/Nouvelles-Vues/pagination. `displayedItems` bascule entre les deux selon l'onglet.
+- **`MatchItem.tsx`** : le signet coché passe aux tokens bleus existants `border-accent bg-accent-muted text-accent` (ceux du badge `rome_code`). Chips de compétences, bordure de carte dépliée et bouton « Sauvegardée ✓ » restent verts, hors périmètre.
+- **Tests** : deux tests de régression ajoutés au describe « onglet Sauvegardées » (offre sauvegardée en page 2 visible après retour page 1 ; offre sauvegardée visible malgré son bucket Nouvelles décoché). Les trois tests existants sont inchangés.
+
+**Vérification :** Jest 43/43, ESLint propre. Les deux nouveaux tests ont été vérifiés rouges sur le code d'avant correction (`git stash` du composant → 2 failed) — ce sont de vrais tests de régression.
+
+### Décisions techniques
+
+- **Hors scope, conformément au prompt** : pas de persistance de `saved` (toujours un `useState` local remis à zéro au reload) ; le bouton texte « Sauvegardée ✓ » du panneau déplié reste vert — décisions séparées à valider avec Vincent.
+
+---
+
+## PR #181 — feat(frontend): pagination de l'onglet Sauvegardées + barres de pagination en haut et en bas
+
+**Date :** 2026-07-08
+**Branche :** `feature/correspondances-saved-pagination` → `dev`
+
+### Contexte
+
+Suite directe de la PR #179, sur demande utilisateur : doter l'onglet Sauvegardées de la même pagination que l'onglet Offres, et afficher les barres de pagination en haut **et** en bas de la liste.
+
+### Ce qui a été fait
+
+- **`CorrespondancesPanel.tsx`** : état `savedPage` indépendant de `page` (même `PAGE_SIZE` de 20), avec clamp quand la liste rétrécit et reset au changement de CV. Le compteur du header affiche le total d'offres sauvegardées (`savedMatches.length`), pas la taille de la page courante. Un objet `pagination` sélectionne page/totalPages/handler selon l'onglet actif, et `PaginationBar` est rendue au-dessus (`mb-4`) et en dessous (`mt-5`) de `MatchList` sur les deux onglets.
+- **`PaginationBar.tsx`** : prop `className` pour l'espacement dépendant de la position (le `mt-5` était codé en dur) ; se masque toujours d'elle-même quand `totalPages <= 1`.
+- **Tests** : nouveau test — 25 offres sauvegardées → pagination indépendante sur Sauvegardées (page 1 en montre 20, « Suivant » révèle le reste) et header « 25 offres sauvegardées » ; tests de pagination existants adaptés à la double barre (`getAllByRole`).
+
+**Vérification :** Jest 44/44, ESLint propre.
+
+### Décisions techniques
+
+- **Incident de flux git** : la PR #179 a été mergée pendant l'implémentation — le push est arrivé après le merge et a recréé la branche distante supprimée. Le commit a été cherry-pické sur une nouvelle branche `feature/correspondances-saved-pagination` basée sur `dev` à jour. La branche recréée `feature/correspondances-saved-tab-fix` reste à supprimer manuellement (`git push origin --delete`), la suppression distante ayant été refusée en mode auto.
+- **État de page séparé par onglet** plutôt que partagé : changer de page sur un onglet ne perturbe pas la position de l'autre, et le clamp existant gère les listes qui rétrécissent (offre retirée des favoris en dernière page).

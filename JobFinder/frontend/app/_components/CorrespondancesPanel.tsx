@@ -59,6 +59,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [filters, setFilters]       = useState({ nouvelle: true, vue: true });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage]             = useState(1);
+  const [savedPage, setSavedPage]   = useState(1);
   const contentRef = useRef<HTMLDivElement>(null);
   const [saved, setSaved]           = useState(new Set<string>());
   const [applied, setApplied]       = useState(new Set<string>());
@@ -200,6 +201,10 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     setPage(1);
   }, [query, contract, minScore, filters, sort, cvId]);
 
+  useEffect(() => {
+    setSavedPage(1);
+  }, [cvId]);
+
   // Clamp instead of resetting when `filtered` shrinks in place (e.g. an offer
   // rejected on the last page) so the user stays as close as possible to where
   // they were.
@@ -209,6 +214,11 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
 
   function goToPage(p: number) {
     setPage(p);
+    contentRef.current?.scrollTo({ top: 0 });
+  }
+
+  function goToSavedPage(p: number) {
+    setSavedPage(p);
     contentRef.current?.scrollTo({ top: 0 });
   }
 
@@ -236,13 +246,21 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
 
   // The Sauvegardées list is built from the full `matches` set (minus rejected
   // offers), independent of the Offres tab's query/contract/score/Nouvelles-Vues
-  // filters and pagination — a saved offer stays visible here no matter how the
-  // Offres tab is currently narrowed.
-  const savedItems: MatchItemData[] = matches
-    .filter((m) => !rejected.has(m.offer.id) && saved.has(m.offer.id))
+  // filters — a saved offer stays visible here no matter how the Offres tab is
+  // currently narrowed. It has its own pagination, separate from the Offres one.
+  const savedMatches = matches.filter((m) => !rejected.has(m.offer.id) && saved.has(m.offer.id));
+  const savedTotalPages = Math.max(1, Math.ceil(savedMatches.length / PAGE_SIZE));
+  const savedCurrentPage = Math.min(savedPage, savedTotalPages);
+  const savedItems: MatchItemData[] = savedMatches
+    .slice((savedCurrentPage - 1) * PAGE_SIZE, savedCurrentPage * PAGE_SIZE)
     .map(toItemData);
 
   const displayedItems = tab === "Sauvegardées" ? savedItems : items;
+
+  // Each tab drives its own PaginationBar (rendered above and below the list)
+  const pagination = tab === "Sauvegardées"
+    ? { page: savedCurrentPage, totalPages: savedTotalPages, onPageChange: goToSavedPage }
+    : { page: currentPage, totalPages, onPageChange: goToPage };
 
   const filterActive = !(filters.nouvelle && filters.vue);
 
@@ -257,7 +275,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           {loading
             ? "Chargement…"
             : tab === "Sauvegardées"
-            ? `${displayedItems.length} offre${displayedItems.length > 1 ? "s" : ""} sauvegardée${displayedItems.length > 1 ? "s" : ""}`
+            ? `${savedMatches.length} offre${savedMatches.length > 1 ? "s" : ""} sauvegardée${savedMatches.length > 1 ? "s" : ""}`
             : `${matches.length} correspondances analysées`}
         </p>
         <div className="flex items-center gap-[18px] mt-3.5">
@@ -357,15 +375,14 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
             {analysisError && (
               <p className="text-xs text-destructive mb-3 text-center">{analysisError}</p>
             )}
+            {!loading && <PaginationBar {...pagination} className="mb-4" />}
             <MatchList
               items={displayedItems}
               loading={loading}
               rejectedCount={rejected.size}
               onRestoreAll={() => setRejected(new Set())}
             />
-            {!loading && tab === "Offres" && (
-              <PaginationBar page={currentPage} totalPages={totalPages} onPageChange={goToPage} />
-            )}
+            {!loading && <PaginationBar {...pagination} className="mt-5" />}
           </>
         )}
       </div>
