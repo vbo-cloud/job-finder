@@ -84,38 +84,54 @@ def _dispatch_offer_ready(user_id: str, run_date: str) -> None:
 
 @router.get("", response_model=ProfileOut)
 def get_profile(
-    user_id: str = Depends(get_current_user),
+    identity: UserIdentity = Depends(get_current_identity),
     session: Session = Depends(get_db),
 ) -> ProfileOut:
     """Return the job search profile for the authenticated user.
 
+    Creates the profile with default values (including the 30 welcome analysis
+    credits) if this is the user's first authenticated interaction with the app —
+    a user can reach this endpoint before ever uploading a CV or calling
+    PUT /profile, and must still see their credits rather than an error.
+
+    Never returns 404: any user with a valid token has an accessible profile
+    after this call.
+
     Args:
-        user_id: Authenticated user ID from the JWT sub claim.
+        identity: Authenticated identity claims from the JWT (sub, email, name).
         session: Active database session.
 
     Returns:
-        ProfileOut with the user's current job search preferences.
-
-    Raises:
-        HTTPException 404: If no profile exists for this user.
+        ProfileOut with the user's current job search preferences — freshly
+        created with defaults if this is their first visit.
     """
+    user_id = identity.user_id
     logger.info("profile_get_started", user_id=user_id)
 
     try:
         profile = session.execute(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
+
+        if profile is None:
+            logger.info("profile_get_creating_default", user_id=user_id)
+            session.execute(
+                pg_insert(UserProfile)
+                .values(**default_profile_values(identity), commune_codes=[])
+                .on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
+            )
+            session.commit()
+            # scalar_one (not _or_none) is deliberate: after the upsert + commit
+            # the row necessarily exists — either just created, or created by a
+            # concurrent request (on_conflict_do_nothing makes that race safe).
+            profile = session.execute(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            ).scalar_one()
     except SQLAlchemyError:
         # Base class is intentional — any DB error (connection lost, timeout)
         # should abort the response and return 500.
         logger.error("profile_get_failed", user_id=user_id, exc_info=True)
         raise
-
-    if profile is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Profile not found",
-        )
 
     return ProfileOut.model_validate(profile).model_copy(
         update={"is_admin": is_admin(user_id)}

@@ -91,12 +91,28 @@ class TestGetProfile:
         assert body["commune_codes"] == ["75101", "75102"]
         assert body["analysis_credits_remaining"] == 30
 
-    def test_returns_404_when_profile_not_found(self, test_client, mock_session):
+    def test_creates_profile_with_defaults_on_first_get(self, test_client, mock_session):
+        """A user who reaches GET /profile before ever uploading a CV or calling
+        PUT /profile must get their profile created with default values —
+        including the 30 welcome credits — rather than a 404."""
+        profile = _make_profile()
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = profile
 
         resp = test_client.get("/profile")
 
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["analysis_credits_remaining"] == 30
+        mock_session.commit.assert_called_once()
+
+    def test_does_not_create_when_profile_exists(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        mock_session.commit.assert_not_called()
 
     def test_returns_500_on_db_error(self, test_client, mock_session):
         mock_session.execute.side_effect = SQLAlchemyError("DB error")
