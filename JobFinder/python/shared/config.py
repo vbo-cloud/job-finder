@@ -26,3 +26,9 @@ CLEANUP_COLLECTED_AGE_DAYS = int(os.getenv("CLEANUP_COLLECTED_AGE_DAYS", "2"))
 # fortement la variance observée (contrairement à la température par défaut de 1.0).
 ANALYSIS_TEMPERATURE = float(os.getenv("ANALYSIS_TEMPERATURE", "0"))
 ANALYSIS_SEED = int(os.getenv("ANALYSIS_SEED", "42"))
+# Pénalité de score quand l'expérience minimale demandée par une offre dépasse le plafond d'années
+# associé au niveau d'expérience déclaré par le candidat. Volontairement progressive (pas d'exclusion) :
+# un écart de 2-3 ans sur une offre par ailleurs pertinente ne doit coûter que quelques points, pas
+# faire disparaître l'offre — voir docs/prompts/prompt-matching-experience-penalty-and-skills-signal.md.
+EXPERIENCE_PENALTY_PER_YEAR_GAP = float(os.getenv("EXPERIENCE_PENALTY_PER_YEAR_GAP", "0.03"))
+EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
