@@ -4325,3 +4325,30 @@ Les 30 crédits d'analyse offerts à l'inscription (ADR-018) ne sont pas renouve
 - **`is_admin` calculé, pas persisté** : champ Pydantic avec défaut `False` surchargé via `model_copy(update=…)` dans les endpoints profile — `ProfileOut` reste `from_attributes` sans exiger de colonne DB.
 - **Le backend décide, le frontend masque** : le bouton n'est qu'un confort d'affichage conditionné par `is_admin` ; la vraie barrière est la dépendance `get_current_admin_user` côté API.
 - **Activation** : renseigner `admin_user_ids` avec le `user_id` renvoyé par `GET /profile` (claim `sub` du JWT) — localement via `python/.env`, en Azure via la variable Terraform.
+
+
+---
+
+## PR #170 — feat(webapp): persister les claims d'identité (email, display_name) dans user_profiles
+
+**Date :** 2026-07-08
+**Branche :** `feature/profile-identity-claims` → `dev` (empilée sur la PR #169)
+
+### Contexte
+
+Découverte en configurant `ADMIN_USER_IDS` (PR #169) : le backend ne stocke que le claim `sub` du JWT comme `user_id` — un identifiant pairwise opaque, différent de l'Object ID du portail Entra et impossible à résoudre vers un utilisateur d'annuaire (aucune API Microsoft ne le permet, c'est une propriété anti-corrélation voulue). Le nom affiché dans l'app vient du cache MSAL navigateur, jamais du backend. Conséquence : `user_profiles` était une liste de GUID anonymes, l'opérateur ne pouvait pas savoir qui est qui.
+
+### Ce qui a été fait
+
+- **`auth.py`** : nouvelle dépendance `get_current_identity` retournant un `UserIdentity(user_id, email, display_name)` extrait du JWT validé ; `get_current_user` devient un simple wrapper (aucun changement pour les endpoints existants). Repli sur le claim `emails` (liste, style B2C) quand `email` est absent.
+- **Migration 021 + modèle** : colonnes nullable `email` / `display_name` sur `user_profiles` — nullable car le user flow Entra peut ne pas émettre ces claims dans l'access token.
+- **Écriture** : l'upload CV (création du profil) capture les claims ; `PUT /profile` les rafraîchit à chaque appel, mais uniquement quand ils sont présents dans le jeton — un jeton sans claims n'écrase jamais des valeurs stockées.
+
+**Vérification :** pytest — 205 passed (7 nouveaux : extraction des claims dans `test_webapp_auth.py`, rafraîchissement upsert + non-écrasement dans `test_webapp_profile.py`).
+
+### Décisions techniques
+
+- **Métadonnées opérateur uniquement** : jamais utilisées pour l'autorisation, absentes de toute réponse API (`ProfileOut` inchangé), jamais loggées (même règle que `candidate_description`), effacées avec le profil par `DELETE /profile` (droit à l'effacement).
+- **Rafraîchissement sur PUT, capture à la création** : un compte renommé ou un email changé converge au prochain enregistrement du profil ; `GET` ne déclenche aucune écriture.
+- **Point de vigilance post-déploiement** : si `email`/`display_name` restent NULL, c'est que le user flow Entra External ID n'émet pas ces claims dans l'access token — les activer dans les application claims du user flow (ou en optional claims sur l'app registration de l'API).
+- **Tests d'upsert via `_post_values_clause.update_values_to_set`** : attribut privé SQLAlchemy mais seul point d'observation du `set_` avec une session entièrement mockée ; commenté comme tel dans le test.
