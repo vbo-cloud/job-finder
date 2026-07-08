@@ -388,7 +388,7 @@ module "job_match_analysis" {
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
     {
-      name  = "AZURE_OPENAI_CHAT_DEPLOYMENT"
+      name  = "AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT"
       value = "gpt-4o-mini"
     },
     {

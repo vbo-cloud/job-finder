@@ -35,7 +35,7 @@ if not AZURE_OPENAI_ENDPOINT:
 
 # Default matches the fixed deployment name used across all environments.
 # A missing env var is safe — the deployment name is not secret and does not vary.
-AZURE_OPENAI_CHAT_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT", "gpt-4o-mini")
 
 logger = structlog.get_logger()
 
@@ -164,7 +164,7 @@ def _analyze_match(context: dict) -> dict:
         try:
             logger.info("match_analysis_attempt", attempt=attempt)
             response = _openai_client.chat.completions.create(
-                model=AZURE_OPENAI_CHAT_DEPLOYMENT,
+                model=AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": MATCH_ANALYSIS_SYSTEM_PROMPT},
