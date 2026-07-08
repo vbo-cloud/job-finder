@@ -85,10 +85,6 @@ export default function CvAnalysisCard({ cvId }: Props) {
 
   return (
     <div className="w-full rounded-xl border border-faint bg-chip p-[18px]">
-      <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-3">
-        Analyse de votre CV
-      </p>
-
       {fetchFailed ? (
         <p className="text-[13px] text-muted">Analyse indisponible pour ce CV</p>
       ) : analysis?.status === "error" ? (

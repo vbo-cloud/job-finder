@@ -199,7 +199,7 @@ export default function LibrarySection({
       </div>
 
       <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
-        <span className="text-[9px] tracking-widest text-label">CORRESPONDANCES</span>
+        <span className="text-[9px] tracking-widest text-label">OFFRES</span>
         <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
       </div>
 

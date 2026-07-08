@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
 import { notifyCreditsConsumed } from "@/lib/creditsBus";
-import CvAnalysisCard from "./CvAnalysisCard";
 import MatchList from "./MatchList";
 import PaginationBar from "./PaginationBar";
 import { type MatchItemData } from "./MatchItem";
@@ -51,7 +50,7 @@ interface Props {
 }
 
 export default function CorrespondancesPanel({ cvId, matches, loading, error, onMatchSeen }: Props) {
-  const [tab, setTab]               = useState<"Correspondances" | "Analyse du CV">("Correspondances");
+  const [tab, setTab]               = useState<"Offres" | "Sauvegardées">("Offres");
   const [query, setQuery]           = useState("");
   const [sort, setSort]             = useState<SortKey>("score");
   const [contract, setContract]     = useState<ContractFilter>("Tous");
@@ -233,6 +232,12 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     };
   });
 
+  // Intentional coupling: `items` is already narrowed upstream by the
+  // Nouvelles/Vues filters and pagination (see `filtered`/`paginated`), so a
+  // saved offer hidden by those won't show here either. Accepted trade-off —
+  // the saved list is short by nature; don't "fix" without a product decision.
+  const displayedItems = tab === "Sauvegardées" ? items.filter((i) => i.isSaved) : items;
+
   const filterActive = !(filters.nouvelle && filters.vue);
 
   return (
@@ -243,10 +248,14 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           Vos correspondances
         </h2>
         <p className="text-[12.5px] text-muted mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
-          {loading ? "Chargement…" : `${matches.length} correspondances analysées`}
+          {loading
+            ? "Chargement…"
+            : tab === "Sauvegardées"
+            ? `${displayedItems.length} offre${displayedItems.length > 1 ? "s" : ""} sauvegardée${displayedItems.length > 1 ? "s" : ""}`
+            : `${matches.length} correspondances analysées`}
         </p>
         <div className="flex items-center gap-[18px] mt-3.5">
-          {(["Correspondances", "Analyse du CV"] as const).map((t) => (
+          {(["Offres", "Sauvegardées"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -262,7 +271,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       </div>
 
       {/* Filter bar */}
-      {tab === "Correspondances" && (
+      {tab === "Offres" && (
         <div className="flex-none flex items-center gap-[10px] px-[22px] py-[11px] bg-chip border-b border-faint flex-wrap">
           <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-[320px] bg-page border border-soft rounded-[9px] px-3 py-2">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
@@ -333,11 +342,9 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
 
       {/* Content area */}
       <div ref={contentRef} className="flex-1 overflow-y-auto px-[22px] py-4 pb-12">
-        {tab === "Analyse du CV" ? (
-          <CvAnalysisCard cvId={cvId} />
-        ) : error ? (
+        {error ? (
           <p className="text-xs text-destructive mt-8 text-center">{error} — impossible de charger les matchs</p>
-        ) : !filters.nouvelle && !filters.vue ? (
+        ) : tab === "Offres" && !filters.nouvelle && !filters.vue ? (
           <p className="text-sm text-muted text-center mt-12">Tous les filtres sont désactivés — activez au moins un filtre.</p>
         ) : (
           <>
@@ -345,12 +352,12 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
               <p className="text-xs text-destructive mb-3 text-center">{analysisError}</p>
             )}
             <MatchList
-              items={items}
+              items={displayedItems}
               loading={loading}
               rejectedCount={rejected.size}
               onRestoreAll={() => setRejected(new Set())}
             />
-            {!loading && (
+            {!loading && tab === "Offres" && (
               <PaginationBar page={currentPage} totalPages={totalPages} onPageChange={goToPage} />
             )}
           </>
