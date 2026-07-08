@@ -96,20 +96,43 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
       setAnalysisOpen((o) => !o);
     };
 
+    // Distingue un vrai changement de contexte (nouveau CV sélectionné ou
+    // zone géographique modifiée) d'un simple rafraîchissement silencieux
+    // déclenché par le poll de match_count sur le même CV/zone — initialisé
+    // à une valeur impossible pour que le tout premier run soit un reset dur.
+    const prevMatchesKeyRef = useRef<{ cvId: string | null; zoneVersion: number | undefined }>({
+      cvId: null,
+      zoneVersion: undefined,
+    });
+
     useEffect(() => {
-      setMatches(null);
-      setMatchesError(null);
-      setLoadingMatches(true);
+      const prev = prevMatchesKeyRef.current;
+      const hardReset = prev.cvId !== selectedCvId || prev.zoneVersion !== zoneVersion;
+      prevMatchesKeyRef.current = { cvId: selectedCvId, zoneVersion };
+
+      if (hardReset) {
+        setMatches(null);
+        setMatchesError(null);
+        setLoadingMatches(true);
+      }
+
       apiClient
         .get<CVMatchesOut>(`/matches/cv/${selectedCvId}`)
         .then((res) => setMatches(res.data))
         .catch((err: unknown) => {
-          const status = (err as { response?: { status?: number } })?.response?.status;
           console.error("matches fetch failed", err);
-          setMatchesError(status ? `Erreur ${status}` : "Erreur réseau");
+          if (hardReset) {
+            const status = (err as { response?: { status?: number } })?.response?.status;
+            setMatchesError(status ? `Erreur ${status}` : "Erreur réseau");
+          }
+          // Rafraîchissement silencieux en échec (match_count a changé mais le
+          // fetch rate) : ne pas remplacer la liste déjà affichée par une
+          // bannière d'erreur pour un raté transitoire de poll.
         })
-        .finally(() => setLoadingMatches(false));
-    }, [selectedCvId, zoneVersion]);
+        .finally(() => {
+          if (hardReset) setLoadingMatches(false);
+        });
+    }, [selectedCvId, zoneVersion, currentCv?.match_count]);
 
     useEffect(() => {
       if (!currentCv?.has_thumbnail) { setThumbnailSrc(null); return; }
