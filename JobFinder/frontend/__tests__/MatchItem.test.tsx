@@ -34,8 +34,17 @@ function makeAnalysis(overrides: Partial<MatchAnalysisOut> = {}): MatchAnalysisO
     status: "done",
     matched_skills: ["Python", "Docker", "Azure", "Terraform"],
     points_forts: ["Expérience solide en Python"],
-    points_amelioration: ["Certifications cloud absentes"],
-    synthese: "Cette offre est pertinente pour vous car votre profil correspond.",
+    points_amelioration: [
+      { constat: "Certifications cloud absentes", suggestion_concrete: "Passer la certification AZ-104." },
+    ],
+    synthese: "Profil solide sur les compétences cœur — un point à travailler avant de postuler.",
+    verdict: "À tenter",
+    company_summary: null,
+    mission_summary: "Développement backend Python.",
+    why_good_fit_for_user: "Poste aligné avec votre recherche cloud.",
+    why_good_candidate: "4 ans d'expérience Python.",
+    score_explanation: "Forte couverture des compétences demandées.",
+    questions_entretien_potentielles: ["Comment gérez-vous les migrations ?"],
     ...overrides,
   };
 }
@@ -222,9 +231,12 @@ describe("MatchItem", () => {
         })} />
       );
       // synthese shows twice: compact teaser line + expanded review panel
-      expect(screen.getAllByText(/Cette offre est pertinente pour vous/)).toHaveLength(2);
+      expect(screen.getAllByText(/Profil solide sur les compétences cœur/)).toHaveLength(2);
       expect(screen.getByText("Expérience solide en Python")).toBeInTheDocument();
-      expect(screen.getByText("Certifications cloud absentes")).toBeInTheDocument();
+      // constat and suggestion_concrete render as a single list item
+      expect(
+        screen.getByText("Certifications cloud absentes — Passer la certification AZ-104.")
+      ).toBeInTheDocument();
     });
 
     it("shows a retry button mentioning the credit cost on error", () => {

@@ -40,7 +40,9 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, onAnalyz
           <AnalysisPointsList title="Points forts" items={analysis.points_forts} variant="positive" />
           <AnalysisPointsList
             title="Points d'amélioration"
-            items={analysis.points_amelioration}
+            items={analysis.points_amelioration.map((p) =>
+              p.suggestion_concrete ? `${p.constat} — ${p.suggestion_concrete}` : p.constat
+            )}
             variant="negative"
           />
         </div>
