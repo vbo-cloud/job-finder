@@ -4297,3 +4297,31 @@ La page des correspondances affichait toutes les offres d'un CV en une seule lis
 - **Reset vs clamp** : la page revient à 1 quand l'utilisateur redéfinit l'ensemble visible (recherche, filtres, tri, changement de CV) — via un `useEffect` dédié ; mais quand la liste rétrécit sur place (offre rejetée depuis la dernière page), la page est seulement bornée (`Math.min(page, totalPages)`) pour garder l'utilisateur au plus près de là où il était.
 - **Pagination client, pas serveur** : l'endpoint `/matches/cv/{id}` renvoie déjà la liste complète et le tri/filtrage est local ; paginer côté serveur aurait cassé la recherche instantanée et le tri sans bénéfice à l'échelle actuelle (dizaines d'offres). À revisiter si le volume par CV dépasse quelques centaines.
 - **`Element.prototype.scrollTo` mocké dans les tests** : jsdom n'implémente pas `scrollTo` sur les éléments — mock global dans `beforeAll` plutôt qu'une garde dans le composant.
+
+
+---
+
+## PR #169 — feat: recharge de crédits admin (+10) contrôlée par ADMIN_USER_IDS
+
+**Date :** 2026-07-08
+**Branche :** `feature/admin-credits-refill` → `dev`
+
+### Contexte
+
+Les 30 crédits d'analyse offerts à l'inscription (ADR-018) ne sont pas renouvelables et aucun flux d'achat n'existe. Besoin d'une échappatoire réservée au compte propriétaire du projet : un bouton « +10 crédits » sur la page profil, invisible et inaccessible pour tout autre utilisateur.
+
+### Ce qui a été fait
+
+- **Backend** : variable d'environnement `ADMIN_USER_IDS` (claims `sub` JWT séparés par des virgules, vide = aucun admin) parsée dans `auth.py` ; helper `is_admin()` et dépendance FastAPI `get_current_admin_user` (403 pour les non-admins). Nouvel endpoint `POST /profile/credits/refill` : +10 crédits sur le profil de l'admin lui-même via un `UPDATE … RETURNING` atomique (même motif que le décrément de `request_match_analysis`), 404 si aucun profil. `GET/PUT /profile` exposent désormais `is_admin`.
+- **Frontend** : composant `AdminRefillButton` dans la carte crédits de `/profile`, rendu uniquement si `is_admin` ; met à jour le solde affiché depuis la réponse et notifie le bus crédits pour rafraîchir le `CreditsBadge` du header.
+- **Terraform (couche app uniquement)** : variable `admin_user_ids` (défaut `""` = fonction désactivée) câblée en env var `ADMIN_USER_IDS` sur le Container App webapp. `python/.env.example` documente la variable pour le dev local.
+
+**Vérification :** pytest — 198 passed (9 nouveaux : flag is_admin, 403 non-admin, refill nominal, 404, 500) ; frontend — 91 passed (2 nouveaux), `tsc --noEmit` et `next lint` propres ; `terraform fmt -check` propre (validate en CI).
+
+### Décisions techniques
+
+- **Autorisation par env var plutôt que colonne `is_admin` en base** : un seul admin prévu, pas de flux de gestion d'admins — une migration + du SQL manuel seraient de la complexité sans bénéfice. L'env var est versionnée dans Terraform et auditable.
+- **Env var en clair, pas un secret** : les valeurs sont des GUID Entra opaques, pas des identifiants — l'autorisation exige toujours un JWT signé valide pour ce `sub`. Même raisonnement que le split tenant/client ID déjà commenté dans `webapp.tf`.
+- **`is_admin` calculé, pas persisté** : champ Pydantic avec défaut `False` surchargé via `model_copy(update=…)` dans les endpoints profile — `ProfileOut` reste `from_attributes` sans exiger de colonne DB.
+- **Le backend décide, le frontend masque** : le bouton n'est qu'un confort d'affichage conditionné par `is_admin` ; la vraie barrière est la dépendance `get_current_admin_user` côté API.
+- **Activation** : renseigner `admin_user_ids` avec le `user_id` renvoyé par `GET /profile` (claim `sub` du JWT) — localement via `python/.env`, en Azure via la variable Terraform.
