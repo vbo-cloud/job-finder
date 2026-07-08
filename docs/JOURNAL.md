@@ -4271,3 +4271,29 @@ Réécriture du seul bloc « SUGGESTIONS PERSONNALISÉES » (règles 1, 2, 3, 4,
 
 - **Le prompt référence les libellés que le modèle voit réellement** (« Intention du candidat », le texte exact du fallback, « CV », « description ou compétences demandées ») plutôt que les noms de variables internes (`candidate_description`, `cv_text`) — le modèle ne voit jamais ces noms dans le message utilisateur construit par `_analyze_match`.
 - **Garde-fou d'itération acté** : si la sortie reste générique après ce changement, ne pas re-itérer sur le few-shot une troisième fois — vérifier d'abord que `candidate_description` est effectivement rempli en base pour le profil testé (le problème serait alors une donnée d'entrée manquante, pas un problème de prompt).
+
+
+---
+
+## PR #168 — feat(frontend): pagination de la liste des correspondances (20 offres par page)
+
+**Date :** 2026-07-08
+**Branche :** `feature/matches-pagination` → `dev`
+
+### Contexte
+
+La page des correspondances affichait toutes les offres d'un CV en une seule liste défilante. Toutes les correspondances étant déjà chargées côté client par le parent (`HomeClient` → prop `matches`), une pagination purement client suffit — aucun changement backend.
+
+### Ce qui a été fait
+
+- **Nouveau composant `PaginationBar`** (`app/_components/`) : numéros de pages fenêtrés (première/dernière toujours visibles, ±1 autour de la page courante, ellipse pour les trous), boutons Précédent/Suivant, `aria-current="page"` sur la page active, tokens de thème uniquement. Rendu `null` quand il n'y a qu'une seule page.
+- **Découpage dans `CorrespondancesPanel`** : la liste filtrée/triée est tranchée par pages de 20 (`PAGE_SIZE`), la pagination s'applique donc après recherche, filtres et tri. Le changement de page fait remonter le panneau en haut (`scrollTo` sur le conteneur défilant).
+- **Tests** : 4 nouveaux cas dans `CorrespondancesPanel.test.tsx` (tranche de la première page, navigation page 2, barre masquée à ≤ 20 offres, retour page 1 au changement de tri).
+
+**Vérification :** `tsc --noEmit`, `next lint` et `jest` — 93 passed (89 existants + 4 nouveaux).
+
+### Décisions techniques
+
+- **Reset vs clamp** : la page revient à 1 quand l'utilisateur redéfinit l'ensemble visible (recherche, filtres, tri, changement de CV) — via un `useEffect` dédié ; mais quand la liste rétrécit sur place (offre rejetée depuis la dernière page), la page est seulement bornée (`Math.min(page, totalPages)`) pour garder l'utilisateur au plus près de là où il était.
+- **Pagination client, pas serveur** : l'endpoint `/matches/cv/{id}` renvoie déjà la liste complète et le tri/filtrage est local ; paginer côté serveur aurait cassé la recherche instantanée et le tri sans bénéfice à l'échelle actuelle (dizaines d'offres). À revisiter si le volume par CV dépasse quelques centaines.
+- **`Element.prototype.scrollTo` mocké dans les tests** : jsdom n'implémente pas `scrollTo` sur les éléments — mock global dans `beforeAll` plutôt qu'une garde dans le composant.
