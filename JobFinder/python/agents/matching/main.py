@@ -126,6 +126,10 @@ def _get_all_matches(session: Session) -> list[dict]:
                 -- dernier calcul batch) est ignoré des deux côtés du ratio. Les termes
                 -- quasi universels (au-delà du seuil) sont des mots vides de fait,
                 -- écartés totalement — couperet net, pas de pondération graduelle.
+                -- tsvector_to_array est un choix délibéré : il retourne les lexèmes en
+                -- text[], dédupliqués par construction (sémantique tsvector — un lexème
+                -- apparaît une seule fois par document), donc les SUM(rarity) en aval
+                -- ne comptent jamais deux fois le même terme d'une même offre.
                 SELECT
                     o.id AS offer_id,
                     t.lexeme,
