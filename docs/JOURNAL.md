@@ -4406,3 +4406,28 @@ Implémentation du prompt Claude Cowork `prompt-cv-analysis-qualite-review.md` :
 - **Aucun changement dans `_upsert_cv_analysis`** : la persistance passe par `**result`, ajouter la clé au dict retourné par `_analyze_cv_quality` suffit.
 - **Tests webapp : `synthese` posée explicitement sur les MagicMock** — Pydantic rejetterait l'attribut auto-mocké (ni `str` ni `None`) au moment de la validation `from_attributes`.
 - **Test manuel qualitatif en attente de déploiement** : relire une analyse générée sur le CV réel Cloud/Azure/AZ-104 — aucun fait répété entre `synthese`/`points_faibles`/`suggestions`, au moins un point ancré sur un élément nommé du CV, au moins une suggestion appuyée sur l'intention du profil.
+
+---
+
+## PR #174 — fix(frontend): démontage de la vue correspondances + retour accueil à la suppression du dernier CV
+
+**Date :** 2026-07-08
+**Branche :** `feature/library-empty-reset` → `dev`
+
+### Contexte
+
+Après suppression de tous les CVs de la bibliothèque, la vue de correspondance (`CVDetailSection`) restait montée et accessible au scroll, alors que la bibliothèque elle-même se masquait correctement. Attendu : retour à l'accueil et vue de correspondance inaccessible.
+
+### Ce qui a été fait
+
+- **Cause** : `LibrarySection` ne propageait la liste des CVs au parent (`onCvsChange`) que sur les fetchs — `handleCvDeleted` filtrait le state local sans notifier `HomeClient`, qui gardait une `cvList` périmée. `selectedCvId` restait donc valide et la condition `{selectedCvId && <CVDetailSection …>}` ne démontait jamais la section.
+- **`LibrarySection.tsx`** : la liste `cvs` est miroitée vers le parent via un `useEffect` déclenché à chaque changement (fetchs et suppressions locales), à la place de l'appel manuel qui n'existait que dans `fetchCvs` — la copie du parent ne peut structurellement plus diverger.
+- **`HomeClient.tsx`** : quand la liste se vide alors qu'un CV était sélectionné, la sélection est effacée (démonte la vue de correspondance) et un `scrollIntoView` ramène sur la section accueil (`#home`) plutôt que de laisser le scroll sur une section disparue.
+- **Test de régression** : le flux réel de suppression dans `LibrarySection.test.tsx` (armer la corbeille → confirmer → `DELETE /cv/1`) vérifie que `onCvsChange` reçoit la liste vide.
+
+**Vérification :** Jest — 99 passed (dont le nouveau test de régression) ; `tsc --noEmit` et ESLint propres.
+
+### Décisions techniques
+
+- **Miroir par effet plutôt qu'appel dans `handleCvDeleted`** : appeler `onCvsChange` dans l'updater de `setCvs` serait un effet de bord dans un updater (double invocation possible en StrictMode) ; l'effet sur `cvs` couvre tous les chemins de mutation présents et futurs.
+- **Garde `if (selectedCvId)` avant le scroll accueil** : la liste est vide au montage initial (avant le premier fetch) — sans le garde, chaque chargement de page déclencherait un `scrollIntoView` parasite.

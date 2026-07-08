@@ -7,11 +7,13 @@ jest.mock("@azure/msal-react", () => ({
 
 const mockGet = jest.fn();
 const mockPost = jest.fn();
+const mockDelete = jest.fn();
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
   default: {
     get: (...args: unknown[]) => mockGet(...(args as [])),
     post: (...args: unknown[]) => mockPost(...(args as [])),
+    delete: (...args: unknown[]) => mockDelete(...(args as [])),
   },
 }));
 
@@ -68,6 +70,24 @@ describe("LibrarySection — add CV slot", () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  // Regression: onCvsChange must fire on local deletions too, not only on
+  // fetches — a stale parent copy kept the CV detail (correspondances) view
+  // mounted after the last CV was deleted.
+  it("propagates the emptied list to onCvsChange after deleting the last CV", async () => {
+    mockDelete.mockResolvedValue({ data: null });
+    const onCvsChange = jest.fn();
+    render(<LibrarySection onCvsChange={onCvsChange} />);
+
+    await waitFor(() => expect(screen.getByText("cv1.pdf")).toBeInTheDocument());
+    expect(onCvsChange).toHaveBeenLastCalledWith(baseCvs);
+
+    fireEvent.click(screen.getByLabelText("Supprimer ce CV"));
+    fireEvent.click(screen.getByLabelText("Confirmer la suppression"));
+
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith("/cv/1"));
+    await waitFor(() => expect(onCvsChange).toHaveBeenLastCalledWith([]));
   });
 
   it("hides the add-CV slot once the quota is reached", async () => {

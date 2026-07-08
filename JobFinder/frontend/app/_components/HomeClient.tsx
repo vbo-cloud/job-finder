@@ -31,7 +31,13 @@ export default function HomeClient() {
   // selection exists, clear to null only when the library is empty.
   useEffect(() => {
     if (cvList.length === 0) {
-      setSelectedCvId(null);
+      if (selectedCvId) {
+        // Last CV just deleted: the library section hides itself and the
+        // detail section unmounts — send the user back to the home section
+        // rather than leaving the scroll stranded on a vanished section.
+        setSelectedCvId(null);
+        document.getElementById("home")?.scrollIntoView({ behavior: "smooth" });
+      }
       return;
     }
     if (selectedCvId && cvList.some((cv) => cv.id === selectedCvId)) return;
