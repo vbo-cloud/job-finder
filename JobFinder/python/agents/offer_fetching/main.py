@@ -27,6 +27,7 @@ from shared.db import get_session, run_migrations
 from shared.embedder import embed
 from shared.geo import parse_department_from_location, parse_region_from_location
 from shared.models import Offer, UserProfile
+from shared.tech_keywords import extract_tech_keywords
 from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
@@ -158,6 +159,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
             "experience_min_years": _parse_experience_min_years(raw.get("experienceLibelle")),
             "description": raw.get("description", ""),
             "skills": [c["libelle"] for c in raw.get("competences", [])],
+            "tech_keywords": extract_tech_keywords(raw.get("description", "")),
             "rome_code": rome_code,
             "collected_at": now,
             "ft_updated_at": ft_updated_at,
@@ -182,6 +184,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
                     "experience_min_years": insert_stmt.excluded.experience_min_years,
                     "description": insert_stmt.excluded.description,
                     "skills": insert_stmt.excluded.skills,
+                    "tech_keywords": insert_stmt.excluded.tech_keywords,
                     "rome_code": insert_stmt.excluded.rome_code,
                     "collected_at": insert_stmt.excluded.collected_at,
                     "ft_updated_at": insert_stmt.excluded.ft_updated_at,

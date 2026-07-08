@@ -1,6 +1,6 @@
 """Tests for agents/offer_fetching/main.py.
 
-Covers: _parse_experience_min_years.
+Covers: _parse_experience_min_years, _upsert_offers (values wiring).
 
 The module is loaded via importlib under the unique name 'offer_fetching_main'
 to avoid sys.modules collision with the other agents' main.py. The
@@ -9,7 +9,9 @@ offer_fetching directory is added to sys.path first so the module's plain
 """
 import importlib.util
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +27,15 @@ sys.modules["offer_fetching_main"] = _mod
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 _parse_experience_min_years = _mod._parse_experience_min_years
+_upsert_offers = _mod._upsert_offers
+
+
+def _session_cm(session: MagicMock):
+    """Return a contextmanager-compatible callable that yields the given session."""
+    @contextmanager
+    def _cm():
+        yield session
+    return _cm
 
 
 # ---------------------------------------------------------------------------
@@ -67,3 +78,35 @@ class TestParseExperienceMinYears:
         # favoriserait les offres au libellé imparsable face aux offres
         # honnêtement étiquetées débutant.
         assert _parse_experience_min_years(libelle) is None
+
+
+# ---------------------------------------------------------------------------
+# _upsert_offers — values wiring
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertOffersValues:
+    def test_populates_experience_and_tech_keywords_from_raw_offer(self, mocker):
+        mock_pg_insert = mocker.patch.object(_mod, "pg_insert")
+        mock_session = MagicMock()
+        mock_session.execute.return_value = []
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _upsert_offers(
+            [
+                {
+                    "id": "FT-1",
+                    "intitule": "Ingénieur Cloud",
+                    "description": "Déploiement Azure avec Terraform et Kubernetes.",
+                    "experienceLibelle": "Expérience exigée de 5 An(s)",
+                    "competences": [{"libelle": "Cloud computing"}],
+                }
+            ],
+            "M1805",
+        )
+
+        values = mock_pg_insert.return_value.values.call_args.args[0]
+        assert values[0]["experience_min_years"] == 5
+        assert values[0]["tech_keywords"] == ["Azure", "Kubernetes", "Terraform"]
+        assert values[0]["skills"] == ["Cloud computing"]
+        mock_session.commit.assert_called_once()
