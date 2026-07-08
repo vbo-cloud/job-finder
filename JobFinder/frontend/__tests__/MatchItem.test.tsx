@@ -233,10 +233,39 @@ describe("MatchItem", () => {
       // synthese shows twice: compact teaser line + expanded review panel
       expect(screen.getAllByText(/Profil solide sur les compétences cœur/)).toHaveLength(2);
       expect(screen.getByText("Expérience solide en Python")).toBeInTheDocument();
-      // constat and suggestion_concrete render as a single list item
-      expect(
-        screen.getByText("Certifications cloud absentes — Passer la certification AZ-104.")
-      ).toBeInTheDocument();
+      // constat renders as the main line, suggestion_concrete as a secondary line below it
+      expect(screen.getByText("Certifications cloud absentes")).toBeInTheDocument();
+      expect(screen.getByText("Passer la certification AZ-104.")).toBeInTheDocument();
+    });
+
+    it("renders the enriched fields when done", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, {}, makeAnalysis()),
+        })} />
+      );
+      expect(screen.getByText("À tenter")).toBeInTheDocument();
+      expect(screen.getByText("Développement backend Python.")).toBeInTheDocument();
+      expect(screen.getByText("Poste aligné avec votre recherche cloud.")).toBeInTheDocument();
+      expect(screen.getByText("4 ans d'expérience Python.")).toBeInTheDocument();
+      expect(screen.getByText("Forte couverture des compétences demandées.")).toBeInTheDocument();
+      expect(screen.getByText("Comment gérez-vous les migrations ?")).toBeInTheDocument();
+      // company_summary is null in the fixture → its section is not rendered
+      expect(screen.queryByText("Entreprise")).not.toBeInTheDocument();
+    });
+
+    it("renders only the constat when suggestion_concrete is null (legacy rows)", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, {}, makeAnalysis({
+            points_amelioration: [{ constat: "Certifications cloud absentes", suggestion_concrete: null }],
+          })),
+        })} />
+      );
+      expect(screen.getByText("Certifications cloud absentes")).toBeInTheDocument();
+      expect(screen.queryByText("→")).not.toBeInTheDocument();
     });
 
     it("shows a retry button mentioning the credit cost on error", () => {
