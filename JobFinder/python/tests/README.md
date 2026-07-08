@@ -40,5 +40,6 @@ pytest tests/test_cv_analysis.py -v
 
 - `POST /cv/upload` happy path: requires simultaneous mocking of `pdfplumber`, the embedding model (`shared/embedder`), Azure Blob Storage upload, and Service Bus `send_message`. Covered by manual integration tests.
 - `_enqueue_top_n_analyses` (`agents/matching/main.py`): uses PostgreSQL-specific SQL (`text()` with `ROW_NUMBER() OVER`) — incompatible with SQLite, same exclusion as `_get_all_matches`. Validated manually (see the verification steps in the implementing PR).
+- `_get_all_matches` experience penalty (`agents/matching/main.py`): the progressive experience-gap penalty lives in the same PostgreSQL-specific query (CTEs, `GREATEST`/`LEAST`/`NULLIF`) — covered by the existing `_get_all_matches` exclusion. Validated manually against a throwaway Postgres 16 + pgvector with offers of known `experience_min_years` (see the implementing PR).
 - `GET /cv/{id}/thumbnail` and `GET /cv/{id}/pdf` happy paths: require mocking the blob download client. The 404 paths are covered.
 - `DELETE /cv/{id}` happy path: requires mocking blob delete + multi-step DB session. The 404 path is covered.
