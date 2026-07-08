@@ -4036,3 +4036,35 @@ La bibliothèque utilisait une grille figée (`grid-cols-5`, cartes compactes), 
 - **En-tête en `absolute` plutôt qu'en flux** : découplé de la grille, qui restait auparavant dans le même `flex-col` — chaque ajustement de l'espacement de l'un déplaçait l'autre alors que les deux ont été itérés indépendamment.
 - **Seuil de révélation du bouton poubelle dérivé de la géométrie réelle** plutôt qu'ajusté à l'oeil : mesuré directement via les DOM rects de la carte réelle en conditions réelles, après plusieurs itérations à l'aveugle infructueuses.
 - **`z-index` différé uniquement à l'armement, jamais à la fermeture** : dissymétrie volontaire — passer au-dessus de la carte doit attendre que le bouton l'ait quittée (sinon chevauchement visible), mais repasser en dessous doit rester immédiat pour que le bouton se cache correctement derrière elle en se rétractant.
+
+---
+
+## PR #161 — feat(webapp): redéclencher le matching quand les champs d'intention du profil changent
+
+**Date :** 2026-07-08
+**Branche :** `feature/profile-intent-rematch` → `dev`
+
+### Contexte
+
+Depuis la PR #158, le niveau d'expérience et les informations complémentaires du profil alimentent un `intent_embedding` qui pondère le score de matching. Mais modifier ces champs ne relançait aucun matching : les scores affichés restaient calculés avec l'ancienne intention jusqu'au prochain run planifié (fetch d'offres quotidien) ou au prochain upload de CV. L'utilisateur qui affinait sa description ne voyait aucun effet immédiat sur ses correspondances.
+
+Le déclencheur existait déjà côté pipeline : l'agent `cv_analysis` envoie un message `offer-ready` une fois les codes ROME extraits, et l'agent matching consomme cette queue pour re-scorer toutes les paires CV×offre. Il suffisait de brancher `PUT /profile` sur le même mécanisme.
+
+### Ce qui a été fait
+
+**Backend (`agents/webapp/routers/profile.py`) :**
+- `put_profile` détecte un changement réel d'intention : les valeurs résolues d'`experience_level` et `candidate_description` (champ présent dans la requête, sinon valeur de la ligne existante — même résolution que le recalcul d'embedding) sont comparées aux valeurs stockées. La ligne existante étant déjà chargée pour recalculer l'`intent_embedding`, la détection ne coûte aucune requête supplémentaire.
+- Si au moins une des deux valeurs diffère, un message `offer-ready` est envoyé **après le commit** — le matching doit voir le nouvel `intent_embedding` en base quand il s'exécute. Payload au même schéma que le trigger `cv_analysis` (`run_date`, `rome_codes: []`, compteurs à 0) avec `trigger: "profile_update"` ; l'agent matching ne lit que `run_date`, aucun changement de son côté.
+- Envoi extrait dans un helper `_dispatch_offer_ready` (fire-and-forget) : une `ServiceBusError` est loguée (`profile_put_offer_ready_failed`) mais ne fait jamais échouer la requête — le profil est déjà committé et le prochain run planifié rattrapera le nouvel embedding. Même pattern que le trigger d'analyse dans `cv.py:upload_cv`.
+- Un PUT sans changement réel (mêmes valeurs renvoyées) ou ne touchant que `commune_codes` ne redéclenche rien.
+
+**Tests (`test_webapp_profile.py`) :**
+- 4 nouveaux tests : dispatch sur changement d'intention (queue, `trigger`, `rome_codes` vérifiés), pas de dispatch si valeurs inchangées, pas de dispatch sur `commune_codes` seul, `ServiceBusError` au dispatch → 200 quand même.
+- Fixture autouse patchant `routers.profile.send_message` — les tests existants de recalcul d'embedding déclenchent désormais le dispatch et n'auraient jamais dû atteindre Azure.
+
+### Décisions techniques
+
+- **Comparaison des valeurs de champs plutôt que des embeddings** : détecter le changement sur `experience_level`/`candidate_description` résolus est équivalent à comparer les `intent_embedding` (l'embedding est une fonction déterministe du texte construit) et évite de comparer des vecteurs de 1536 flottants.
+- **Envoi après commit, jamais avant** : si le message partait avant le commit et que celui-ci échouait, le matching re-scorerait avec l'ancien embedding — ordre identique à celui déjà établi dans `upload_cv`.
+- **Fire-and-forget plutôt qu'échec de la requête** : la mise à jour du profil est l'opération principale et a réussi ; le re-matching est une optimisation de fraîcheur dont l'échec est rattrapé par le run planifié suivant. Faire échouer le PUT aurait laissé l'utilisateur croire que son profil n'était pas sauvegardé.
+- **Pas de worktree `dev` disponible** (occupé par le clone principal `job-finder`) : branche créée directement depuis `origin/dev` — résultat identique au workflow standard fetch + checkout + ff-only.
