@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import structlog
 from azure.servicebus.exceptions import ServiceBusError
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -14,12 +14,13 @@ from sqlalchemy.orm import Session
 from shared.bus import send_message
 from shared.embedder import embed
 from shared.models import CV, UserProfile
-from auth import get_current_user
+from auth import get_current_admin_user, get_current_user, is_admin
 from dependencies import get_db
 from routers.cv import _delete_cv
-from schemas import ProfileOut, ProfileUpdate
+from schemas import CreditsRefillOut, ProfileOut, ProfileUpdate
 
 OFFER_READY_QUEUE = "offer-ready"
+ADMIN_CREDITS_REFILL_AMOUNT = 10
 _INTENT_FIELDS = {"experience_level", "candidate_description"}
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -110,7 +111,9 @@ def get_profile(
             detail="Profile not found",
         )
 
-    return ProfileOut.model_validate(profile)
+    return ProfileOut.model_validate(profile).model_copy(
+        update={"is_admin": is_admin(user_id)}
+    )
 
 
 @router.put("", response_model=ProfileOut)
@@ -234,7 +237,62 @@ def put_profile(
         _dispatch_offer_ready(user_id, now.date().isoformat())
 
     logger.info("profile_put_completed", user_id=user_id)
-    return ProfileOut.model_validate(profile)
+    return ProfileOut.model_validate(profile).model_copy(
+        update={"is_admin": is_admin(user_id)}
+    )
+
+
+@router.post("/credits/refill", response_model=CreditsRefillOut)
+def refill_credits(
+    user_id: str = Depends(get_current_admin_user),
+    session: Session = Depends(get_db),
+) -> CreditsRefillOut:
+    """Add ADMIN_CREDITS_REFILL_AMOUNT analysis credits to the admin's own profile.
+
+    Admin-only escape hatch while there is no purchase flow — the welcome
+    credits (ADR-018) are otherwise non-renewable. The increment happens in a
+    single atomic UPDATE, mirroring the atomic decrement in
+    request_match_analysis.
+
+    Args:
+        user_id: Authenticated admin user ID (403 for non-admins via dependency).
+        session: Active database session.
+
+    Returns:
+        CreditsRefillOut with the balance after the refill.
+
+    Raises:
+        HTTPException 404: If no profile exists for this user.
+    """
+    logger.info("credits_refill_started", user_id=user_id)
+
+    try:
+        new_balance = session.execute(
+            update(UserProfile)
+            .where(UserProfile.user_id == user_id)
+            .values(
+                analysis_credits_remaining=UserProfile.analysis_credits_remaining
+                + ADMIN_CREDITS_REFILL_AMOUNT
+            )
+            .returning(UserProfile.analysis_credits_remaining)
+        ).scalar_one_or_none()
+
+        if new_balance is None:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found",
+            )
+
+        session.commit()
+    except SQLAlchemyError:
+        # Base class is intentional — any DB error (connection lost, timeout)
+        # should abort the refill and return 500.
+        logger.error("credits_refill_failed", user_id=user_id, exc_info=True)
+        raise
+
+    logger.info("credits_refill_completed", user_id=user_id, new_balance=new_balance)
+    return CreditsRefillOut(analysis_credits_remaining=new_balance)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)

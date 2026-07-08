@@ -24,6 +24,15 @@ ENTRA_EXTERNAL_CLIENT_ID = os.environ.get("ENTRA_EXTERNAL_CLIENT_ID")
 if not ENTRA_EXTERNAL_CLIENT_ID:
     raise ValueError("ENTRA_EXTERNAL_CLIENT_ID environment variable is not set")
 
+# Comma-separated Entra user IDs (JWT sub claims) granted in-app admin features
+# (e.g. the credits refill button). Deliberately optional with an empty default —
+# an unset variable means "no admins", never a broken deployment.
+ADMIN_USER_IDS = frozenset(
+    uid.strip()
+    for uid in os.environ.get("ADMIN_USER_IDS", "").split(",")
+    if uid.strip()
+)
+
 JWKS_URL = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/discovery/v2.0/keys"
 # Entra External ID issues tokens with the tenant GUID as the subdomain regardless
 # of the custom domain used during authentication. The iss claim takes the form
@@ -163,4 +172,37 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    return user_id
+
+
+def is_admin(user_id: str) -> bool:
+    """Return whether this user ID is granted in-app admin features.
+
+    Args:
+        user_id: Authenticated user ID (JWT sub claim).
+
+    Returns:
+        True if the user ID appears in the ADMIN_USER_IDS environment variable.
+    """
+    return user_id in ADMIN_USER_IDS
+
+
+def get_current_admin_user(user_id: str = Depends(get_current_user)) -> str:
+    """FastAPI dependency — like get_current_user, but restricted to admins.
+
+    Args:
+        user_id: Authenticated user ID from the JWT sub claim.
+
+    Returns:
+        The authenticated admin's user ID.
+
+    Raises:
+        HTTPException: 403 if the authenticated user is not an admin.
+    """
+    if not is_admin(user_id):
+        logger.info("auth_admin_denied", user_id=user_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
     return user_id
