@@ -4244,3 +4244,30 @@ La PR #164 a enrichi `MatchAnalysisOut` de 7 champs (`verdict`, `company_summary
 - **Pas de divulgation progressive** : avec des paragraphes courts et des sections conditionnelles, la carte reste lisible tout affiché — le repli au-delà des points forts/amélioration (option laissée ouverte par le brief) reste envisageable si le contenu réel s'avère plus dense.
 - **Extension d'`AnalysisPointsList` par union de type plutôt qu'un nouveau composant** : `typeof item === "string"` normalise en interne, le rendu deux niveaux réutilise la puce « suggestion » existante, et l'appelant `CvAnalysisCard` reste inchangé.
 - **Aucune section placeholder pour les champs `null`** : le prompt agent (PR #164) impose `company_summary: null` quand l'offre ne dit rien de l'entreprise — afficher un texte de remplacement suggérerait un manque là où l'IA a correctement refusé d'inventer.
+
+
+---
+
+## PR #167 — fix(match-analysis): ancrer suggestion_concrete dans le profil avec un exemple entrée→sortie
+
+**Date :** 2026-07-08
+**Branche :** `feature/match-analysis-rule5-personnalisation` → `dev`
+
+### Contexte
+
+Troisième itération sur la règle 5 (`suggestion_concrete` personnalisée) de `MATCH_ANALYSIS_SYSTEM_PROMPT`. La comparaison de deux reviews réelles avant/après le fix few-shot de la PR #166 a montré une correction de surface seulement : les formulations exactement bannies par l'exemple ❌ (« stage ou alternance », « cours ou certifications ») ont disparu, mais les nouvelles suggestions (« suivre une formation », « participer à des projets open source ») restent tout aussi génériques et n'exploitent toujours pas l'intention du candidat. Diagnostic (Claude Cowork) : le modèle a évité les mots interdits sans intégrer le principe — l'exemple ✅ ne montrait qu'une sortie plausible, pas le lien entrée→sortie, donc le modèle n'avait qu'un style à imiter, pas un mécanisme à reproduire. Cas limite découvert au passage : la règle ne disait rien sur quoi ancrer la suggestion quand l'intention est vide (fallback « Aucune intention renseignée par l'utilisateur. »).
+
+### Ce qui a été fait
+
+Réécriture du seul bloc « SUGGESTIONS PERSONNALISÉES » (règles 1, 2, 3, 4, 6 et format JSON intacts) :
+
+- **Mécanisme explicite et obligatoire** : avant d'écrire `suggestion_concrete`, identifier un élément concret et vérifiable dans l'intention du candidat (projet nommé, certification, technologie mentionnée) ; la suggestion doit citer explicitement cet élément.
+- **Chaîne de repli quand l'intention est vide** : ancrer sur le texte du CV en priorité, puis sur un point précis de l'offre (description ou compétences demandées) en dernier recours — jamais un conseil de carrière générique par défaut.
+- **Exemple entrée→sortie complet** à la place de l'exemple de sortie seule : l'intention en entrée est montrée (« Reconversion Unity vers Cloud/Azure, certification AZ-104 obtenue, projet Terraform personnel en cours »), puis le ❌ (générique, ignore l'intention) et le ✅ (cite l'élément trouvé dans l'intention) — le modèle voit le lien de cause à effet.
+
+**Vérification :** `pytest tests/test_match_analysis.py -v` — 15 passed sans modification (aucun changement de schéma JSON). Le test manuel reste à faire : rejouer le cas profil Cloud/Azure/AZ-104 vs offre Java/JEE/TensorFlow et vérifier que `suggestion_concrete` référence un élément identifiable du profil.
+
+### Décisions techniques
+
+- **Le prompt référence les libellés que le modèle voit réellement** (« Intention du candidat », le texte exact du fallback, « CV », « description ou compétences demandées ») plutôt que les noms de variables internes (`candidate_description`, `cv_text`) — le modèle ne voit jamais ces noms dans le message utilisateur construit par `_analyze_match`.
+- **Garde-fou d'itération acté** : si la sortie reste générique après ce changement, ne pas re-itérer sur le few-shot une troisième fois — vérifier d'abord que `candidate_description` est effectivement rempli en base pour le profil testé (le problème serait alors une donnée d'entrée manquante, pas un problème de prompt).
