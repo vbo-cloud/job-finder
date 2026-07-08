@@ -39,7 +39,7 @@ if not AZURE_OPENAI_ENDPOINT:
 
 # Default matches the fixed deployment name used across all environments.
 # A missing env var is safe — the deployment name is not secret and does not vary.
-AZURE_OPENAI_CHAT_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-4o-mini")
 MAX_ATTEMPTS = 2
 
 ROME_CODE_PATTERN = re.compile(r"^[A-Z]\d{4}$")
@@ -150,7 +150,7 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
         try:
             logger.info("rome_extraction_attempt", attempt=attempt, chars=len(raw_text))
             response = _openai_client.chat.completions.create(
-                model=AZURE_OPENAI_CHAT_DEPLOYMENT,
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
                 messages=[
                     {
@@ -335,7 +335,7 @@ def _analyze_cv_quality(
         try:
             logger.info("cv_quality_analysis_attempt", attempt=attempt, chars=len(raw_text))
             response = _openai_client.chat.completions.create(
-                model=AZURE_OPENAI_CHAT_DEPLOYMENT,
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": CV_QUALITY_SYSTEM_PROMPT},
