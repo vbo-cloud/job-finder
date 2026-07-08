@@ -1,12 +1,19 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ChevronDown } from "lucide-react";
 import apiClient from "@/lib/api/client";
 import type { CVData, CVMatchesOut } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import CorrespondancesPanel from "./CorrespondancesPanel";
 import CvAnalysisCard from "./CvAnalysisCard";
+
+// Bornes du redimensionnement manuel de la zone d'analyse (drag sur le bandeau).
+const ANALYSIS_MIN_HEIGHT_PX = 140;
+const ANALYSIS_MAX_HEIGHT_RATIO = 0.8;
+// En deçà de ce déplacement, un pointer down/up reste un clic (replier) ;
+// au-delà, c'est un drag de redimensionnement et le clic qui suit est ignoré.
+const DRAG_THRESHOLD_PX = 4;
 
 interface Props {
   cvs: CVData[];
@@ -34,6 +41,60 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
     const [loadingMatches, setLoadingMatches] = useState(true);
     const [matchesError, setMatchesError]     = useState<string | null>(null);
     const [analysisOpen, setAnalysisOpen]     = useState(true);
+    // Hauteur choisie au drag — null tant que l'utilisateur n'a pas redimensionné
+    // (la zone suit alors le cap CSS par défaut). Conservée entre replis/dépliages.
+    const [analysisHeight, setAnalysisHeight] = useState<number | null>(null);
+    const analysisBoxRef = useRef<HTMLDivElement>(null);
+    const dragRef = useRef<{ startY: number; startHeight: number; maxHeight: number; moved: boolean } | null>(null);
+    // Le navigateur émet un click après le pointerup — mémorise qu'un drag vient
+    // d'avoir lieu pour que ce click-là ne replie pas la zone.
+    const wasDragRef = useRef(false);
+
+    const onBannerPointerDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (!analysisOpen) return; // repliée : simple clic pour déplier, pas de resize
+      const box = analysisBoxRef.current;
+      const column = box?.parentElement;
+      if (!box || !column) return;
+      dragRef.current = {
+        startY: e.clientY,
+        startHeight: box.getBoundingClientRect().height,
+        maxHeight: column.clientHeight * ANALYSIS_MAX_HEIGHT_RATIO,
+        moved: false,
+      };
+      // Optionnel : absent de jsdom, et garantit en navigateur que le drag
+      // continue même si le pointeur sort du bandeau.
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    };
+
+    const onBannerPointerMove = (e: ReactPointerEvent<HTMLButtonElement>) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const dy = drag.startY - e.clientY; // tirer vers le haut = agrandir
+      if (!drag.moved && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+      drag.moved = true;
+      setAnalysisHeight(
+        Math.min(drag.maxHeight, Math.max(ANALYSIS_MIN_HEIGHT_PX, drag.startHeight + dy)),
+      );
+    };
+
+    const onBannerPointerUp = () => {
+      wasDragRef.current = dragRef.current?.moved ?? false;
+      dragRef.current = null;
+    };
+
+    const onBannerPointerCancel = () => {
+      // Drag interrompu (ex. scroll tactile) — aucun click ne suivra, ne pas
+      // armer wasDragRef sous peine d'avaler le prochain vrai clic.
+      dragRef.current = null;
+    };
+
+    const onBannerClick = () => {
+      if (wasDragRef.current) {
+        wasDragRef.current = false;
+        return;
+      }
+      setAnalysisOpen((o) => !o);
+    };
 
     useEffect(() => {
       setMatches(null);
@@ -134,26 +195,46 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               )}
             </div>
 
-            {/* Analyse du CV — repliable, sous la vignette. shrink-0 + max-h borné en
-                lecture ouverte ; la vignette au-dessus (flex-1 min-h-0) se rétrécit
-                automatiquement pour lui laisser la place, sans mesure manuelle.
-                46% ≈ la moitié de la colonne : plafonne l'analyse (scroll interne
-                au-delà) pour que la vignette reste toujours visible. À réévaluer si
-                la colonne gauche change de hauteur ou gagne un nouvel enfant. */}
-            <div className={cn("w-full shrink-0 flex flex-col min-h-0", analysisOpen && "max-h-[46%]")}>
+            {/* Analyse du CV — zone encadrée repliable, sous la vignette. Le bandeau
+                (bouton) porte la flèche centrée en haut + le titre ; le cadre unique
+                est porté ici, CvAnalysisCard n'a plus le sien. Un clic sur le bandeau
+                replie/déplie ; maintenir et glisser verticalement redimensionne la
+                zone (bornes ANALYSIS_MIN_HEIGHT_PX / ANALYSIS_MAX_HEIGHT_RATIO).
+                Tant qu'aucun resize manuel n'a eu lieu, la zone ouvre à sa hauteur
+                maximale — h-[80%], la même borne que ANALYSIS_MAX_HEIGHT_RATIO — et
+                la vignette (flex-1 min-h-0) prend le reste ; après un resize, la
+                hauteur inline choisie s'applique, avec max-h-[80%] en garde-fou si
+                la fenêtre rétrécit. */}
+            <div
+              ref={analysisBoxRef}
+              style={analysisOpen && analysisHeight !== null ? { height: analysisHeight } : undefined}
+              className={cn(
+                "w-full shrink-0 flex flex-col min-h-0 rounded-xl border border-faint bg-chip overflow-hidden",
+                analysisOpen && (analysisHeight === null ? "h-[80%]" : "max-h-[80%]"),
+              )}
+            >
               <button
-                onClick={() => setAnalysisOpen((o) => !o)}
+                onClick={onBannerClick}
+                onPointerDown={onBannerPointerDown}
+                onPointerMove={onBannerPointerMove}
+                onPointerUp={onBannerPointerUp}
+                onPointerCancel={onBannerPointerCancel}
                 aria-expanded={analysisOpen}
                 aria-controls="cv-analysis-panel"
-                className="flex-none flex items-center justify-between gap-2 w-full bg-transparent border-0 py-2 cursor-pointer text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
+                className={cn(
+                  "flex-none flex flex-col items-center gap-1 w-full bg-transparent border-0 py-2 select-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default",
+                  analysisOpen ? "cursor-row-resize touch-none border-b border-faint" : "cursor-pointer",
+                )}
               >
+                {/* Flèche vers le haut quand repliée (déplier), vers le bas quand
+                    ouverte (refermer) */}
+                <ChevronDown
+                  size={14}
+                  className={cn("text-muted transition-transform", !analysisOpen && "rotate-180")}
+                />
                 <span className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted">
                   Analyse de votre CV
                 </span>
-                <ChevronDown
-                  size={14}
-                  className={cn("text-muted transition-transform shrink-0", analysisOpen && "rotate-180")}
-                />
               </button>
               {analysisOpen && (
                 <div id="cv-analysis-panel" className="flex-1 min-h-0 overflow-y-auto">
