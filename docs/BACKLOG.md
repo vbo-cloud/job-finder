@@ -750,3 +750,33 @@ notification n'existe pas.
 50 messages accumulés en dead-letter sur `offer-ready` (constat du 08/07, antérieurs
 aux fixes de la PR #163). Sans impact — le matching consomme normalement la queue —
 mais à purger pour que le compteur DLQ redevienne un signal utile d'alerte.
+
+---
+
+## Bonus de rareté relative au corpus (feature/matching-corpus-relative-skills-weighting, PR #180) — suites identifiées
+
+### [recommandé] Valider le seuil 0.75 sur le corpus réel après le premier run de fetch
+Le seuil `TERM_STOPWORD_THRESHOLD` (0.75) a été validé sur corpus synthétique uniquement.
+Après le premier run d'offer_fetching post-déploiement, vérifier qu'aucun terme réellement
+discriminant n'est exclu sur le corpus de prod :
+`SELECT term, doc_frequency, total_offers FROM term_stats WHERE term IN ('terraform','ci/cd');`
+(ratio attendu bien en dessous de 0.75). Si un terme discriminant dépasse le seuil,
+réévaluer la valeur plutôt que de l'accepter telle quelle.
+
+### [recommandé] Valider le classement sur de vraies offres d'un secteur non-tech
+Le corpus réel est probablement mono-sectoriel (repli `FALLBACK_ROME_CODES`, tous
+informatique). Dès qu'un profil non-tech existe en base (ex. infirmier, code ROME
+santé type J1506), déclencher offer_fetching pour ce code et vérifier que le bonus
+produit un classement sensé sur de vraies offres — la généralisation reste une
+hypothèse validée en synthétique tant que ce test n'a pas eu lieu.
+
+### [optional] Colonne `tsvector` précalculée + index GIN si le corpus grossit
+Les `to_tsvector('french', ...)` sont recalculés à chaque requête de matching
+(~4600 offres, 2 runs/jour : acceptable). Si le corpus gagne un ordre de grandeur
+ou si le matching devient plus fréquent, stocker une colonne `tsvector` générée
+sur `offers`/`cvs` avec index GIN.
+
+### [optional] Extraire `total_offers` dans une table meta plutôt que répété par ligne
+Chaque ligne de `term_stats` porte le même `total_offers` pour un cycle donné —
+redondant mais sans conséquence à ce volume. Une table snapshot séparée (ou une
+ligne meta unique) serait plus propre si la table devait grossir ou être historisée.
