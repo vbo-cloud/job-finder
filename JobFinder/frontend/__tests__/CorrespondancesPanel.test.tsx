@@ -201,26 +201,26 @@ describe("CorrespondancesPanel — stale local cache reconciliation", () => {
 });
 
 describe("CorrespondancesPanel — pagination", () => {
-  it("shows only the first 20 offers and a pagination bar when more exist", () => {
+  it("shows only the first 20 offers and a pagination bar above and below the list when more exist", () => {
     renderPanel(makeMatches(25));
 
     expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Offre 20/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Pagination des offres" })).toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Pagination des offres" })).toHaveLength(2);
   });
 
   it("shows the remaining offers after navigating to page 2", () => {
     renderPanel(makeMatches(25));
 
-    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
 
     expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Offre 25/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Offre 01/ })).not.toBeInTheDocument();
   });
 
-  it("hides the pagination bar when 20 offers or fewer", () => {
+  it("hides the pagination bars when 20 offers or fewer", () => {
     renderPanel(makeMatches(20));
 
     expect(screen.queryByRole("navigation", { name: "Pagination des offres" })).not.toBeInTheDocument();
@@ -229,7 +229,7 @@ describe("CorrespondancesPanel — pagination", () => {
   it("returns to page 1 when the visible set is redefined (sort change)", () => {
     renderPanel(makeMatches(25));
 
-    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
     expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
 
     // Same 25 offers, same A→Z order as by score — only the page should change
@@ -274,18 +274,40 @@ describe("CorrespondancesPanel — onglet Sauvegardées", () => {
   it("shows an offer saved on page 2 regardless of the Offres tab pagination", () => {
     renderPanel(makeMatches(25));
 
-    // Navigate to page 2 and save Offre 21 (only offer there among 21-25 we pick the first)
-    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+    // Navigate to page 2 and save Offre 21 (first offer of the page)
+    fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
     expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Sauvegarder" })[0]);
 
     // Back to page 1 — the saved offer is no longer in the paginated Offres list
-    fireEvent.click(screen.getByRole("button", { name: "Précédent" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Précédent" })[0]);
     expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
 
     expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+  });
+
+  it("paginates the Sauvegardées tab independently and keeps the total in the header", () => {
+    renderPanel(makeMatches(25));
+
+    // Save the 20 offers of page 1, then the 5 of page 2
+    screen.getAllByRole("button", { name: "Sauvegarder" }).forEach((b) => fireEvent.click(b));
+    fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
+    screen.getAllByRole("button", { name: "Sauvegarder" }).forEach((b) => fireEvent.click(b));
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    // Header shows the total saved count, not the current page size
+    expect(screen.getByText("25 offres sauvegardées")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("navigation", { name: "Pagination des offres" })).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
+
+    expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 01/ })).not.toBeInTheDocument();
   });
 
   it("keeps a saved offer visible when its Nouvelles/Vues bucket is filtered out on the Offres tab", () => {

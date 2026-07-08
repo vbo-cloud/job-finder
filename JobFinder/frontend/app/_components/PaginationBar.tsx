@@ -6,6 +6,8 @@ interface Props {
   page: number;
   totalPages: number;
   onPageChange: (page: number) => void;
+  /** Position-dependent spacing (e.g. mb-4 above the list, mt-5 below) */
+  className?: string;
 }
 
 /** Visible page numbers: first/last always shown, a window around the current
@@ -30,11 +32,11 @@ function visiblePages(page: number, totalPages: number): (number | null)[] {
 const navButtonClass =
   "border border-soft rounded-[9px] px-[11px] py-1.5 text-[12.5px] text-body bg-page cursor-pointer transition-colors hover:border-default disabled:opacity-40 disabled:cursor-default disabled:hover:border-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default";
 
-export default function PaginationBar({ page, totalPages, onPageChange }: Props) {
+export default function PaginationBar({ page, totalPages, onPageChange, className }: Props) {
   if (totalPages <= 1) return null;
 
   return (
-    <nav aria-label="Pagination des offres" className="flex items-center justify-center flex-wrap gap-1.5 mt-5">
+    <nav aria-label="Pagination des offres" className={cn("flex items-center justify-center flex-wrap gap-1.5", className)}>
       <button onClick={() => onPageChange(page - 1)} disabled={page === 1} className={navButtonClass}>
         Précédent
       </button>
