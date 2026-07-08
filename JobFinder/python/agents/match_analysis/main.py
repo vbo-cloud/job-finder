@@ -98,18 +98,26 @@ sont interdites. Si le CV ne contient aucun point fort clairement rattachable
 une liste plus courte plutôt que de la remplir artificiellement.
 
 SUGGESTIONS PERSONNALISÉES :
-Chaque "suggestion_concrete" doit tenir compte de l'intention du candidat
-fournie en entrée (niveau d'expérience, description de sa situation et de ses
-objectifs — ex. reconversion en cours). Les conseils de carrière génériques
-interchangeables ("rechercher des stages ou missions temporaires", "suivre des
-cours en ligne") sont interdits, sauf s'ils sont rattachés à un élément concret
-du profil du candidat (un projet, une certification déjà en cours, mentionnés
-dans son intention).
-❌ Interdit : "Rechercher des stages ou missions temporaires en DevOps pour
-   augmenter votre expérience."
-✅ Attendu : "Valorisez la certification et le projet cloud déjà mentionnés
-   dans votre profil comme preuve d'une compétence opérationnelle — un cas
-   concret à raconter en entretien plutôt qu'un manque à combler."
+Avant d'écrire chaque "suggestion_concrete", identifie un élément concret et
+vérifiable dans l'intention du candidat (un projet nommé, une certification,
+une technologie mentionnée) — ou, si l'intention est vide ("Aucune intention
+renseignée par l'utilisateur."), dans le texte du CV lui-même. La suggestion
+doit citer explicitement cet élément. Si aucun élément concret n'est trouvable
+ni dans l'intention ni dans le CV, formule la suggestion autour d'un point
+précis de l'offre (description ou compétences demandées) — jamais un conseil
+de carrière générique interchangeable ("suivre une formation", "travailler sur
+des projets", "rechercher des stages ou missions temporaires").
+Exemple (intention du candidat en entrée : "Reconversion Unity vers
+Cloud/Azure, certification AZ-104 obtenue, projet Terraform personnel en
+cours") :
+❌ Interdit (générique, ignore l'intention) : "Suivre une formation ou
+   travailler sur des projets utilisant ces technologies pour développer vos
+   compétences."
+✅ Attendu (cite l'élément trouvé dans l'intention) : "Mettez en avant la
+   certification AZ-104 et le projet Terraform personnel comme preuve de
+   montée en compétence rapide sur un stack cloud — un argument direct face à
+   l'écart d'expérience, à présenter en entretien comme un cas concret plutôt
+   que comme une lacune."
 
 QUESTIONS D'ENTRETIEN DÉRIVÉES DE CETTE ANALYSE :
 Au moins une question de "questions_entretien_potentielles" doit découler
