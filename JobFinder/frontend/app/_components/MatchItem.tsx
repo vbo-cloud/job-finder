@@ -97,7 +97,7 @@ export default function MatchItem({
         aria-label={isSaved ? "Retirer des favoris" : "Sauvegarder"}
         className={cn(
           "absolute top-3 right-3.5 z-10 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
-          isSaved ? "border-match bg-match-skill text-match-skill" : "border-faint bg-page text-muted hover:border-subtle",
+          isSaved ? "border-accent bg-accent-muted text-accent" : "border-faint bg-page text-muted hover:border-subtle",
         )}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill={isSaved ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
