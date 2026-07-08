@@ -4510,3 +4510,29 @@ Implémentation du prompt Claude Cowork `prompt-analysis-determinism-and-depth.m
 - **`_extract_rome_codes` hors périmètre** : sa sortie est déjà validée contre le référentiel ROME, le non-déterminisme y est sans conséquence.
 - **Le seed OpenAI n'est pas une garantie absolue** de déterminisme, mais combiné à `temperature=0` la variance devient marginale.
 - **Vérifications manuelles restantes** : relancer 2× l'analyse d'un même CV (stabilité du score) ; confirmer en base que `candidate_description` est vide pour l'utilisateur de test — si une mention télétravail y persiste malgré la suppression côté frontend, c'est un bug `PUT /profile` distinct à signaler séparément.
+
+---
+
+## PR #178 — feat(cv-analysis): checklist de vérification obligatoire + few-shot chronologie dans CV_QUALITY_SYSTEM_PROMPT
+
+**Date :** 2026-07-08
+**Branche :** `feature/cv-analysis-expertise-checklist` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-cv-analysis-expertise-percue.md`. Deux reviews réelles générées après le déploiement de la règle déclarative d'exhaustivité (PR #176) produisaient toujours exactement 3 points forts / 3 points faibles / 3 suggestions, et aucune n'a relevé les deux inversions de dates manifestes du CV testé (Akanea 09/2025-05/2025, LS Group 09/2024-09/2022) — exactement le type d'erreur factuelle qu'une lecture systématique doit attraper. Même leçon que sur `match_analysis` : une règle déclarative seule ne fait pas dévier gpt-4o-mini de sa taille de liste conventionnelle.
+
+### Ce qui a été fait
+
+Trois ajouts dans `CV_QUALITY_SYSTEM_PROMPT` (`agents/cv_analysis/main.py`), aucun changement de schéma ni de code applicatif :
+
+- **Checklist obligatoire de 4 angles** à vérifier explicitement avant de rédiger `points_faibles`/`suggestions` — cohérence chronologique (dates inversées, trous, chevauchements), impact/formulation (quantification, verbes faibles, répétitions), structure/lisibilité, cohérence interne (compétence jamais illustrée, intitulé incohérent). Placée juste avant la règle d'exhaustivité existante, conservée telle quelle. Un angle sans problème réel ne doit pas être inventé, mais la vérification n'est jamais optionnelle.
+- **Exemple few-shot sur la cohérence chronologique** (❌ généralités de style / ✅ dates inversées citées avec leur impact ATS) — la catégorie la plus objectivement vérifiable, pour ancrer concrètement ce que « vérifier » veut dire, comme pour `score_explanation` sur `match_analysis`.
+- **Règle « expertise perceptible »** : voix de recruteur technique senior du domaine visé par le candidat, citation/paraphrase de la formulation exacte du CV critiquée plutôt qu'une critique abstraite, synthese donnant le sentiment d'une lecture méthodique sans formule d'ouverture générique.
+
+**Vérification :** pytest `test_cv_analysis.py` — 34 passed, aucun test modifié (le contenu du prompt système n'est pas testé unitairement, seul le comportement de `_analyze_cv_quality` sur un JSON donné l'est).
+
+### Décisions techniques
+
+- **Écart mineur vs le prompt Cowork** : la règle de ton référençait l'interdiction de la formule d'ouverture générique comme « déjà proscrit plus haut », mais rien dans le prompt système ne la proscrivait explicitement — la règle ajoutée porte elle-même cette proscription au lieu d'y renvoyer.
+- **Test manuel décisif en attente de déploiement** : relancer l'analyse sur le CV aux deux inversions de dates → `points_faibles` doit en relever au moins une ; vérifier que la taille des listes varie entre CVs de qualité différente. Si la review reste superficielle, le prompt a probablement atteint le plafond de gpt-4o-mini sur ce type de vérification multi-angles — tester `gpt-4o` via `AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT` (simple variable d'environnement), mais tout changement de modèle par défaut est une décision de coût à valider côté Cowork (ADR-018), pas à automatiser.
