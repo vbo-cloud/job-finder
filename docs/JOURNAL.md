@@ -4217,3 +4217,30 @@ Conservé tel quel : la règle absolue `company_summary` (désormais première p
 - **Correctif prompt uniquement, pas de changement de schéma ni de parsing** : les défauts sont des défauts de contenu, pas de forme — toucher `_parse_analysis_payload` aurait élargi le périmètre sans bénéfice.
 - **Le calcul du score reste hors périmètre** : la séparation gratuit (matching pgvector) / payant (analyse LLM) est un choix délibéré de l'ADR-018 — le correctif aligne le discours du modèle sur ce qu'il sait réellement du score au lieu de changer le score.
 - **Règles regroupées par blocs thématiques titrés** plutôt qu'une liste plate : chaque défaut observé correspond à un bloc nommé (score, redondance, ancrage, personnalisation, questions), ce qui rend le prompt auditable règle par règle lors des prochaines itérations qualité.
+
+
+---
+
+## PR #165 — feat(frontend): affichage complet de l'analyse de match enrichie
+
+**Date :** 2026-07-08
+**Branche :** `feature/match-analysis-panel-display` → `dev`
+
+### Contexte
+
+La PR #164 a enrichi `MatchAnalysisOut` de 7 champs (`verdict`, `company_summary`, `mission_summary`, `why_good_fit_for_user`, `why_good_candidate`, `score_explanation`, `questions_entretien_potentielles`), mais le frontend n'en faisait qu'une adaptation minimale : `MatchAnalysisPanel` n'affichait que `synthese`, `points_forts` et `points_amelioration` — ce dernier aplati en une seule ligne « constat — suggestion » (correctif posé pour ne pas planter, pas un rendu définitif). Ce chantier habille les champs manquants selon la hiérarchie d'information définie avec Claude Cowork, sans toucher au backend, aux types ni à `MatchItem.tsx`.
+
+### Ce qui a été fait
+
+**`MatchAnalysisPanel.tsx` :** rendu complet de l'analyse `done`, du plus glanceable au plus détaillé — `verdict` au-dessus du titre « Review de l'agent » (texte simple proéminent, `text-[15px] font-bold`), `synthese` inchangée (paragraphe encadré `bg-card`), nouvelles sections « Mission » et « Entreprise » (cette dernière conditionnelle : rien si `null`), bloc « Pourquoi ça matche » regroupant `why_good_fit_for_user` et `why_good_candidate` sous deux sous-titres courts « Pour vous » / « Pour eux », « Pourquoi ce score » en `text-muted` (justification, pas un point d'action), puis points forts / points d'amélioration, et « Questions d'entretien potentielles » avec une puce « ? » `text-accent` (différenciée des jugements ✓/•) juste avant « Compétences détectées ». Un helper local `SummarySection` et une constante `SECTION_TITLE_CLASS` factorisent les titres de section.
+
+**`AnalysisPointsList.tsx` :** les items acceptent désormais `(string | AnalysisPoint)[]` avec `AnalysisPoint = {text, suggestion?}`. Rendu à deux niveaux : le constat en ligne principale (puce du variant parent), la `suggestion_concrete` en ligne secondaire indentée réutilisant la puce « suggestion » (→, `text-accent`) définie depuis l'origine mais jamais utilisée. `suggestion` absente ou `null` (lignes legacy pré-migration 020) → pas de ligne secondaire. Compatibilité conservée avec `CvAnalysisCard.tsx`, qui passe toujours des `string[]` simples.
+
+**Tests (`MatchItem.test.tsx`) :** l'assertion de l'ancien aplatissement est remplacée par deux assertions séparées (constat / suggestion) ; deux tests ajoutés — rendu des champs enrichis (dont l'absence de la section « Entreprise » quand `company_summary` est `null`) et lignes legacy sans suggestion (aucune flèche →). Suite frontend : 89 passed, tsc et ESLint sans erreur.
+
+### Décisions techniques
+
+- **Verdict en texte simple, sans code couleur sémantique** : `verdict` est un TEXT libre, pas un enum — un mapping couleur fiable demanderait un champ structuré côté backend qu'on n'a pas encore.
+- **Pas de divulgation progressive** : avec des paragraphes courts et des sections conditionnelles, la carte reste lisible tout affiché — le repli au-delà des points forts/amélioration (option laissée ouverte par le brief) reste envisageable si le contenu réel s'avère plus dense.
+- **Extension d'`AnalysisPointsList` par union de type plutôt qu'un nouveau composant** : `typeof item === "string"` normalise en interne, le rendu deux niveaux réutilise la puce « suggestion » existante, et l'appelant `CvAnalysisCard` reste inchangé.
+- **Aucune section placeholder pour les champs `null`** : le prompt agent (PR #164) impose `company_summary: null` quand l'offre ne dit rien de l'entreprise — afficher un texte de remplacement suggérerait un manque là où l'IA a correctement refusé d'inventer.
