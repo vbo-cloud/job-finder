@@ -4356,21 +4356,21 @@ Découverte en configurant `ADMIN_USER_IDS` (PR #169) : le backend ne stocke que
 
 ---
 
-## PR #171 — refactor(webapp): factoriser default_profile_values pour la création paresseuse de UserProfile
+## PR #171 — refactor(webapp): factoriser default_profile_values + fix: GET /profile crée le profil au lieu de 404
 
 **Date :** 2026-07-08
 **Branche :** `feature/userprofile-defaults-refactor` → `dev` (empilée sur la PR #170)
 
 ### Contexte
 
-Implémentation du prompt Claude Cowork `docs/prompts/prompt-userprofile-defaults-refactor.md` : `upload_cv` et `put_profile` — les deux endpoints qui créent paresseusement la ligne `UserProfile` au premier write authentifié — dupliquaient les valeurs par défaut d'un profil neuf (`rome_codes`, crédits de bienvenue, `created_at`, et depuis la PR #170 les claims d'identité).
+Implémentation de deux prompts Claude Cowork enchaînés (`prompt-userprofile-defaults-refactor.md` puis `prompt-get-profile-creation-si-absent.md`, empilés sur la même branche comme prévu par le second) : `upload_cv` et `put_profile` — les deux endpoints qui créent paresseusement la ligne `UserProfile` au premier write authentifié — dupliquaient les valeurs par défaut d'un profil neuf. Et un bug UX : un nouvel utilisateur qui ouvre sa page profil avant tout upload de CV recevait un 404 au lieu de voir ses 30 crédits de bienvenue.
 
 ### Ce qui a été fait
 
-- Nouveau module `agents/webapp/profile_defaults.py` : `default_profile_values(identity)` retourne les colonnes de base (id, user_id, email, display_name, rome_codes, crédits, created_at).
-- Les deux call sites ne gardent que leurs champs propres : `commune_codes=[]` explicite dans `cv.py`, les champs du body PUT dans `profile.py`. Les sémantiques d'upsert distinctes (`on_conflict_do_nothing` vs `on_conflict_do_update`) et l'atomicité du PUT sont inchangées ; `routers/matches.py` hors périmètre.
+- **Refactor** : nouveau module `agents/webapp/profile_defaults.py` — `default_profile_values(identity)` retourne les colonnes de base (id, user_id, email, display_name, rome_codes, crédits, created_at). Les call sites ne gardent que leurs champs propres : `commune_codes=[]` explicite dans `cv.py`, les champs du body PUT dans `profile.py`. Sémantiques d'upsert distinctes et atomicité du PUT inchangées ; `routers/matches.py` hors périmètre.
+- **Fix** : `GET /profile` crée la ligne avec les défauts partagés quand elle n'existe pas (`on_conflict_do_nothing` rend la course entre deux premiers appels concurrents sûre) et ne renvoie plus jamais 404. Troisième point de création paresseuse — un one-liner grâce au helper. La création par GET capture aussi email/display_name (dépendance `get_current_identity`), et le flag `is_admin` (PR #169) est préservé dans la réponse.
 
-**Vérification :** pytest — 205 passed **sans modifier aucun test** (comportement observable inchangé) ; `analysis_credits_remaining=30` n'apparaît plus qu'une fois dans `agents/webapp/` ; aucun import circulaire (le module ne dépend que d'`auth`).
+**Vérification :** pytest — 206 passed ; le commit refactor n'a modifié **aucun test** (comportement observable inchangé), le commit fix remplace le test 404 par un test de création au premier GET + un test d'idempotence ; `analysis_credits_remaining=30` n'apparaît plus qu'une fois dans `agents/webapp/` ; aucun import circulaire (le module ne dépend que d'`auth`).
 
 ### Décisions techniques
 
