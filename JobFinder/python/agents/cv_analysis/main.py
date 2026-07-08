@@ -399,6 +399,34 @@ def _upsert_cv_analysis(cv_id: str, status: str, **fields) -> None:
         raise
 
 
+def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
+    """Run the CV quality analysis and persist its result — best-effort, never raises.
+
+    Shared by the normal upload flow (run right after ROME extraction succeeds)
+    and by a standalone retry (retry_quality_only message, see main()). A
+    failure is logged and written to cv_analyses as status="error"; it never
+    propagates to the caller, since this analysis is free and non-blocking
+    (see ADR-018 addendum).
+
+    Args:
+        cv_id: UUID string of the CV being analysed.
+        user_id: Owner of the CV, used to look up profile intent.
+        raw_text: Plain text content of the CV.
+    """
+    try:
+        _upsert_cv_analysis(cv_id, "processing")
+        experience_level, candidate_description = _get_profile_intent(user_id)
+        result = _analyze_cv_quality(raw_text, experience_level, candidate_description)
+        _upsert_cv_analysis(cv_id, "done", **result)
+        logger.info("cv_quality_analysis_completed", cv_id=cv_id)
+    except (OpenAIError, SQLAlchemyError, ValueError, KeyError, TypeError):
+        logger.error("cv_quality_analysis_failed", cv_id=cv_id, exc_info=True)
+        try:
+            _upsert_cv_analysis(cv_id, "error")
+        except SQLAlchemyError:
+            logger.error("cv_quality_analysis_error_status_write_failed", cv_id=cv_id, exc_info=True)
+
+
 # ==============================================================================
 # Entry point
 # ==============================================================================
@@ -420,6 +448,20 @@ def main() -> None:
     try:
         with receive_message(CV_ANALYSIS_QUEUE) as payload:
             cv_id = payload["cv_id"]
+
+            if payload.get("retry_quality_only", False):
+                # Manual retry from GET /cv/{id}/analysis status="error" (see
+                # POST /cv/{id}/analysis/retry). Only the quality analysis
+                # re-runs — ROME codes already exist and matching is untouched.
+                logger.info("cv_analysis_retry_started", cv_id=cv_id)
+                try:
+                    raw_text, user_id = _get_cv_text(cv_id)
+                except ValueError:
+                    logger.info("cv_analysis_retry_cv_deleted_skipping", cv_id=cv_id)
+                    return
+                _run_quality_analysis(cv_id, user_id, raw_text)
+                logger.info("cv_analysis_retry_completed", cv_id=cv_id)
+                return
 
             logger.info("cv_analysis_started", cv_id=cv_id)
 
@@ -451,18 +493,7 @@ def main() -> None:
             # CV quality analysis — best-effort, never billed, never blocks the
             # ROME -> matching pipeline. No raise here, unlike the ROME failure
             # handling above, which must halt the agent (see ADR-018 addendum).
-            try:
-                _upsert_cv_analysis(cv_id, "processing")
-                experience_level, candidate_description = _get_profile_intent(user_id)
-                result = _analyze_cv_quality(raw_text, experience_level, candidate_description)
-                _upsert_cv_analysis(cv_id, "done", **result)
-                logger.info("cv_quality_analysis_completed", cv_id=cv_id)
-            except (OpenAIError, SQLAlchemyError, ValueError, KeyError, TypeError):
-                logger.error("cv_quality_analysis_failed", cv_id=cv_id, exc_info=True)
-                try:
-                    _upsert_cv_analysis(cv_id, "error")
-                except SQLAlchemyError:
-                    logger.error("cv_quality_analysis_error_status_write_failed", cv_id=cv_id, exc_info=True)
+            _run_quality_analysis(cv_id, user_id, raw_text)
 
             rome_codes = [item["code"] for item in rome_items]
             try:

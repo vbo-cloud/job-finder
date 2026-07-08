@@ -31,6 +31,7 @@ _merge_rome_codes = _mod._merge_rome_codes
 _get_profile_intent = _mod._get_profile_intent
 _analyze_cv_quality = _mod._analyze_cv_quality
 _upsert_cv_analysis = _mod._upsert_cv_analysis
+_run_quality_analysis = _mod._run_quality_analysis
 
 _TEST_REFERENTIEL: dict[str, str] = {
     "M1805": "Études et développement informatique",
@@ -44,6 +45,14 @@ def _session_cm(session: MagicMock):
     @contextmanager
     def _cm():
         yield session
+    return _cm
+
+
+def _receive_message_cm(payload: dict):
+    """Return a receive_message-compatible callable (takes a queue name) yielding payload."""
+    @contextmanager
+    def _cm(_queue_name):
+        yield payload
     return _cm
 
 
@@ -456,3 +465,85 @@ class TestUpsertCvAnalysis:
 
         with pytest.raises(SQLAlchemyError):
             _upsert_cv_analysis("cv-uuid-1", "done")
+
+
+# ---------------------------------------------------------------------------
+# _run_quality_analysis
+# ---------------------------------------------------------------------------
+
+
+class TestRunQualityAnalysis:
+    def test_writes_done_on_success(self, mocker):
+        mock_upsert = mocker.patch.object(_mod, "_upsert_cv_analysis")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=("2-5", "desc"))
+        mocker.patch.object(
+            _mod, "_analyze_cv_quality", return_value={"ats_score": 80}
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text")
+
+        mock_upsert.assert_any_call("cv-uuid-1", "processing")
+        mock_upsert.assert_any_call("cv-uuid-1", "done", ats_score=80)
+
+    def test_writes_error_status_on_openai_failure_without_raising(self, mocker):
+        mock_upsert = mocker.patch.object(_mod, "_upsert_cv_analysis")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_analyze_cv_quality", side_effect=OpenAIError("API failure")
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text")  # must not raise
+
+        mock_upsert.assert_any_call("cv-uuid-1", "error")
+
+    def test_swallows_sqlalchemy_error_when_writing_error_status(self, mocker):
+        mock_upsert = mocker.patch.object(
+            _mod,
+            "_upsert_cv_analysis",
+            side_effect=[None, SQLAlchemyError("DB down")],
+        )
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_analyze_cv_quality", side_effect=OpenAIError("API failure")
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text")  # must not raise
+
+        assert mock_upsert.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# main() — retry_quality_only branch
+# ---------------------------------------------------------------------------
+
+
+class TestMainRetryQualityOnly:
+    def _run_main_with_payload(self, mocker, payload: dict):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "receive_message", _receive_message_cm(payload))
+        return mocker.patch.object(_mod, "_run_quality_analysis")
+
+    def test_retry_only_runs_quality_analysis_not_rome(self, mocker):
+        mock_run_quality = self._run_main_with_payload(
+            mocker, {"cv_id": "cv-uuid-1", "retry_quality_only": True}
+        )
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
+        mock_set_status = mocker.patch.object(_mod, "_set_cv_status")
+        mock_extract = mocker.patch.object(_mod, "_extract_rome_codes")
+
+        _mod.main()
+
+        mock_run_quality.assert_called_once_with("cv-uuid-1", "user-123", "cv text")
+        mock_extract.assert_not_called()
+        mock_set_status.assert_not_called()
+
+    def test_retry_only_skips_cleanly_when_cv_deleted(self, mocker):
+        mock_run_quality = self._run_main_with_payload(
+            mocker, {"cv_id": "cv-missing", "retry_quality_only": True}
+        )
+        mocker.patch.object(_mod, "_get_cv_text", side_effect=ValueError("not found"))
+
+        _mod.main()  # must not raise
+
+        mock_run_quality.assert_not_called()

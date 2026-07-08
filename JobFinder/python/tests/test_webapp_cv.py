@@ -277,6 +277,54 @@ class TestGetCvAnalysis:
 
 
 # ---------------------------------------------------------------------------
+# POST /cv/{cv_id}/analysis/retry
+# ---------------------------------------------------------------------------
+
+
+class TestRetryCvAnalysis:
+    def test_returns_404_when_cv_not_found(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.post(f"/cv/{uuid.uuid4()}/analysis/retry")
+
+        assert resp.status_code == 404
+        mock_send.assert_not_called()
+
+    def test_dispatches_retry_message_and_returns_202(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 202
+        mock_send.assert_called_once_with(
+            "cv-analysis", {"cv_id": str(TEST_CV_ID), "retry_quality_only": True}
+        )
+
+    def test_returns_202_even_if_dispatch_fails(self, test_client, mock_session, mocker):
+        from azure.servicebus.exceptions import ServiceBusError
+
+        mocker.patch.object(cv_router_module, "send_message", side_effect=ServiceBusError("boom"))
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 202
+
+    def test_returns_500_on_db_error(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 500
+        mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # GET /cv/{cv_id}/thumbnail
 # ---------------------------------------------------------------------------
 

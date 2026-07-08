@@ -460,6 +460,48 @@ def get_cv_analysis(
     return CvAnalysisOut.model_validate(analysis)
 
 
+@router.post("/{cv_id}/analysis/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_cv_analysis(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Manually re-trigger the CV quality analysis for a CV owned by the authenticated user.
+
+    Free and unlimited — same cost regime as the automatic analysis run at
+    upload time (see ADR-018 addendum). Only the quality analysis re-runs —
+    ROME codes and matching are untouched. Idempotent: safe to call again if
+    a previous retry also failed.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+    """
+    logger.info("cv_analysis_retry_requested", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.error("cv_analysis_retry_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    if cv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+    # Fire-and-forget — same trade-off as cv_upload_analysis_trigger_failed:
+    # a Service Bus hiccup must not turn a 202 into a 500 for a background retry.
+    try:
+        send_message(CV_ANALYSIS_QUEUE, {"cv_id": str(cv_id), "retry_quality_only": True})
+        logger.info("cv_analysis_retry_dispatched", user_id=user_id, cv_id=str(cv_id))
+    except ServiceBusError:
+        logger.error("cv_analysis_retry_dispatch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+
+
 @router.get("/{cv_id}/thumbnail", response_class=Response)
 def get_cv_thumbnail(
     cv_id: uuid.UUID,
