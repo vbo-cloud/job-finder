@@ -11,6 +11,7 @@ Expected environment variables:
     FT_CLIENT_SECRET: France Travail OAuth2 client secret.
 """
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -31,7 +32,42 @@ from shared.telemetry import configure_telemetry
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
 OFFER_READY_QUEUE = "offer-ready"
 
+# Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
+# "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
+_EXPERIENCE_YEARS_PATTERN = re.compile(r"(\d+)\s*An", re.IGNORECASE)
+_EXPERIENCE_MONTHS_PATTERN = re.compile(r"(\d+)\s*Mois", re.IGNORECASE)
+
 logger = structlog.get_logger()
+
+
+def _parse_experience_min_years(libelle: str | None) -> int | None:
+    """Extract the minimum required years of experience from France Travail's experienceLibelle.
+
+    Returns None if the field is absent or its format isn't recognized — absence of data must
+    never be treated as "0 years required" (that would incorrectly favor offers with unparseable
+    labels over honestly-labeled entry-level ones).
+
+    Args:
+        libelle: Raw experienceLibelle text from the France Travail API (e.g. "Expérience exigée
+            de 6 An(s)", "Expérience exigée de 18 Mois"), or None if absent from the payload.
+
+    Returns:
+        Parsed integer years, or None if unparseable/absent. "Débutant accepté" (no duration)
+        returns 0 explicitly — handled as a special case before the regexes. Month-based labels
+        are floored to whole years (18 Mois -> 1): lenient by design, the penalty is progressive
+        and must never over-penalize on a rounding.
+    """
+    if libelle is None:
+        return None
+    if "débutant" in libelle.lower():
+        return 0
+    years_match = _EXPERIENCE_YEARS_PATTERN.search(libelle)
+    if years_match:
+        return int(years_match.group(1))
+    months_match = _EXPERIENCE_MONTHS_PATTERN.search(libelle)
+    if months_match:
+        return int(months_match.group(1)) // 12
+    return None
 
 
 def _get_active_rome_codes() -> list[str]:
@@ -119,6 +155,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
             "longitude": raw.get("lieuTravail", {}).get("longitude"),
             "contract_type": raw.get("typeContratLibelle", "Non renseigné"),
             "salary": raw.get("salaire", {}).get("libelle"),
+            "experience_min_years": _parse_experience_min_years(raw.get("experienceLibelle")),
             "description": raw.get("description", ""),
             "skills": [c["libelle"] for c in raw.get("competences", [])],
             "rome_code": rome_code,
@@ -142,6 +179,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
                     "longitude": insert_stmt.excluded.longitude,
                     "contract_type": insert_stmt.excluded.contract_type,
                     "salary": insert_stmt.excluded.salary,
+                    "experience_min_years": insert_stmt.excluded.experience_min_years,
                     "description": insert_stmt.excluded.description,
                     "skills": insert_stmt.excluded.skills,
                     "rome_code": insert_stmt.excluded.rome_code,

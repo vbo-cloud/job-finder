@@ -32,6 +32,9 @@ class Offer(Base):
     contract_type: Mapped[str] = mapped_column(String, nullable=False)
     rome_code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     salary: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Années d'expérience minimales demandées, parsées depuis experienceLibelle (France Travail).
+    # NULL = non renseigné ou format non reconnu — jamais traité comme "0 an requis".
+    experience_min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
