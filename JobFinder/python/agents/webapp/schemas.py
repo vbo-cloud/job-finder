@@ -114,6 +114,7 @@ class ProfileOut(BaseModel):
     commune_codes: list[str]
     experience_level: Literal["0-2", "2-5", "5+"] | None
     candidate_description: str | None
+    analysis_credits_remaining: int
 
     model_config = ConfigDict(from_attributes=True)
 
