@@ -72,6 +72,13 @@ export default function LibrarySection({
     setCvs((prev) => prev.filter((cv) => cv.id !== id));
   }, []);
 
+  // Mirror every cvs change to the parent — fetches AND local deletions. A
+  // stale parent copy kept the detail section mounted (and the correspondances
+  // view reachable) after the last CV was deleted.
+  useEffect(() => {
+    onCvsChange?.(cvs);
+  }, [cvs, onCvsChange]);
+
   const fetchCvs = useCallback(async (): Promise<void> => {
     const tryFetch = () => apiClient.get<CVData[]>("/cv/");
     try {
@@ -82,7 +89,6 @@ export default function LibrarySection({
         return tryFetch();
       });
       setCvs(data);
-      onCvsChange?.(data);
       setError(false);
     } catch (err) {
       console.error("[LibrarySection] fetch failed", err);
@@ -90,7 +96,7 @@ export default function LibrarySection({
     } finally {
       setLoading(false);
     }
-  }, [onCvsChange]);
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
