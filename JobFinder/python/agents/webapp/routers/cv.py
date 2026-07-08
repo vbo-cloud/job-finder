@@ -28,6 +28,7 @@ from shared.embedder import embed
 from shared.models import CV, CvAnalysis, Match, MatchAnalysis, Offer, UserProfile
 from auth import UserIdentity, get_current_identity, get_current_user
 from dependencies import get_db
+from profile_defaults import default_profile_values
 from routers.matches import commune_zone_condition
 from schemas import CVListItemOut, CVUploadOut, CvAnalysisOut
 
@@ -299,20 +300,14 @@ async def upload_cv(
         ))
         logger.info("cv_upload_cv_inserted", user_id=user_id, cv_id=str(cv_id))
 
-        # Insert a default profile only if absent — never overwrite existing preferences.
-        # email/display_name are captured here at creation; PUT /profile refreshes them.
+        # Insert a default profile only if absent — never overwrite existing
+        # preferences. commune_codes stays explicit here (outside the shared
+        # defaults): cv.py always creates with [], profile.py derives it from
+        # the request body.
         session.execute(
-            pg_insert(UserProfile).values(
-                id=uuid.uuid4(),
-                user_id=user_id,
-                email=identity.email,
-                display_name=identity.display_name,
-                rome_codes={},
-                commune_codes=[],
-                analysis_credits_remaining=30,
-                analysis_credits_reset_at=None,
-                created_at=now,
-            ).on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
+            pg_insert(UserProfile)
+            .values(**default_profile_values(identity), commune_codes=[])
+            .on_conflict_do_nothing(constraint="uq_user_profiles_user_id")
         )
 
         logger.info("cv_upload_profile_upserted", user_id=user_id)
