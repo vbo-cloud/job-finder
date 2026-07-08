@@ -36,6 +36,9 @@ def _make_profile() -> MagicMock:
     profile.experience_level = None
     profile.candidate_description = None
     profile.analysis_credits_remaining = 30
+    # ProfileOut declares is_admin (computed field, not a DB column) — without a
+    # concrete value, model_validate would read a MagicMock and fail validation.
+    profile.is_admin = False
     return profile
 
 
@@ -91,6 +94,23 @@ class TestGetProfile:
         resp = test_client.get("/profile")
 
         assert resp.status_code == 500
+
+    def test_is_admin_false_for_regular_user(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is False
+
+    def test_is_admin_true_when_user_in_admin_list(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        with patch("auth.ADMIN_USER_IDS", frozenset({TEST_USER_ID})):
+            resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +306,50 @@ class TestPutProfile:
 
         assert resp.status_code == 200
         mock_send_message.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/credits/refill
+# ---------------------------------------------------------------------------
+
+
+class TestRefillCredits:
+    _ADMIN_PATCH = patch("auth.ADMIN_USER_IDS", frozenset({TEST_USER_ID}))
+
+    def test_returns_403_for_non_admin_without_touching_db(self, test_client, mock_session):
+        resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 403
+        mock_session.execute.assert_not_called()
+
+    def test_admin_refill_returns_new_balance_and_commits(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = 40
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"analysis_credits_remaining": 40}
+        mock_session.commit.assert_called_once()
+
+    def test_returns_404_when_admin_has_no_profile(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 404
+        mock_session.rollback.assert_called_once()
+        mock_session.commit.assert_not_called()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 500
+        mock_session.commit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

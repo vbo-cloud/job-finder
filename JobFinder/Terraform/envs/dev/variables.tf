@@ -62,6 +62,12 @@ variable "alert_email" {
   }
 }
 
+variable "admin_user_ids" {
+  type        = string
+  default     = ""
+  description = "Comma-separated Entra External ID user IDs (JWT sub claims) granted in-app admin features in the webapp (e.g. the credits refill button). Empty string means no admins — the feature is simply disabled."
+}
+
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000

@@ -145,8 +145,17 @@ class ProfileOut(BaseModel):
     experience_level: Literal["0-2", "2-5", "5+"] | None
     candidate_description: str | None
     analysis_credits_remaining: int
+    # Not a DB column — computed from ADMIN_USER_IDS by the profile endpoints
+    # (model_validate leaves the default; the router overrides via model_copy).
+    is_admin: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CreditsRefillOut(BaseModel):
+    """New credit balance after an admin refill."""
+
+    analysis_credits_remaining: int
 
 
 class CVUploadOut(BaseModel):
