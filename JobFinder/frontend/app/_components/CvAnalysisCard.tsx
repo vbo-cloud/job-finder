@@ -84,7 +84,9 @@ export default function CvAnalysisCard({ cvId }: Props) {
   }
 
   return (
-    <div className="w-full rounded-xl border border-faint bg-chip p-[18px]">
+    // The frame (border/bg) is owned by the accordion wrapper in
+    // CVDetailSection.tsx — this component only pads its content.
+    <div className="w-full p-[18px]">
       {fetchFailed ? (
         <p className="text-[13px] text-muted">Analyse indisponible pour ce CV</p>
       ) : analysis?.status === "error" ? (

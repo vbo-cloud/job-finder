@@ -134,26 +134,36 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               )}
             </div>
 
-            {/* Analyse du CV — repliable, sous la vignette. shrink-0 + max-h borné en
-                lecture ouverte ; la vignette au-dessus (flex-1 min-h-0) se rétrécit
+            {/* Analyse du CV — zone encadrée repliable, sous la vignette. Le bandeau
+                (bouton) porte la flèche centrée en haut + le titre ; le cadre unique
+                est porté ici, CvAnalysisCard n'a plus le sien. shrink-0 + max-h borné
+                en lecture ouverte ; la vignette au-dessus (flex-1 min-h-0) se rétrécit
                 automatiquement pour lui laisser la place, sans mesure manuelle.
-                46% ≈ la moitié de la colonne : plafonne l'analyse (scroll interne
+                69% ≈ deux tiers de la colonne : plafonne l'analyse (scroll interne
                 au-delà) pour que la vignette reste toujours visible. À réévaluer si
                 la colonne gauche change de hauteur ou gagne un nouvel enfant. */}
-            <div className={cn("w-full shrink-0 flex flex-col min-h-0", analysisOpen && "max-h-[46%]")}>
+            <div
+              className={cn(
+                "w-full shrink-0 flex flex-col min-h-0 rounded-xl border border-faint bg-chip overflow-hidden",
+                analysisOpen && "max-h-[69%]",
+              )}
+            >
               <button
                 onClick={() => setAnalysisOpen((o) => !o)}
                 aria-expanded={analysisOpen}
                 aria-controls="cv-analysis-panel"
-                className="flex-none flex items-center justify-between gap-2 w-full bg-transparent border-0 py-2 cursor-pointer text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
+                className={cn(
+                  "flex-none flex flex-col items-center gap-1 w-full bg-transparent border-0 py-2 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default",
+                  analysisOpen && "border-b border-faint",
+                )}
               >
+                <ChevronDown
+                  size={14}
+                  className={cn("text-muted transition-transform", analysisOpen && "rotate-180")}
+                />
                 <span className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted">
                   Analyse de votre CV
                 </span>
-                <ChevronDown
-                  size={14}
-                  className={cn("text-muted transition-transform shrink-0", analysisOpen && "rotate-180")}
-                />
               </button>
               {analysisOpen && (
                 <div id="cv-analysis-panel" className="flex-1 min-h-0 overflow-y-auto">
