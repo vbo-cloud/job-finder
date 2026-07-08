@@ -4632,3 +4632,25 @@ Sur demande utilisateur : la barre de filtres de l'onglet Offres portait 4 contr
 ### Décisions techniques
 
 - **Clarification avant implémentation plutôt qu'interprétation** : la demande groupait 4 dropdowns sous un même verbe « supprimer », mais Trier n'est pas un filtre (n'exclut rien) et Contrat/Score étaient des sélections exclusives — une conversion silencieuse en cases à cocher OR aurait changé le comportement sans validation. Questions posées via `AskUserQuestion` avant tout code ; réponses obtenues : tri retiré (pertinence fixe), Contrat et Score retirés purement et simplement (seuls Nouvelles/Vues restent).
+
+---
+
+## PR #183 — fix(frontend): rafraîchissement silencieux des correspondances quand match_count change
+
+**Date :** 2026-07-09
+**Branche :** `feature/cv-detail-matches-live-refresh` → `dev`
+
+### Contexte
+
+Bug remonté par Vincent : quand l'analyse d'un CV se termine et que son `match_count` se met à jour sur la carte de la bibliothèque, le panneau « Vos correspondances » du détail n'affiche rien de nouveau tant que la page entière n'est pas rechargée. Diagnostic posé en session Cowork le 09/07 (`docs/prompts/prompt-cv-detail-matches-live-refresh.md`) : deux fetches indépendants qui ne se parlent pas — `LibrarySection.tsx` poll `GET /cv/` et remonte `match_count` au parent en direct, mais l'effet de `CVDetailSection.tsx` qui fetch `GET /matches/cv/{id}` ne dépend que de `[selectedCvId, zoneVersion]` et ignore la prop déjà à jour.
+
+### Ce qui a été fait
+
+- **`CVDetailSection.tsx`** : l'effet de fetch des correspondances gagne `currentCv?.match_count` dans ses dépendances, avec une ref `prevMatchesKeyRef` qui distingue un **reset dur** (changement de `selectedCvId`/`zoneVersion` : vidage de la liste, spinner, bannière d'erreur possible) d'un **rafraîchissement silencieux** (seul `match_count` a changé sur le même CV/zone : refetch en arrière-plan, remplacement de `matches` uniquement au succès, jamais de spinner ni de bannière d'erreur sur un raté transitoire de poll).
+- **Tests** (`CVDetailSection.test.tsx`) : nouveau describe dédié — refetch déclenché par un changement de `match_count` seul, absence de refetch sur un changement de prop sans rapport (même valeur, nouvelle référence de tableau), et liste existante conservée sans bannière d'erreur quand le rafraîchissement silencieux échoue.
+
+**Vérification :** Jest 7/7 sur `CVDetailSection`, ESLint propre. Le test manuel décisif (upload d'un CV, laisser l'analyse se terminer sans toucher à la page, confirmer l'apparition de la liste sans reload ni flash de chargement) n'a **pas** été exécuté dans cette session — nécessite la stack complète (backend, pipeline d'analyse Azure OpenAI) ; à faire par Vincent avant merge.
+
+### Décisions techniques
+
+- **Aucun changement côté `LibrarySection.tsx`, `HomeClient.tsx` ni backend** : `match_count` était déjà correct et déjà propagé jusqu'à `CVDetailSection` ; il manquait uniquement le fil entre les deux composants frontend, conformément au prompt.
