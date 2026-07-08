@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import type { MatchOut } from "@/lib/api/types";
+import MatchAnalysisPanel from "./MatchAnalysisPanel";
 
 export interface MatchItemData {
   match: MatchOut;
@@ -9,10 +10,13 @@ export interface MatchItemData {
   isSaved: boolean;
   isApplied: boolean;
   isExpanded: boolean;
+  /** True between the "Analyser cette offre" click and the polling resolution. */
+  analysisPending: boolean;
   onSelect: () => void;
   onSave: () => void;
   onApply: () => void;
   onReject: () => void;
+  onAnalyze: () => void;
 }
 
 const FT_OFFER_URL = "https://candidat.francetravail.fr/offres/recherche/detail";
@@ -67,8 +71,8 @@ function logoBadge(company: string): { mono: string; bg: string; fg: string } {
 }
 
 export default function MatchItem({
-  match, isNew, isSaved, isApplied, isExpanded,
-  onSelect, onSave, onApply, onReject,
+  match, isNew, isSaved, isApplied, isExpanded, analysisPending,
+  onSelect, onSave, onApply, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
   const pct = Math.round(match.score * 100);
@@ -172,6 +176,16 @@ export default function MatchItem({
 
           <p className="text-[12.5px] text-secondary">{meta}</p>
 
+          {(match.analysis?.matched_skills.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {match.analysis!.matched_skills.slice(0, 3).map((s) => (
+                <span key={s} className="inline-flex items-center gap-[5px] text-[11.5px] font-semibold px-[9px] py-1 rounded-[6px] bg-match-skill text-match-skill">
+                  <span className="font-bold">✓</span>{s}
+                </span>
+              ))}
+            </div>
+          )}
+
           {offer.skills.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {offer.skills.slice(0, 5).map((s) => (
@@ -184,7 +198,11 @@ export default function MatchItem({
 
           <div className="flex gap-[7px] text-[12px] text-muted leading-snug">
             <span className="text-hint">—</span>
-            <span>Analyse IA — bientôt disponible.</span>
+            {match.analysis?.status === "done" && match.analysis.synthese ? (
+              <span>{match.analysis.synthese}</span>
+            ) : (
+              <span>Analyse IA — dépliez l&apos;offre pour la lancer.</span>
+            )}
           </div>
         </div>
 
@@ -268,24 +286,12 @@ export default function MatchItem({
           </div>
 
           {/* Agent review column */}
-          <div className="rounded-xl border border-faint bg-chip p-[18px]">
-            <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-3.5">Review de l&apos;agent</p>
-            <div className="text-[13px] text-body leading-relaxed p-3 bg-card border border-faint rounded-[10px]">
-              Analyse IA approfondie — bientôt disponible. Les scores de compétences, correspondances et lacunes seront affichés ici une fois le module déployé.
-            </div>
-            {offer.skills.length > 0 && (
-              <>
-                <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mt-[18px] mb-2.5">Compétences détectées</p>
-                <div className="flex flex-wrap gap-[7px]">
-                  {offer.skills.slice(0, 5).map((s) => (
-                    <span key={s} className="inline-flex items-center gap-[5px] px-[10px] py-[5px] rounded-[7px] bg-match-skill text-match-skill text-[12.5px] font-semibold">
-                      <span className="font-bold">✓</span>{s}
-                    </span>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+          <MatchAnalysisPanel
+            analysis={match.analysis}
+            analysisPending={analysisPending}
+            onAnalyze={onAnalyze}
+            offerSkills={offer.skills}
+          />
         </div>
       )}
     </div>

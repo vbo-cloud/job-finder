@@ -17,6 +17,7 @@ function makeMatch(overrides: Partial<MatchOut> = {}): MatchOut {
   return {
     score: 0.75,
     is_new: true,
+    analysis: null,
     offer: {
       id: OFFER_ID,
       ft_id: "FT-001",

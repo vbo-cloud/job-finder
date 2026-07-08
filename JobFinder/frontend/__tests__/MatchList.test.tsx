@@ -7,6 +7,7 @@ function makeMatch(id: string, score = 0.8): MatchOut {
   return {
     score,
     is_new: false,
+    analysis: null,
     offer: {
       id,
       ft_id: `FT-${id}`,
@@ -30,10 +31,12 @@ function makeItem(id: string, score = 0.8): MatchItemData {
     isSaved: false,
     isApplied: false,
     isExpanded: false,
+    analysisPending: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onApply: jest.fn(),
     onReject: jest.fn(),
+    onAnalyze: jest.fn(),
   };
 }
 
