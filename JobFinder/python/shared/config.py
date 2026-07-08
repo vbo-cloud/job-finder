@@ -32,3 +32,9 @@ ANALYSIS_SEED = int(os.getenv("ANALYSIS_SEED", "42"))
 # faire disparaître l'offre — voir docs/prompts/prompt-matching-experience-penalty-and-skills-signal.md.
 EXPERIENCE_PENALTY_PER_YEAR_GAP = float(os.getenv("EXPERIENCE_PENALTY_PER_YEAR_GAP", "0.03"))
 EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
+# Bonus de score (jamais un malus) quand CV et offre partagent des mots-clés techniques précis —
+# repli gratuit et lexical, choisi après vérification que seulement 15 % des offres ont un champ
+# "compétences" structuré exploitable côté France Travail (voir prompt-matching-experience-penalty-
+# and-skills-signal.md, étape 0.1). Valeur = bonus maximal atteignable à recouvrement complet ;
+# toujours additionné, jamais soustrait — voir contrainte de conception dans le prompt B2.
+TECH_KEYWORDS_WEIGHT = float(os.getenv("TECH_KEYWORDS_WEIGHT", "0.1"))
