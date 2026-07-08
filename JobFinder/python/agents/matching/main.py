@@ -14,7 +14,14 @@ from sqlalchemy.orm import Session
 from azure.servicebus.exceptions import ServiceBusError
 
 from shared.bus import receive_message, send_message
-from shared.config import INTENT_EMBEDDING_WEIGHT, MATCH_ANALYSIS_AUTO_TOP_N, MATCHING_SCORE_THRESHOLD
+from shared.config import (
+    EXPERIENCE_MAX_PENALTY,
+    EXPERIENCE_PENALTY_PER_YEAR_GAP,
+    INTENT_EMBEDDING_WEIGHT,
+    MATCH_ANALYSIS_AUTO_TOP_N,
+    MATCHING_SCORE_THRESHOLD,
+    TECH_KEYWORDS_WEIGHT,
+)
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
@@ -27,21 +34,36 @@ logger = structlog.get_logger()
 
 
 def _get_all_matches(session: Session) -> list[dict]:
-    """Return top-K offer matches for every CV with a non-null embedding.
+    """Return offer matches above the score threshold for every CV with a non-null embedding.
 
-    Uses a single window-function query to avoid N+1 round-trips.
+    Uses a single query to avoid N+1 round-trips.
     One SQL statement regardless of the number of CVs.
 
     Returns:
         List of dicts with cv_id, offer_id, score.
 
-    Note: scores are computed as (1 - cosine_distance) between the CV and offer
-    embeddings, blended with (1 - cosine_distance) against the profile's
+    Note: base scores are computed as (1 - cosine_distance) between the CV and
+    offer embeddings, blended with (1 - cosine_distance) against the profile's
     intent_embedding (experience/search query/candidate description) when one
     exists — weighted INTENT_EMBEDDING_WEIGHT / (1 - INTENT_EMBEDDING_WEIGHT).
     Falls back to the CV-only score when the profile has no intent_embedding.
     OpenAI text-embedding-3-small produces normalized vectors, so scores are
     bounded in [0, 1] in practice.
+
+    A progressive experience penalty is then subtracted: when the offer's
+    experience_min_years exceeds the years ceiling of the candidate's declared
+    experience_level ('0-2' -> 2, '2-5' -> 5), each missing year costs
+    EXPERIENCE_PENALTY_PER_YEAR_GAP, capped at EXPERIENCE_MAX_PENALTY.
+    A missing signal on either side ('5+' or no profile, offer without a
+    parseable experience label) never penalizes — absence of data is not a
+    candidate or offer defect.
+
+    Finally a strictly additive lexical bonus rewards precise tech-keyword
+    overlap (shared/tech_keywords.py, extracted at ingestion/upload): the
+    fraction of the offer's tech_keywords also present in the CV's, weighted
+    by TECH_KEYWORDS_WEIGHT and capped so the total never exceeds 1.0. The
+    bonus is never negative — an empty keyword list on either side simply
+    yields no bonus, it never lowers the experience-penalized score.
 
     Raises:
         SQLAlchemyError: If the database query fails.
@@ -59,15 +81,68 @@ def _get_all_matches(session: Session) -> list[dict]:
                             + :intent_weight * (1 - (o.embedding <=> up.intent_embedding))
                         ELSE
                             1 - (o.embedding <=> c.embedding)
-                    END AS score
+                    END AS base_score,
+                    CASE up.experience_level
+                        WHEN '0-2' THEN 2
+                        WHEN '2-5' THEN 5
+                        ELSE NULL  -- '5+' ou profil sans experience_level : jamais pénalisé
+                    END AS candidate_years_ceiling,
+                    o.experience_min_years,
+                    c.tech_keywords AS tech_keywords_cv,
+                    o.tech_keywords AS tech_keywords_offer
                 FROM cvs c
                 JOIN offers o ON o.embedding IS NOT NULL
                 LEFT JOIN user_profiles up ON up.user_id = c.user_id
                 WHERE c.embedding IS NOT NULL
+            ),
+            after_experience AS (
+                -- Le double COALESCE gère l'absence de signal sans branche explicite :
+                -- candidate_years_ceiling NULL -> 999 -> écart toujours <= 0 -> pénalité nulle ;
+                -- experience_min_years NULL -> 0 -> écart jamais positif -> pénalité nulle.
+                SELECT
+                    cv_id,
+                    offer_id,
+                    tech_keywords_cv,
+                    tech_keywords_offer,
+                    GREATEST(
+                        0,
+                        base_score - LEAST(
+                            GREATEST(0, COALESCE(experience_min_years, 0) - COALESCE(candidate_years_ceiling, 999)),
+                            :max_penalty / NULLIF(:penalty_per_year, 0)
+                        ) * :penalty_per_year
+                    ) AS score
+                FROM scored
+            ),
+            final AS (
+                -- Bonus lexical strictement additif : part des mots-clés techniques de
+                -- l'offre couverts par le CV (dénominateur = besoins de l'offre, pas
+                -- l'union). COALESCE(..., 0) couvre l'offre sans mot-clé détecté
+                -- (division par NULL sinon) — bonus nul, jamais un malus.
+                SELECT
+                    cv_id,
+                    offer_id,
+                    LEAST(
+                        1.0,
+                        score + COALESCE(
+                            cardinality(ARRAY(
+                                SELECT UNNEST(tech_keywords_offer)
+                                INTERSECT
+                                SELECT UNNEST(tech_keywords_cv)
+                            ))::float / NULLIF(array_length(tech_keywords_offer, 1), 0),
+                            0
+                        ) * :tech_keywords_weight
+                    ) AS score
+                FROM after_experience
             )
-            SELECT cv_id, offer_id, score FROM scored WHERE score >= :threshold
+            SELECT cv_id, offer_id, score FROM final WHERE score >= :threshold
         """),
-        {"threshold": MATCHING_SCORE_THRESHOLD, "intent_weight": INTENT_EMBEDDING_WEIGHT},
+        {
+            "threshold": MATCHING_SCORE_THRESHOLD,
+            "intent_weight": INTENT_EMBEDDING_WEIGHT,
+            "penalty_per_year": EXPERIENCE_PENALTY_PER_YEAR_GAP,
+            "max_penalty": EXPERIENCE_MAX_PENALTY,
+            "tech_keywords_weight": TECH_KEYWORDS_WEIGHT,
+        },
     )
 
     return [

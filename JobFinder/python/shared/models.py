@@ -32,8 +32,14 @@ class Offer(Base):
     contract_type: Mapped[str] = mapped_column(String, nullable=False)
     rome_code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     salary: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Années d'expérience minimales demandées, parsées depuis experienceLibelle (France Travail).
+    # NULL = non renseigné ou format non reconnu — jamais traité comme "0 an requis".
+    experience_min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # Mots-clés techniques extraits lexicalement de la description (shared/tech_keywords.py) —
+    # bonus additif au score de matching, jamais un malus.
+    tech_keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -57,6 +63,8 @@ class CV(Base):
     thumbnail_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     thumbnail_url_lg: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    # Mots-clés techniques extraits lexicalement du texte brut à l'upload (shared/tech_keywords.py).
+    tech_keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
