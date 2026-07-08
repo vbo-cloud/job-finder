@@ -35,6 +35,7 @@ def _make_profile() -> MagicMock:
     profile.commune_codes = ["75101", "75102"]
     profile.experience_level = None
     profile.candidate_description = None
+    profile.analysis_credits_remaining = 30
     return profile
 
 
@@ -75,6 +76,7 @@ class TestGetProfile:
         body = resp.json()
         assert body["user_id"] == TEST_USER_ID
         assert body["commune_codes"] == ["75101", "75102"]
+        assert body["analysis_credits_remaining"] == 30
 
     def test_returns_404_when_profile_not_found(self, test_client, mock_session):
         mock_session.execute.return_value.scalar_one_or_none.return_value = None

@@ -20,12 +20,13 @@ pytest tests/test_cv_analysis.py -v
 
 | Test file | Module under test | Functions covered |
 |---|---|---|
-| `test_cv_analysis.py` | `agents/cv_analysis/main.py` | `_extract_rome_codes`, `_get_cv_text`, `_set_cv_status`, `_merge_rome_codes` |
+| `test_cv_analysis.py` | `agents/cv_analysis/main.py` | `_extract_rome_codes`, `_get_cv_text`, `_set_cv_status`, `_merge_rome_codes`, `_get_profile_intent`, `_analyze_cv_quality`, `_upsert_cv_analysis`, `_run_quality_analysis`, `main()` retry_quality_only branch |
 | `test_ft_client.py` | `agents/offer_fetching/ft_client.py` | `get_access_token`, `fetch_offers` |
+| `test_match_analysis.py` | `agents/match_analysis/main.py` | `_get_match_context`, `_analyze_match`, `_update_match_analysis` |
 | `test_matching.py` | `agents/matching/main.py` | `_upsert_matches` |
-| `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}` |
+| `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}`, `POST /matches/{cv_id}/offers/{offer_id}/analyze` |
 | `test_webapp_profile.py` | `agents/webapp/routers/profile.py` | `GET /profile`, `PUT /profile` |
-| `test_webapp_cv.py` | `agents/webapp/routers/cv.py` | `POST /upload` (validation), `GET /cv/`, thumbnail/pdf (404), `PATCH mark-all-seen`, `DELETE` (404) |
+| `test_webapp_cv.py` | `agents/webapp/routers/cv.py` | `POST /upload` (validation), `GET /cv/`, `GET /cv/{cv_id}/analysis`, `POST /cv/{cv_id}/analysis/retry`, thumbnail/pdf (404), `PATCH mark-all-seen`, `DELETE` (404) |
 
 ## Design decisions
 
@@ -37,5 +38,6 @@ pytest tests/test_cv_analysis.py -v
 ## Intentionally excluded
 
 - `POST /cv/upload` happy path: requires simultaneous mocking of `pdfplumber`, the embedding model (`shared/embedder`), Azure Blob Storage upload, and Service Bus `send_message`. Covered by manual integration tests.
+- `_enqueue_top_n_analyses` (`agents/matching/main.py`): uses PostgreSQL-specific SQL (`text()` with `ROW_NUMBER() OVER`) — incompatible with SQLite, same exclusion as `_get_all_matches`. Validated manually (see the verification steps in the implementing PR).
 - `GET /cv/{id}/thumbnail` and `GET /cv/{id}/pdf` happy paths: require mocking the blob download client. The 404 paths are covered.
 - `DELETE /cv/{id}` happy path: requires mocking blob delete + multi-step DB session. The 404 path is covered.

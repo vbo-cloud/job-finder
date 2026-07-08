@@ -3,9 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
-import type { MatchOut } from "@/lib/api/types";
+import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
+import { notifyCreditsConsumed } from "@/lib/creditsBus";
+import CvAnalysisCard from "./CvAnalysisCard";
 import MatchList from "./MatchList";
 import { type MatchItemData } from "./MatchItem";
+
+const ANALYSIS_POLL_INTERVAL_MS = 3000;
 
 type SortKey = "score" | "salary" | "az";
 type ContractFilter = "Tous" | "CDI" | "CDD";
@@ -45,7 +49,7 @@ interface Props {
 }
 
 export default function CorrespondancesPanel({ cvId, matches, loading, error, onMatchSeen }: Props) {
-  const [tab, setTab]               = useState<"Matchs" | "Review">("Matchs");
+  const [tab, setTab]               = useState<"Correspondances" | "Analyse du CV">("Correspondances");
   const [query, setQuery]           = useState("");
   const [sort, setSort]             = useState<SortKey>("score");
   const [contract, setContract]     = useState<ContractFilter>("Tous");
@@ -59,6 +63,74 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [seenIds, setSeenIds] = useState<Set<string>>(() => loadSeenIds(cvId));
   const seenIdsRef = useRef(seenIds);
   seenIdsRef.current = seenIds; // sync ref on every render — read in useMemo without declaring as dep
+  // Offer IDs whose pair analysis was manually triggered and is still being polled.
+  // Sets are reference-equal when mutated in place, so every update below builds
+  // a new Set (new Set(prev) / Array.from(prev).filter(...)) rather than mutating
+  // prev directly — mutating it would leave the useEffect/useMemo deps unaware
+  // a change happened.
+  const [analysisPending, setAnalysisPending] = useState(new Set<string>());
+  // Fresher analyses fetched by the polling — supersede the `matches` prop until
+  // the parent refetches (the prop only refreshes on CV/zone change).
+  const [analysisOverrides, setAnalysisOverrides] = useState(new Map<string, MatchAnalysisOut>());
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (analysisPending.size === 0) return;
+    const timer = setInterval(() => {
+      apiClient
+        .get<CVMatchesOut>(`/matches/cv/${cvId}`)
+        .then((res) => {
+          const byOffer = new Map(res.data.matches.map((m) => [m.offer.id, m.analysis]));
+          setAnalysisOverrides((prev) => {
+            const next = new Map(prev);
+            analysisPending.forEach((id) => {
+              const analysis = byOffer.get(id);
+              if (analysis) next.set(id, analysis);
+            });
+            return next;
+          });
+          setAnalysisPending((prev) => {
+            const next = new Set(
+              Array.from(prev).filter((id) => {
+                const analysis = byOffer.get(id);
+                return !(analysis && (analysis.status === "done" || analysis.status === "error"));
+              }),
+            );
+            return next.size === prev.size ? prev : next;
+          });
+        })
+        .catch((err: unknown) => {
+          console.error("[jf] analysis polling failed:", err);
+        });
+    }, ANALYSIS_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [
+    // analysisPending as a dep means the interval restarts on every tick where
+    // at least one offer resolves (new Set reference) — the remaining pending
+    // offers can wait up to one extra ANALYSIS_POLL_INTERVAL_MS as a result.
+    // Acceptable at today's scale; revisit if concurrent analyses grow.
+    analysisPending,
+    cvId,
+  ]);
+
+  function requestAnalysis(offerId: string) {
+    setAnalysisError(null);
+    apiClient
+      .post(`/matches/${cvId}/offers/${offerId}/analyze`)
+      .then(() => {
+        setAnalysisPending((prev) => new Set(prev).add(offerId));
+        notifyCreditsConsumed();
+      })
+      .catch((err: unknown) => {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        console.error("[jf] match analysis request failed:", err);
+        setAnalysisError(
+          status === 402
+            ? "Crédits d'analyse épuisés"
+            : "Impossible de lancer l'analyse — réessayez plus tard",
+        );
+      });
+  }
 
   useEffect(() => {
     // Backend still reports is_new: true for an offer the local cache thinks
@@ -120,20 +192,25 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     // seenIdsRef intentionally absent from deps — it's a ref, not reactive state
   }, [matches, rejected, query, contract, minScore, filters, sort]);
 
-  const items: MatchItemData[] = filtered.map((m) => ({
-    match:      m,
-    isNew:      m.is_new && !seenIds.has(m.offer.id),
-    isSaved:    saved.has(m.offer.id),
-    isApplied:  applied.has(m.offer.id),
-    isExpanded: selectedId === m.offer.id,
-    onSelect:   () => toggleExpand(m.offer.id),
-    onSave:     () => toggleSaved(m.offer.id),
-    onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)), // TODO: persist applied state to backend
-    onReject:   () => {
-      setRejected((s) => new Set(s).add(m.offer.id));
-      if (selectedId === m.offer.id) setSelectedId(null);
-    },
-  }));
+  const items: MatchItemData[] = filtered.map((m) => {
+    const override = analysisOverrides.get(m.offer.id);
+    return {
+      match:      override ? { ...m, analysis: override } : m,
+      isNew:      m.is_new && !seenIds.has(m.offer.id),
+      isSaved:    saved.has(m.offer.id),
+      isApplied:  applied.has(m.offer.id),
+      isExpanded: selectedId === m.offer.id,
+      analysisPending: analysisPending.has(m.offer.id),
+      onSelect:   () => toggleExpand(m.offer.id),
+      onSave:     () => toggleSaved(m.offer.id),
+      onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)), // TODO: persist applied state to backend
+      onReject:   () => {
+        setRejected((s) => new Set(s).add(m.offer.id));
+        if (selectedId === m.offer.id) setSelectedId(null);
+      },
+      onAnalyze:  () => requestAnalysis(m.offer.id),
+    };
+  });
 
   const filterActive = !(filters.nouvelle && filters.vue);
 
@@ -148,7 +225,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           {loading ? "Chargement…" : `${matches.length} correspondances analysées`}
         </p>
         <div className="flex items-center gap-[18px] mt-3.5">
-          {(["Matchs", "Review"] as const).map((t) => (
+          {(["Correspondances", "Analyse du CV"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -164,7 +241,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       </div>
 
       {/* Filter bar */}
-      {tab === "Matchs" && (
+      {tab === "Correspondances" && (
         <div className="flex-none flex items-center gap-[10px] px-[22px] py-[11px] bg-chip border-b border-faint flex-wrap">
           <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-[320px] bg-page border border-soft rounded-[9px] px-3 py-2">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
@@ -235,22 +312,24 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
 
       {/* Content area */}
       <div className="flex-1 overflow-y-auto px-[22px] py-4 pb-12">
-        {tab === "Review" ? (
-          <div className="text-center pt-20">
-            <p className="font-bold text-[15px] text-muted">Rien à revoir pour l&apos;instant</p>
-            <p className="text-[13px] text-hint mt-1.5">Les offres marquées « à revoir » apparaîtront ici.</p>
-          </div>
+        {tab === "Analyse du CV" ? (
+          <CvAnalysisCard cvId={cvId} />
         ) : error ? (
           <p className="text-xs text-destructive mt-8 text-center">{error} — impossible de charger les matchs</p>
         ) : !filters.nouvelle && !filters.vue ? (
           <p className="text-sm text-muted text-center mt-12">Tous les filtres sont désactivés — activez au moins un filtre.</p>
         ) : (
-          <MatchList
-            items={items}
-            loading={loading}
-            rejectedCount={rejected.size}
-            onRestoreAll={() => setRejected(new Set())}
-          />
+          <>
+            {analysisError && (
+              <p className="text-xs text-destructive mb-3 text-center">{analysisError}</p>
+            )}
+            <MatchList
+              items={items}
+              loading={loading}
+              rejectedCount={rejected.size}
+              onRestoreAll={() => setRejected(new Set())}
+            />
+          </>
         )}
       </div>
     </section>

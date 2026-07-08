@@ -1,9 +1,10 @@
-"""CV analysis agent — extracts ROME codes from CV text via GPT-4o-mini."""
+"""CV analysis agent — ROME code extraction and CV quality analysis via GPT-4o-mini."""
 
 import json
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,13 +12,14 @@ import structlog
 from openai import AzureOpenAI
 from openai import OpenAIError
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from azure.servicebus.exceptions import ServiceBusError
 
 from shared.bus import receive_message, send_message
 from shared.db import get_session, run_migrations
-from shared.models import CV, UserProfile
+from shared.models import CV, CvAnalysis, UserProfile
 from shared.telemetry import configure_telemetry
 
 # ==============================================================================
@@ -37,7 +39,7 @@ if not AZURE_OPENAI_ENDPOINT:
 
 # Default matches the fixed deployment name used across all environments.
 # A missing env var is safe — the deployment name is not secret and does not vary.
-AZURE_OPENAI_ROME_DEPLOYMENT = os.environ.get("AZURE_OPENAI_ROME_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-4o-mini")
 MAX_ATTEMPTS = 2
 
 ROME_CODE_PATTERN = re.compile(r"^[A-Z]\d{4}$")
@@ -148,7 +150,7 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
         try:
             logger.info("rome_extraction_attempt", attempt=attempt, chars=len(raw_text))
             response = _openai_client.chat.completions.create(
-                model=AZURE_OPENAI_ROME_DEPLOYMENT,
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
                 messages=[
                     {
@@ -252,6 +254,180 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
 
 
 # ==============================================================================
+# CV quality analysis
+# ==============================================================================
+
+CV_QUALITY_SYSTEM_PROMPT = (
+    "Tu es un expert en recrutement et en optimisation de CV pour les systèmes ATS. "
+    "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide de la forme "
+    '{"ats_score": <entier 0-100>, "points_forts": [...], "points_faibles": [...], '
+    '"suggestions": [...], "coherence_intention": "<texte>"}. '
+    "points_forts et points_faibles portent sur la structure, la clarté de l'objectif "
+    "professionnel et la formulation des phrases. suggestions liste des améliorations concrètes "
+    "et actionnables. coherence_intention évalue en 1 à 3 phrases si le CV est cohérent avec "
+    "l'expérience et la description candidat fournies ci-dessous — renvoie une chaîne vide si "
+    "aucune de ces informations n'est fournie. Ne retourne rien d'autre que le JSON."
+)
+
+
+def _get_profile_intent(user_id: str) -> tuple[str | None, str | None]:
+    """Fetch the profile intent fields (experience level, candidate description) for a user.
+
+    Args:
+        user_id: The user whose profile to read.
+
+    Returns:
+        A tuple of (experience_level, candidate_description) — (None, None) if
+        the user has no profile row.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("profile_intent_fetch_started", user_id=user_id)
+    try:
+        with get_session() as session:
+            row = session.execute(
+                select(UserProfile.experience_level, UserProfile.candidate_description)
+                .where(UserProfile.user_id == user_id)
+            ).one_or_none()
+    except SQLAlchemyError:
+        logger.error("profile_intent_fetch_failed", user_id=user_id, exc_info=True)
+        raise
+    if row is None:
+        logger.info("profile_intent_fetch_done", user_id=user_id, has_profile=False)
+        return None, None
+    experience_level, candidate_description = row
+    logger.info("profile_intent_fetch_done", user_id=user_id, has_profile=True)
+    return experience_level, candidate_description
+
+
+def _analyze_cv_quality(
+    raw_text: str, experience_level: str | None, candidate_description: str | None
+) -> dict:
+    """Analyze CV structure, phrasing, ATS-friendliness, and coherence with declared intent.
+
+    Retries up to MAX_ATTEMPTS times on JSON parse errors — same policy as
+    _extract_rome_codes. OpenAI API errors are not retried.
+
+    Returns:
+        dict with keys ats_score (int, clamped 0-100), points_forts (list[str]),
+        points_faibles (list[str]), suggestions (list[str]), coherence_intention (str).
+
+    Raises:
+        OpenAIError: If the API call fails.
+        ValueError: If all retry attempts fail to produce valid JSON.
+    """
+    # Same fragments as _build_intent_text in routers/profile.py — duplicated on
+    # purpose: agents must not depend on agents/webapp.
+    fragments = []
+    if experience_level == "0-2":
+        fragments.append("Profil junior/débutant, 0 à 2 ans d'expérience")
+    elif experience_level == "2-5":
+        fragments.append("Profil confirmé, 2 à 5 ans d'expérience")
+    elif experience_level == "5+":
+        fragments.append("Profil senior, 5 ans d'expérience et plus")
+    if candidate_description and candidate_description.strip():
+        fragments.append(candidate_description.strip())
+    intent_text = "\n".join(fragments) if fragments else "Aucune intention renseignée par l'utilisateur."
+
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            logger.info("cv_quality_analysis_attempt", attempt=attempt, chars=len(raw_text))
+            response = _openai_client.chat.completions.create(
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": CV_QUALITY_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Intention du candidat :\n{intent_text}\n\nCV :\n\n{raw_text[:8000]}"
+                        ),
+                    },
+                ],
+            )
+            data = json.loads(response.choices[0].message.content)
+            result = {
+                "ats_score": max(0, min(100, int(data["ats_score"]))),
+                "points_forts": [str(x) for x in data.get("points_forts", [])],
+                "points_faibles": [str(x) for x in data.get("points_faibles", [])],
+                "suggestions": [str(x) for x in data.get("suggestions", [])],
+                "coherence_intention": str(data.get("coherence_intention", "")),
+            }
+            logger.info("cv_quality_analysis_succeeded", attempt=attempt, ats_score=result["ats_score"])
+            return result
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+            logger.warning("cv_quality_analysis_attempt_failed", attempt=attempt, exc_info=True)
+            last_error = e
+            time.sleep(1)
+        except OpenAIError:
+            logger.error("cv_quality_analysis_openai_error", attempt=attempt, exc_info=True)
+            raise
+    logger.error("cv_quality_analysis_all_attempts_failed", attempts=MAX_ATTEMPTS)
+    assert last_error is not None  # loop runs MAX_ATTEMPTS times — always set
+    raise ValueError("CV quality analysis failed to produce valid JSON") from last_error
+
+
+def _upsert_cv_analysis(cv_id: str, status: str, **fields) -> None:
+    """Upsert the cv_analyses row for a CV — idempotent on Service Bus redelivery.
+
+    completed_at is only set when status is terminal ("done" or "error").
+
+    Args:
+        cv_id: UUID string of the analysed CV.
+        status: New status value — one of 'processing', 'done', 'error'.
+        **fields: Analysis result columns (ats_score, points_forts, ...).
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    now = datetime.now(timezone.utc)
+    values = {"status": status, **fields}
+    if status in ("done", "error"):
+        values["completed_at"] = now
+    try:
+        with get_session() as session:
+            session.execute(
+                pg_insert(CvAnalysis)
+                .values(id=uuid.uuid4(), cv_id=cv_id, requested_at=now, **values)
+                .on_conflict_do_update(constraint="uq_cv_analyses_cv_id", set_=values)
+            )
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("cv_analysis_upsert_failed", cv_id=cv_id, status=status, exc_info=True)
+        raise
+
+
+def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
+    """Run the CV quality analysis and persist its result — best-effort, never raises.
+
+    Shared by the normal upload flow (run right after ROME extraction succeeds)
+    and by a standalone retry (retry_quality_only message, see main()). A
+    failure is logged and written to cv_analyses as status="error"; it never
+    propagates to the caller, since this analysis is free and non-blocking
+    (see ADR-018 addendum).
+
+    Args:
+        cv_id: UUID string of the CV being analysed.
+        user_id: Owner of the CV, used to look up profile intent.
+        raw_text: Plain text content of the CV.
+    """
+    try:
+        _upsert_cv_analysis(cv_id, "processing")
+        experience_level, candidate_description = _get_profile_intent(user_id)
+        result = _analyze_cv_quality(raw_text, experience_level, candidate_description)
+        _upsert_cv_analysis(cv_id, "done", **result)
+        logger.info("cv_quality_analysis_completed", cv_id=cv_id)
+    except (OpenAIError, SQLAlchemyError, ValueError, KeyError, TypeError):
+        logger.error("cv_quality_analysis_failed", cv_id=cv_id, exc_info=True)
+        try:
+            _upsert_cv_analysis(cv_id, "error")
+        except SQLAlchemyError:
+            logger.error("cv_quality_analysis_error_status_write_failed", cv_id=cv_id, exc_info=True)
+
+
+# ==============================================================================
 # Entry point
 # ==============================================================================
 
@@ -272,6 +448,20 @@ def main() -> None:
     try:
         with receive_message(CV_ANALYSIS_QUEUE) as payload:
             cv_id = payload["cv_id"]
+
+            if payload.get("retry_quality_only", False):
+                # Manual retry from GET /cv/{id}/analysis status="error" (see
+                # POST /cv/{id}/analysis/retry). Only the quality analysis
+                # re-runs — ROME codes already exist and matching is untouched.
+                logger.info("cv_analysis_retry_started", cv_id=cv_id)
+                try:
+                    raw_text, user_id = _get_cv_text(cv_id)
+                except ValueError:
+                    logger.info("cv_analysis_retry_cv_deleted_skipping", cv_id=cv_id)
+                    return
+                _run_quality_analysis(cv_id, user_id, raw_text)
+                logger.info("cv_analysis_retry_completed", cv_id=cv_id)
+                return
 
             logger.info("cv_analysis_started", cv_id=cv_id)
 
@@ -299,6 +489,11 @@ def main() -> None:
                 raise
 
             _set_cv_status(cv_id, "done")
+
+            # CV quality analysis — best-effort, never billed, never blocks the
+            # ROME -> matching pipeline. No raise here, unlike the ROME failure
+            # handling above, which must halt the agent (see ADR-018 addendum).
+            _run_quality_analysis(cv_id, user_id, raw_text)
 
             rome_codes = [item["code"] for item in rome_items]
             try:

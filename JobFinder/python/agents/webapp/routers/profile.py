@@ -183,6 +183,10 @@ def put_profile(
         # request body, so an existing row's embedding is never clobbered
         # with this None default.
         "intent_embedding": intent_embedding,
+        # Credit keys are never in `updated` (absent from ProfileUpdate), so
+        # on_conflict_do_update never touches them for an existing profile.
+        "analysis_credits_remaining": 30,
+        "analysis_credits_reset_at": None,
         "created_at": now,
     }
 

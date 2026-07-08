@@ -671,3 +671,16 @@ Le `except ServiceBusError` de `_dispatch_offer_ready` couvre le contrat actuel,
 `azure.core.exceptions.HttpResponseError` via le credential). Risque faible aujourd'hui vu
 le contrat fire-and-forget (le run planifié suivant rattrape) — à réexaminer si le SLA du
 matching se resserre : soit élargir le catch, soit remonter l'erreur avec retry.
+
+## Agent d'analyse IA — CV seul + paires CV↔offre (feature/agent-analyse-cv-offres, PR #162) — suites identifiées en review
+
+### [optional] Polling de l'analyse de paire — endpoint dédié plutôt que `GET /matches/cv/{cvId}` complet
+`CorrespondancesPanel.tsx` interroge `GET /matches/cv/{cvId}` (liste complète des matchs)
+toutes les 3s tant qu'au moins une analyse manuelle est en attente, pour ne lire que le champ
+`analysis` des offres concernées. Inoffensif à `MATCH_ANALYSIS_AUTO_TOP_N = 1` (peu de matchs
+par CV en bêta), mais devient coûteux si ce seuil augmente ou si un CV accumule beaucoup de
+matchs — chaque tick refetch alors des dizaines/centaines de lignes pour ne lire qu'un ou deux
+statuts. Un endpoint plus chirurgical (ex. `GET /matches/{cvId}/offers/{offerId}/analysis`,
+ou un `GET` batché sur la liste des `offerId` en attente) éviterait de retélécharger tout le
+match list à chaque tick. À faire si `MATCH_ANALYSIS_AUTO_TOP_N` est relevé au-delà de la
+bêta ou si des CVs avec de très nombreux matchs deviennent courants.

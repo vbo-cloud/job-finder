@@ -39,7 +39,7 @@ export default function AuthButton() {
       <button
         type="button"
         onClick={() => void instance.loginRedirect(loginRequest)}
-        className="rounded-full border border-default px-4 py-1 text-xs text-body transition-colors hover:border-hover hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+        className="flex h-8 items-center rounded-full border border-default px-4 text-xs text-body transition-colors hover:border-hover hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
       >
         Se connecter
       </button>
@@ -51,7 +51,7 @@ export default function AuthButton() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-full border border-soft bg-card py-1 pl-3 pr-1 text-xs text-primary transition-colors hover:border-default hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+        className="flex h-8 items-center gap-2 rounded-full border border-soft bg-card pl-3 pr-1 text-xs text-primary transition-colors hover:border-default hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
       >
         <span>{account?.name?.split(" ")[0] ?? "Mon compte"}</span>
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-badge text-[10px] font-semibold text-strong">

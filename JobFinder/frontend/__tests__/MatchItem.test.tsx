@@ -1,15 +1,17 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import MatchItem, { type MatchItemData } from "@/app/_components/MatchItem";
-import type { MatchOut } from "@/lib/api/types";
+import type { MatchAnalysisOut, MatchOut } from "@/lib/api/types";
 
 function makeMatch(
   score = 0.85,
   offerOverrides: Partial<MatchOut["offer"]> = {},
+  analysis: MatchAnalysisOut | null = null,
 ): MatchOut {
   return {
     score,
     is_new: false,
+    analysis,
     offer: {
       id: "offer-uuid-1",
       ft_id: "FT-001",
@@ -27,6 +29,17 @@ function makeMatch(
   };
 }
 
+function makeAnalysis(overrides: Partial<MatchAnalysisOut> = {}): MatchAnalysisOut {
+  return {
+    status: "done",
+    matched_skills: ["Python", "Docker", "Azure", "Terraform"],
+    points_forts: ["Expérience solide en Python"],
+    points_amelioration: ["Certifications cloud absentes"],
+    synthese: "Cette offre est pertinente pour vous car votre profil correspond.",
+    ...overrides,
+  };
+}
+
 function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
   return {
     match: makeMatch(),
@@ -34,10 +47,12 @@ function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
     isSaved: false,
     isApplied: false,
     isExpanded: false,
+    analysisPending: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onApply: jest.fn(),
     onReject: jest.fn(),
+    onAnalyze: jest.fn(),
     ...overrides,
   };
 }
@@ -147,6 +162,83 @@ describe("MatchItem", () => {
         })} />
       );
       expect(screen.getByText(/Texte complet/)).toBeInTheDocument();
+    });
+  });
+
+  describe("matched skills badges (compact view)", () => {
+    it("shows up to 3 matched_skills badges when an analysis is done", () => {
+      render(
+        <MatchItem {...makeProps({ match: makeMatch(0.85, {}, makeAnalysis()) })} />
+      );
+      expect(screen.getByText("Python")).toBeInTheDocument();
+      expect(screen.getByText("Docker")).toBeInTheDocument();
+      expect(screen.getByText("Azure")).toBeInTheDocument();
+      // 4th skill is cut by the slice(0, 3)
+      expect(screen.queryByText("Terraform")).not.toBeInTheDocument();
+    });
+
+    it("shows no badge when there is no analysis", () => {
+      render(<MatchItem {...makeProps()} />);
+      expect(screen.queryByText("Python")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("agent review column", () => {
+    it("shows the analyze button when no analysis exists", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true })} />);
+      expect(
+        screen.getByRole("button", { name: "Analyser cette offre avec l'IA" })
+      ).toBeInTheDocument();
+    });
+
+    it("calls onAnalyze when the analyze button is clicked", () => {
+      const onAnalyze = jest.fn();
+      render(<MatchItem {...makeProps({ isExpanded: true, onAnalyze })} />);
+      fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+      expect(onAnalyze).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a disabled in-progress button while analysisPending", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true, analysisPending: true })} />);
+      const btn = screen.getByRole("button", { name: "Analyse en cours…" });
+      expect(btn).toBeDisabled();
+    });
+
+    it("shows a disabled in-progress button when the analysis is processing", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, {}, makeAnalysis({ status: "processing" })),
+        })} />
+      );
+      expect(screen.getByRole("button", { name: "Analyse en cours…" })).toBeDisabled();
+    });
+
+    it("renders synthese, points forts and points d'amélioration when done", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, {}, makeAnalysis()),
+        })} />
+      );
+      // synthese shows twice: compact teaser line + expanded review panel
+      expect(screen.getAllByText(/Cette offre est pertinente pour vous/)).toHaveLength(2);
+      expect(screen.getByText("Expérience solide en Python")).toBeInTheDocument();
+      expect(screen.getByText("Certifications cloud absentes")).toBeInTheDocument();
+    });
+
+    it("shows a retry button mentioning the credit cost on error", () => {
+      const onAnalyze = jest.fn();
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          onAnalyze,
+          match: makeMatch(0.85, {}, makeAnalysis({ status: "error" })),
+        })} />
+      );
+      const btn = screen.getByRole("button", { name: /consomme 1 crédit/ });
+      fireEvent.click(btn);
+      expect(onAnalyze).toHaveBeenCalledTimes(1);
     });
   });
 });

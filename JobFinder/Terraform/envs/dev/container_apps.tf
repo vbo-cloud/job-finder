@@ -30,6 +30,7 @@ module "container_app_environment" {
 # Agent 2 — Cleanup (timer: 02:00 UTC)
 # Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
 # Agent 4 — CV Analysis (queue: cv-analysis)
+# Agent 5 — Match Analysis (queue: match-analysis)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -116,6 +117,10 @@ module "job_matching" {
     {
       name  = "MATCHING_SCORE_THRESHOLD"
       value = "0.5"
+    },
+    {
+      name  = "MATCH_ANALYSIS_AUTO_TOP_N"
+      value = "1"
     },
     {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
@@ -313,7 +318,77 @@ module "job_cv_analysis" {
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
     {
-      name  = "AZURE_OPENAI_ROME_DEPLOYMENT"
+      name  = "AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT"
+      value = "gpt-4o-mini"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent match-analysis (queue: match-analysis)
+# ==============================================================================
+module "job_match_analysis" {
+  source = "../../modules/container_app_job"
+
+  name                 = "job-jf-dev-frc-match-analysis"
+  location             = var.location
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
+  environment_id       = module.container_app_environment.id
+  trigger_type         = "queue"
+  queue_name           = "match-analysis"
+  servicebus_namespace = module.servicebus.name
+  image                = "${module.container_registry.login_server}/agents/match-analysis:latest"
+  environment          = var.env
+  project              = var.project
+  owner                = var.owner
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "openai-api-key"
+      value = local.openai_api_key
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT"
       value = "gpt-4o-mini"
     },
     {

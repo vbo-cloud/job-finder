@@ -192,6 +192,139 @@ class TestListCvs:
 
 
 # ---------------------------------------------------------------------------
+# GET /cv/{cv_id}/analysis
+# ---------------------------------------------------------------------------
+
+
+class TestGetCvAnalysis:
+    def test_returns_404_when_cv_not_found(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.get(f"/cv/{uuid.uuid4()}/analysis")
+
+        assert resp.status_code == 404
+
+    def test_returns_pending_when_no_analysis_row(self, test_client, mock_session):
+        cv = MagicMock()
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),    # select CV
+            MagicMock(**{"scalar_one_or_none.return_value": None}),  # select CvAnalysis
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "pending"
+        assert body["ats_score"] is None
+        assert body["points_forts"] == []
+        assert body["points_faibles"] == []
+        assert body["suggestions"] == []
+        assert body["coherence_intention"] is None
+
+    def test_returns_done_analysis(self, test_client, mock_session):
+        cv = MagicMock()
+        analysis = MagicMock()
+        analysis.status = "done"
+        analysis.ats_score = 72
+        analysis.points_forts = ["Structure claire"]
+        analysis.points_faibles = ["Objectif absent"]
+        analysis.suggestions = ["Ajouter un titre"]
+        analysis.coherence_intention = "Cohérent avec le profil."
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": analysis}),
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "done"
+        assert body["ats_score"] == 72
+        assert body["points_forts"] == ["Structure claire"]
+        assert body["coherence_intention"] == "Cohérent avec le profil."
+
+    def test_coerces_null_lists_on_error_row(self, test_client, mock_session):
+        # An "error" row written by the agent has all result columns NULL —
+        # the schema must coerce the JSONB lists to [].
+        cv = MagicMock()
+        analysis = MagicMock()
+        analysis.status = "error"
+        analysis.ats_score = None
+        analysis.points_forts = None
+        analysis.points_faibles = None
+        analysis.suggestions = None
+        analysis.coherence_intention = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": analysis}),
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["points_forts"] == []
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# POST /cv/{cv_id}/analysis/retry
+# ---------------------------------------------------------------------------
+
+
+class TestRetryCvAnalysis:
+    def test_returns_404_when_cv_not_found(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.post(f"/cv/{uuid.uuid4()}/analysis/retry")
+
+        assert resp.status_code == 404
+        mock_send.assert_not_called()
+
+    def test_dispatches_retry_message_and_returns_202(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 202
+        mock_send.assert_called_once_with(
+            "cv-analysis", {"cv_id": str(TEST_CV_ID), "retry_quality_only": True}
+        )
+
+    def test_returns_202_even_if_dispatch_fails(self, test_client, mock_session, mocker):
+        from azure.servicebus.exceptions import ServiceBusError
+
+        mocker.patch.object(cv_router_module, "send_message", side_effect=ServiceBusError("boom"))
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 202
+
+    def test_returns_500_on_db_error(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 500
+        mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # GET /cv/{cv_id}/thumbnail
 # ---------------------------------------------------------------------------
 
@@ -350,7 +483,9 @@ class TestDeleteCv:
         cv.thumbnail_url_lg = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),   # select CV
+            MagicMock(),                                              # delete(MatchAnalysis)
             MagicMock(),                                              # delete(Match)
+            MagicMock(),                                              # delete(CvAnalysis)
             MagicMock(**{"scalar_one_or_none.return_value": None}),  # select UserProfile
         ]
 
@@ -359,6 +494,12 @@ class TestDeleteCv:
         assert resp.status_code == 204
         mock_session.delete.assert_called_once_with(cv)
         mock_session.commit.assert_called_once()
+        # Analyses are deleted before their parent rows — FK constraints have
+        # no CASCADE. Validate the delete order via the compiled statements.
+        stmts = [str(c.args[0]) for c in mock_session.execute.call_args_list[1:4]]
+        assert "DELETE FROM match_analyses" in stmts[0]
+        assert "DELETE FROM matches" in stmts[1]
+        assert "DELETE FROM cv_analyses" in stmts[2]
 
     def test_also_deletes_thumbnail_blob_when_present(
         self, test_client, mock_session, mock_blob_client
@@ -369,6 +510,8 @@ class TestDeleteCv:
         cv.thumbnail_url_lg = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(),
+            MagicMock(),
             MagicMock(),
             MagicMock(**{"scalar_one_or_none.return_value": None}),
         ]
@@ -388,6 +531,8 @@ class TestDeleteCv:
         cv.thumbnail_url_lg = "https://account.blob.core.windows.net/cvs/user/cv_thumb_lg.jpg"
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(),
+            MagicMock(),
             MagicMock(),
             MagicMock(**{"scalar_one_or_none.return_value": None}),
         ]

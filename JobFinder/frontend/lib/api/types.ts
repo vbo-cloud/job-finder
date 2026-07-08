@@ -26,6 +26,10 @@ export interface ProfileData {
   commune_codes: string[];
   experience_level: "0-2" | "2-5" | "5+" | null;
   candidate_description: string | null;
+  /** Starts at 30 (beta welcome gift, non-renewable — ADR-018), decremented by
+   * 1 per manual match analysis (POST /matches/.../analyze). Auto-triggered
+   * analyses (top-N per matching run) never consume credits. */
+  analysis_credits_remaining: number;
 }
 
 export interface OfferOut {
@@ -42,9 +46,27 @@ export interface OfferOut {
   expires_at: string | null;
 }
 
+export interface CvAnalysisOut {
+  status: "pending" | "processing" | "done" | "error";
+  ats_score: number | null;
+  points_forts: string[];
+  points_faibles: string[];
+  suggestions: string[];
+  coherence_intention: string | null;
+}
+
+export interface MatchAnalysisOut {
+  status: "pending" | "processing" | "done" | "error";
+  matched_skills: string[];
+  points_forts: string[];
+  points_amelioration: string[];
+  synthese: string | null;
+}
+
 export interface MatchOut {
   score: number;
   offer: OfferOut;
+  analysis: MatchAnalysisOut | null;
   is_new: boolean;
 }
 
