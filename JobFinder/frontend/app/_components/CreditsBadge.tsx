@@ -7,6 +7,7 @@ import Link from "next/link";
 
 import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
+import { onCreditsConsumed } from "@/lib/creditsBus";
 
 /**
  * Pinned pill next to AuthButton showing the user's remaining analysis
@@ -22,14 +23,22 @@ export default function CreditsBadge() {
       setCredits(null);
       return;
     }
-    apiClient
-      .get<ProfileData>("/profile")
-      .then((res) => setCredits(res.data.analysis_credits_remaining))
-      .catch((err: unknown) => {
-        const httpStatus = (err as { response?: { status?: number } })?.response?.status;
-        if (httpStatus === 404) return; // no profile yet — nothing to show
-        console.error("[jf] credits fetch failed:", err);
-      });
+
+    const fetchCredits = () => {
+      apiClient
+        .get<ProfileData>("/profile")
+        .then((res) => setCredits(res.data.analysis_credits_remaining))
+        .catch((err: unknown) => {
+          const httpStatus = (err as { response?: { status?: number } })?.response?.status;
+          if (httpStatus === 404) return; // no profile yet — nothing to show
+          console.error("[jf] credits fetch failed:", err);
+        });
+    };
+
+    fetchCredits();
+    // Refetch after a manual match analysis consumes a credit elsewhere in
+    // the tree — the balance would otherwise go stale until the next mount.
+    return onCreditsConsumed(fetchCredits);
   }, [isAuthenticated]);
 
   if (!isAuthenticated || credits === null) return null;

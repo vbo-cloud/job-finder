@@ -2,11 +2,16 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CorrespondancesPanel from "@/app/_components/CorrespondancesPanel";
 import apiClient from "@/lib/api/client";
+import { onCreditsConsumed } from "@/lib/creditsBus";
 import type { MatchOut } from "@/lib/api/types";
 
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
-  default: { patch: jest.fn().mockResolvedValue({}) },
+  default: {
+    patch: jest.fn().mockResolvedValue({}),
+    post: jest.fn().mockResolvedValue({}),
+    get: jest.fn().mockResolvedValue({ data: { matches: [] } }),
+  },
 }));
 
 const CV_ID = "cv-uuid-1";
@@ -49,6 +54,8 @@ function renderPanel(matches: MatchOut[] = [makeMatch()]) {
 beforeEach(() => {
   localStorage.clear();
   (apiClient.patch as jest.Mock).mockClear();
+  (apiClient.post as jest.Mock).mockClear();
+  (apiClient.get as jest.Mock).mockClear();
 });
 
 describe("CorrespondancesPanel — localStorage contract", () => {
@@ -170,5 +177,23 @@ describe("CorrespondancesPanel — stale local cache reconciliation", () => {
     );
 
     expect(apiClient.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe("CorrespondancesPanel — manual analysis request", () => {
+  it("notifies credits consumed once the analyze request succeeds", async () => {
+    const onConsumed = jest.fn();
+    const unsubscribe = onCreditsConsumed(onConsumed);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i })); // expand
+    fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith(`/matches/${CV_ID}/offers/${OFFER_ID}/analyze`),
+    );
+    await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
+
+    unsubscribe();
   });
 });

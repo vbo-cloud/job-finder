@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
+import { notifyCreditsConsumed } from "@/lib/creditsBus";
 import CvAnalysisCard from "./CvAnalysisCard";
 import MatchList from "./MatchList";
 import { type MatchItemData } from "./MatchItem";
@@ -107,6 +108,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       .post(`/matches/${cvId}/offers/${offerId}/analyze`)
       .then(() => {
         setAnalysisPending((prev) => new Set(prev).add(offerId));
+        notifyCreditsConsumed();
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } })?.response?.status;
