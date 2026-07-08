@@ -4431,3 +4431,82 @@ Après suppression de tous les CVs de la bibliothèque, la vue de correspondance
 
 - **Miroir par effet plutôt qu'appel dans `handleCvDeleted`** : appeler `onCvsChange` dans l'updater de `setCvs` serait un effet de bord dans un updater (double invocation possible en StrictMode) ; l'effet sur `cvs` couvre tous les chemins de mutation présents et futurs.
 - **Garde `if (selectedCvId)` avant le scroll accueil** : la liste est vide au montage initial (avant le premier fetch) — sans le garde, chaque chargement de page déclencherait un `scrollIntoView` parasite.
+
+---
+
+## PR #173 — refactor(frontend): analyse CV sous la vignette (accordéon) + onglets Offres/Sauvegardées
+
+**Date :** 2026-07-08
+**Branche :** `feature/cv-detail-analyse-accordeon` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-cv-detail-analyse-repositionnement.md` : `CvAnalysisCard` était un onglet ("Analyse du CV") dans `CorrespondancesPanel`, à côté des correspondances — mal positionné puisque l'analyse concerne le CV, pas les offres. La colonne gauche (38 %) n'affichait que la vignette.
+
+### Ce qui a été fait
+
+- **`CVDetailSection.tsx`** : `CvAnalysisCard` déplacé sous la vignette dans un accordéon ouvert par défaut (`aria-expanded`/`aria-controls`, chevron rotatif) ; `max-h-[46%]` en lecture ouverte avec scroll interne — la vignette (`flex-1 min-h-0`) se rétrécit mécaniquement, sans mesure manuelle.
+- **`CvAnalysisCard.tsx`** : titre "Analyse de votre CV" retiré — porté désormais par le bouton d'accordéon.
+- **`CorrespondancesPanel.tsx`** : onglets renommés `Offres` (ex-Correspondances) et `Sauvegardées` (ex-Analyse du CV) ; l'onglet Sauvegardées filtre les items sur `isSaved` (bouton favori existant) ; sous-titre d'en-tête dynamique ; barre de filtres et pagination réservées à l'onglet Offres.
+- **`LibrarySection.tsx`** : hint de scroll `CORRESPONDANCES` → `OFFRES`.
+- **Revue** : commentaires ajoutés sur le couplage filtres/onglet Sauvegardées et sur l'intention du cap 46 % ; chevron remplacé par `ChevronDown` de lucide-react (déjà la source d'icônes ailleurs).
+
+**Vérification :** Jest — 24 passed dont `CVDetailSection.test.tsx` (nouveau) et 3 cas "onglet Sauvegardées" ; ESLint propre.
+
+### Décisions techniques
+
+- **Écart vs le prompt, signalé dans la PR** : le bloc de remplacement de la zone de contenu omettait `ref={contentRef}` et `PaginationBar` — appliqué tel quel, il cassait la pagination et le lint (variables inutilisées). Conservés, pagination restreinte à l'onglet Offres.
+- **Persistance de `saved` volontairement hors scope** (entrée BACKLOG séparée) : l'état reste en mémoire pure, remis à zéro au changement de CV.
+- **Limitation acceptée** : les filtres Nouvelles/Vues et la pagination s'appliquent en amont du split Sauvegardées — documenté en commentaire pour éviter un "fix" non concerté.
+
+---
+
+## PR #175 — feat(frontend): bandeau encadrant la zone d'analyse + redimensionnement au drag
+
+**Date :** 2026-07-08
+**Branche :** `feature/cv-analysis-banner` → `dev`
+
+### Contexte
+
+Suite de la PR #173 : la zone d'analyse sous la vignette n'était pas visuellement délimitée (le cadre appartenait à `CvAnalysisCard`, le bandeau de titre flottait au-dessus), le plafond de 46 % était jugé trop bas, et la hauteur n'était pas ajustable.
+
+### Ce qui a été fait
+
+- **Cadre unique** : le wrapper de l'accordéon porte le cadre (`rounded-xl border border-faint bg-chip`) ; `CvAnalysisCard` perd le sien (doublon) et ne garde que son padding.
+- **Bandeau** : bouton pleine largeur, flèche centrée en haut, titre centré en dessous, `border-b` séparant le bandeau du contenu ouvert. Flèche inversée : vers le haut repliée (déplier), vers le bas ouverte (refermer).
+- **Redimensionnement au drag** : maintenir le bandeau et glisser verticalement redimensionne la zone via pointer events, borné entre `ANALYSIS_MIN_HEIGHT_PX` (140 px) et `ANALYSIS_MAX_HEIGHT_RATIO` (80 % de la colonne). Un clic sec (déplacement < 4 px) replie/déplie ; le `click` émis par le navigateur après un drag est avalé (`wasDragRef`). Hauteur choisie conservée entre replis/dépliages.
+- **Hauteur par défaut = maximale** : tant qu'aucun resize manuel n'a eu lieu, la zone ouvre à `h-[80%]` (même borne que le drag max).
+
+**Vérification :** Jest — 4 passed sur `CVDetailSection` dont 2 cas dédiés (un drag ne replie pas la zone ; un appui-relâchement immobile replie) ; ESLint propre.
+
+### Décisions techniques
+
+- **Pointer events plutôt que mouse/touch** : un seul jeu de handlers, `setPointerCapture` garde le drag actif hors du bandeau (optionnel — absent de jsdom, d'où l'appel gardé `?.`).
+- **Seuil de 4 px** pour distinguer clic et drag — le même bouton porte les deux gestes ; `cursor-row-resize` + `touch-none`/`select-none` quand la zone est ouverte.
+- **Défaut fixe plutôt qu'adapté au contenu** : pendant les états courts (analyse en cours, erreur), la zone occupe quand même 80 % avec de l'espace vide — à conditionner au statut `done` si gênant à l'usage.
+
+---
+
+## PR #176 — fix(analysis): température/seed fixés + analyse CV exhaustive + retrait du conseil télétravail non ancré
+
+**Date :** 2026-07-08
+**Branche :** `feature/analysis-determinism-and-depth` → `dev`
+
+### Contexte
+
+Implémentation du prompt Claude Cowork `prompt-analysis-determinism-and-depth.md` — trois problèmes remontés sur une review réelle après la PR #172 : score ATS variant de +10 points entre deux analyses du même CV (aucun `temperature`/`seed` fixé, température par défaut 1.0), review jugée trop superficielle (3-4 points par liste), et suggestion "ajouter une préférence télétravail" persistant alors que `candidate_description` était vide — conseil générique non ancré, et de toute façon non conventionnel sur un CV français.
+
+### Ce qui a été fait
+
+- **`shared/config.py`** : `ANALYSIS_TEMPERATURE` (défaut `0`) et `ANALYSIS_SEED` (défaut `42`), surchargeables par env var.
+- **`agents/cv_analysis/main.py` et `agents/match_analysis/main.py`** : `temperature=`/`seed=` passés aux appels `chat.completions.create` de `_analyze_cv_quality` et `_analyze_match` — les deux agents avaient exactement le même trou.
+- **`CV_QUALITY_SYSTEM_PROMPT`** : règle d'exhaustivité (relecture section par section, chaque erreur réelle relevée, pas de plafond implicite) et règle interdisant de suggérer l'ajout d'une information personnelle/préférence absente du CV et de l'intention — le télétravail se recommande en lettre de motivation ou entretien, pas dans le corps du CV.
+
+**Vérification :** pytest — 50 passed dont 2 nouveaux tests vérifiant `temperature`/`seed` dans les kwargs de l'appel ; aucun test existant n'assertait strictement ces kwargs (vérifié au préalable comme demandé par le prompt).
+
+### Décisions techniques
+
+- **Écart signalé dans la PR** : l'exemple few-shot de la règle non-redondance (PR #172) montrait en ✅ "ajouter le télétravail dans l'objectif du CV" — en contradiction frontale avec la nouvelle règle. Exemple remplacé par un sujet neutre (résultats chiffrés), règle intacte.
+- **`_extract_rome_codes` hors périmètre** : sa sortie est déjà validée contre le référentiel ROME, le non-déterminisme y est sans conséquence.
+- **Le seed OpenAI n'est pas une garantie absolue** de déterminisme, mais combiné à `temperature=0` la variance devient marginale.
+- **Vérifications manuelles restantes** : relancer 2× l'analyse d'un même CV (stabilité du score) ; confirmer en base que `candidate_description` est vide pour l'utilisateur de test — si une mention télétravail y persiste malgré la suppression côté frontend, c'est un bug `PUT /profile` distinct à signaler séparément.
