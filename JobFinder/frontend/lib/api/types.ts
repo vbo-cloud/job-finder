@@ -56,6 +56,7 @@ export interface OfferOut {
 export interface CvAnalysisOut {
   status: "pending" | "processing" | "done" | "error";
   ats_score: number | null;
+  synthese: string | null;
   points_forts: string[];
   points_faibles: string[];
   suggestions: string[];
