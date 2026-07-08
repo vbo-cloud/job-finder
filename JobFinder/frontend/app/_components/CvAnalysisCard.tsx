@@ -15,6 +15,7 @@ const RETRY_BUTTON_CLASS =
 
 // Same hue ramp as scoreTheme() in MatchItem.tsx, without the golden tier —
 // kept local until a third caller makes a shared utility worthwhile.
+// TODO(share): extract alongside scoreTheme() if MatchItem.tsx gets refactored.
 function atsScoreColor(pct: number): string {
   const h = Math.round((pct / 100) * 132);
   return `hsl(${h} 60% 37%)`;

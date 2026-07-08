@@ -64,6 +64,10 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const seenIdsRef = useRef(seenIds);
   seenIdsRef.current = seenIds; // sync ref on every render — read in useMemo without declaring as dep
   // Offer IDs whose pair analysis was manually triggered and is still being polled.
+  // Sets are reference-equal when mutated in place, so every update below builds
+  // a new Set (new Set(prev) / Array.from(prev).filter(...)) rather than mutating
+  // prev directly — mutating it would leave the useEffect/useMemo deps unaware
+  // a change happened.
   const [analysisPending, setAnalysisPending] = useState(new Set<string>());
   // Fresher analyses fetched by the polling — supersede the `matches` prop until
   // the parent refetches (the prop only refreshes on CV/zone change).
@@ -100,7 +104,14 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
         });
     }, ANALYSIS_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [analysisPending, cvId]);
+  }, [
+    // analysisPending as a dep means the interval restarts on every tick where
+    // at least one offer resolves (new Set reference) — the remaining pending
+    // offers can wait up to one extra ANALYSIS_POLL_INTERVAL_MS as a result.
+    // Acceptable at today's scale; revisit if concurrent analyses grow.
+    analysisPending,
+    cvId,
+  ]);
 
   function requestAnalysis(offerId: string) {
     setAnalysisError(null);

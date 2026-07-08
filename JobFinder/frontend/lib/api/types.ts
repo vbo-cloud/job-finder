@@ -26,6 +26,9 @@ export interface ProfileData {
   commune_codes: string[];
   experience_level: "0-2" | "2-5" | "5+" | null;
   candidate_description: string | null;
+  /** Starts at 30 (beta welcome gift, non-renewable — ADR-018), decremented by
+   * 1 per manual match analysis (POST /matches/.../analyze). Auto-triggered
+   * analyses (top-N per matching run) never consume credits. */
   analysis_credits_remaining: number;
 }
 
