@@ -51,6 +51,26 @@ function renderPanel(matches: MatchOut[] = [makeMatch()]) {
   );
 }
 
+/** Distinct offers with strictly decreasing scores so the default
+ * "Pertinence" sort keeps them in creation order. */
+function makeMatches(count: number): MatchOut[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeMatch({
+      score: 0.99 - i * 0.001,
+      offer: {
+        ...makeMatch().offer,
+        id: `offer-${i + 1}`,
+        title: `Offre ${String(i + 1).padStart(2, "0")}`,
+      },
+    }),
+  );
+}
+
+beforeAll(() => {
+  // jsdom does not implement Element.scrollTo (used on page change)
+  Element.prototype.scrollTo = jest.fn();
+});
+
 beforeEach(() => {
   localStorage.clear();
   (apiClient.patch as jest.Mock).mockClear();
@@ -177,6 +197,46 @@ describe("CorrespondancesPanel — stale local cache reconciliation", () => {
     );
 
     expect(apiClient.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe("CorrespondancesPanel — pagination", () => {
+  it("shows only the first 20 offers and a pagination bar when more exist", () => {
+    renderPanel(makeMatches(25));
+
+    expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Offre 20/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Pagination des offres" })).toBeInTheDocument();
+  });
+
+  it("shows the remaining offers after navigating to page 2", () => {
+    renderPanel(makeMatches(25));
+
+    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+
+    expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Offre 25/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 01/ })).not.toBeInTheDocument();
+  });
+
+  it("hides the pagination bar when 20 offers or fewer", () => {
+    renderPanel(makeMatches(20));
+
+    expect(screen.queryByRole("navigation", { name: "Pagination des offres" })).not.toBeInTheDocument();
+  });
+
+  it("returns to page 1 when the visible set is redefined (sort change)", () => {
+    renderPanel(makeMatches(25));
+
+    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+    expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+
+    // Same 25 offers, same A→Z order as by score — only the page should change
+    fireEvent.change(screen.getByDisplayValue("Trier : Pertinence"), { target: { value: "az" } });
+
+    expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
   });
 });
 

@@ -7,9 +7,11 @@ import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
 import { notifyCreditsConsumed } from "@/lib/creditsBus";
 import CvAnalysisCard from "./CvAnalysisCard";
 import MatchList from "./MatchList";
+import PaginationBar from "./PaginationBar";
 import { type MatchItemData } from "./MatchItem";
 
 const ANALYSIS_POLL_INTERVAL_MS = 3000;
+const PAGE_SIZE = 20;
 
 type SortKey = "score" | "salary" | "az";
 type ContractFilter = "Tous" | "CDI" | "CDD";
@@ -57,6 +59,8 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters]       = useState({ nouvelle: true, vue: true });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [page, setPage]             = useState(1);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [saved, setSaved]           = useState(new Set<string>());
   const [applied, setApplied]       = useState(new Set<string>());
   const [rejected, setRejected]     = useState(new Set<string>());
@@ -192,7 +196,24 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     // seenIdsRef intentionally absent from deps — it's a ref, not reactive state
   }, [matches, rejected, query, contract, minScore, filters, sort]);
 
-  const items: MatchItemData[] = filtered.map((m) => {
+  // Back to page 1 whenever the visible set is redefined by the user
+  useEffect(() => {
+    setPage(1);
+  }, [query, contract, minScore, filters, sort, cvId]);
+
+  // Clamp instead of resetting when `filtered` shrinks in place (e.g. an offer
+  // rejected on the last page) so the user stays as close as possible to where
+  // they were.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  function goToPage(p: number) {
+    setPage(p);
+    contentRef.current?.scrollTo({ top: 0 });
+  }
+
+  const items: MatchItemData[] = paginated.map((m) => {
     const override = analysisOverrides.get(m.offer.id);
     return {
       match:      override ? { ...m, analysis: override } : m,
@@ -311,7 +332,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       )}
 
       {/* Content area */}
-      <div className="flex-1 overflow-y-auto px-[22px] py-4 pb-12">
+      <div ref={contentRef} className="flex-1 overflow-y-auto px-[22px] py-4 pb-12">
         {tab === "Analyse du CV" ? (
           <CvAnalysisCard cvId={cvId} />
         ) : error ? (
@@ -329,6 +350,9 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
               rejectedCount={rejected.size}
               onRestoreAll={() => setRejected(new Set())}
             />
+            {!loading && (
+              <PaginationBar page={currentPage} totalPages={totalPages} onPageChange={goToPage} />
+            )}
           </>
         )}
       </div>
