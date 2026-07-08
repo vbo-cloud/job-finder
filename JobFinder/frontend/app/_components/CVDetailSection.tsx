@@ -200,17 +200,17 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
                 est porté ici, CvAnalysisCard n'a plus le sien. Un clic sur le bandeau
                 replie/déplie ; maintenir et glisser verticalement redimensionne la
                 zone (bornes ANALYSIS_MIN_HEIGHT_PX / ANALYSIS_MAX_HEIGHT_RATIO).
-                Tant qu'aucun resize manuel n'a eu lieu, max-h-[69%] ≈ deux tiers de
-                la colonne plafonne l'analyse (scroll interne au-delà) pour que la
-                vignette (flex-1 min-h-0) reste toujours visible ; après un resize,
-                la hauteur inline choisie s'applique, avec max-h-[80%] en garde-fou
-                si la fenêtre rétrécit. */}
+                Tant qu'aucun resize manuel n'a eu lieu, la zone ouvre à sa hauteur
+                maximale — h-[80%], la même borne que ANALYSIS_MAX_HEIGHT_RATIO — et
+                la vignette (flex-1 min-h-0) prend le reste ; après un resize, la
+                hauteur inline choisie s'applique, avec max-h-[80%] en garde-fou si
+                la fenêtre rétrécit. */}
             <div
               ref={analysisBoxRef}
               style={analysisOpen && analysisHeight !== null ? { height: analysisHeight } : undefined}
               className={cn(
                 "w-full shrink-0 flex flex-col min-h-0 rounded-xl border border-faint bg-chip overflow-hidden",
-                analysisOpen && (analysisHeight === null ? "max-h-[69%]" : "max-h-[80%]"),
+                analysisOpen && (analysisHeight === null ? "h-[80%]" : "max-h-[80%]"),
               )}
             >
               <button
