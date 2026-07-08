@@ -135,7 +135,10 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
 
             {/* Analyse du CV — repliable, sous la vignette. shrink-0 + max-h borné en
                 lecture ouverte ; la vignette au-dessus (flex-1 min-h-0) se rétrécit
-                automatiquement pour lui laisser la place, sans mesure manuelle. */}
+                automatiquement pour lui laisser la place, sans mesure manuelle.
+                46% ≈ la moitié de la colonne : plafonne l'analyse (scroll interne
+                au-delà) pour que la vignette reste toujours visible. À réévaluer si
+                la colonne gauche change de hauteur ou gagne un nouvel enfant. */}
             <div className={cn("w-full shrink-0 flex flex-col min-h-0", analysisOpen && "max-h-[46%]")}>
               <button
                 onClick={() => setAnalysisOpen((o) => !o)}

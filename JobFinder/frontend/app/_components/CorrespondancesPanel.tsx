@@ -232,6 +232,10 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     };
   });
 
+  // Intentional coupling: `items` is already narrowed upstream by the
+  // Nouvelles/Vues filters and pagination (see `filtered`/`paginated`), so a
+  // saved offer hidden by those won't show here either. Accepted trade-off —
+  // the saved list is short by nature; don't "fix" without a product decision.
   const displayedItems = tab === "Sauvegardées" ? items.filter((i) => i.isSaved) : items;
 
   const filterActive = !(filters.nouvelle && filters.vue);
