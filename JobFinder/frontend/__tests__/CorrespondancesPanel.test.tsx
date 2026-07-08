@@ -240,6 +240,38 @@ describe("CorrespondancesPanel — pagination", () => {
   });
 });
 
+describe("CorrespondancesPanel — onglet Sauvegardées", () => {
+  it("shows a saved offer in the Sauvegardées tab", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegarder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    expect(screen.getByRole("button", { name: /Ingénieur Cloud/i })).toBeInTheDocument();
+  });
+
+  it("is empty by default when no offer is saved", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    expect(screen.queryByRole("button", { name: /Ingénieur Cloud/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Aucune offre ne correspond")).toBeInTheDocument();
+  });
+
+  it("does not show unsaved offers in the Sauvegardées tab", () => {
+    const [first, second] = makeMatches(2);
+    renderPanel([first, second]);
+
+    // Save only the first offer via its bookmark button
+    fireEvent.click(screen.getAllByRole("button", { name: "Sauvegarder" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 02/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("CorrespondancesPanel — manual analysis request", () => {
   it("notifies credits consumed once the analyze request succeeds", async () => {
     const onConsumed = jest.fn();
