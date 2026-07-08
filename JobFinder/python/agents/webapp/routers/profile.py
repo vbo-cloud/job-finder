@@ -4,12 +4,14 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
+from azure.servicebus.exceptions import ServiceBusError
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from shared.bus import send_message
 from shared.embedder import embed
 from shared.models import CV, UserProfile
 from auth import get_current_user
@@ -17,10 +19,11 @@ from dependencies import get_db
 from routers.cv import _delete_cv
 from schemas import ProfileOut, ProfileUpdate
 
+OFFER_READY_QUEUE = "offer-ready"
+_INTENT_FIELDS = {"experience_level", "candidate_description"}
+
 router = APIRouter(prefix="/profile", tags=["profile"])
 logger = structlog.get_logger()
-
-_INTENT_FIELDS = {"experience_level", "candidate_description"}
 
 
 def _build_intent_text(
@@ -43,6 +46,33 @@ def _build_intent_text(
     if candidate_description and candidate_description.strip():
         fragments.append(candidate_description.strip())
     return "\n".join(fragments)
+
+
+def _dispatch_offer_ready(user_id: str, run_date: str) -> None:
+    """Send an offer-ready message so the matching agent re-scores existing offers.
+
+    Fire-and-forget: a Service Bus failure is logged but never fails the request —
+    the profile is already committed and the next scheduled matching run will pick
+    up the new intent_embedding anyway.
+
+    Args:
+        user_id: Authenticated user ID, for log correlation only.
+        run_date: ISO date (YYYY-MM-DD) stamped on the message.
+    """
+    try:
+        send_message(
+            OFFER_READY_QUEUE,
+            {
+                "run_date": run_date,
+                "rome_codes": [],
+                "new_offers_count": 0,
+                "embedded_count": 0,
+                "trigger": "profile_update",
+            },
+        )
+        logger.info("profile_put_offer_ready_sent", user_id=user_id)
+    except ServiceBusError:
+        logger.error("profile_put_offer_ready_failed", user_id=user_id, exc_info=True)
 
 
 @router.get("", response_model=ProfileOut)
@@ -94,6 +124,10 @@ def put_profile(
     Preferences only — rome_codes are managed by the CV upload pipeline
     and are never overwritten here.
 
+    When experience_level or candidate_description actually changes, an
+    offer-ready message is dispatched after commit so the matching agent
+    re-scores existing offers against the new intent_embedding.
+
     Args:
         body: New profile preferences.
         user_id: Authenticated user ID from the JWT sub claim.
@@ -111,6 +145,7 @@ def put_profile(
     updated = body.model_dump(exclude_unset=True)
 
     intent_embedding = None
+    intent_changed = False
     if updated.keys() & _INTENT_FIELDS:
         # A partial PUT (e.g. experience_level only) must not drop the other
         # field from the embedding — fall back to the existing row for any
@@ -118,16 +153,14 @@ def put_profile(
         existing = session.execute(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
-        intent_text = _build_intent_text(
-            updated.get(
-                "experience_level",
-                existing.experience_level if existing else None,
-            ),
-            updated.get(
-                "candidate_description",
-                existing.candidate_description if existing else None,
-            ),
+        old_experience = existing.experience_level if existing else None
+        old_description = existing.candidate_description if existing else None
+        new_experience = updated.get("experience_level", old_experience)
+        new_description = updated.get("candidate_description", old_description)
+        intent_changed = (
+            new_experience != old_experience or new_description != old_description
         )
+        intent_text = _build_intent_text(new_experience, new_description)
         if intent_text:
             embedded = embed([intent_text])
             intent_embedding = embedded[0] if embedded else None
@@ -183,6 +216,10 @@ def put_profile(
         # violation, timeout) should abort the upsert and return 500.
         logger.error("profile_put_failed", user_id=user_id, exc_info=True)
         raise
+
+    # Sent after commit: matching must see the new intent_embedding when it runs.
+    if intent_changed:
+        _dispatch_offer_ready(user_id, now.date().isoformat())
 
     logger.info("profile_put_completed", user_id=user_id)
     return ProfileOut.model_validate(profile)
