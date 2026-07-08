@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from azure.servicebus.exceptions import ServiceBusError
 
 from shared.bus import receive_message, send_message
+from shared.config import ANALYSIS_SEED, ANALYSIS_TEMPERATURE
 from shared.db import get_session, run_migrations
 from shared.models import CV, CvAnalysis, UserProfile
 from shared.telemetry import configure_telemetry
@@ -391,6 +392,8 @@ def _analyze_cv_quality(
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
+                temperature=ANALYSIS_TEMPERATURE,
+                seed=ANALYSIS_SEED,
                 messages=[
                     {"role": "system", "content": CV_QUALITY_SYSTEM_PROMPT},
                     {

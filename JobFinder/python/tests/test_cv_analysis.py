@@ -413,6 +413,19 @@ class TestAnalyzeCvQuality:
 
         assert mock_create.call_count == 1
 
+    def test_pins_temperature_and_seed_for_determinism(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_cv_quality("cv text", None, None)
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
+        assert kwargs["seed"] == _mod.ANALYSIS_SEED
+
 
 # ---------------------------------------------------------------------------
 # _upsert_cv_analysis
