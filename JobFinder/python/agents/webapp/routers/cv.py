@@ -408,6 +408,64 @@ def list_cvs(
     return result
 
 
+def _backfill_cv_analysis(session: Session, cv_id: uuid.UUID, user_id: str) -> None:
+    """Create a pending cv_analyses row and dispatch a quality-only analysis.
+
+    Self-healing for CVs that have no analysis row and whose upload-time
+    dispatch will never recur: CVs uploaded before the cv_analyses feature
+    existed, or whose agent run crashed before writing any row. Without this,
+    GET /cv/{id}/analysis reports "pending" forever and the frontend polls
+    a result that will never arrive.
+
+    The pending row is inserted first, as a claim — the frontend polls every
+    few seconds, and only the poll that wins the insert dispatches; otherwise
+    each poll would enqueue a new message until the agent writes the row.
+    On dispatch failure the claim is flipped to "error" so the UI offers the
+    manual retry button instead of waiting on a message that never left.
+
+    Best-effort: any DB error is logged and swallowed — the caller's read
+    already succeeded and must not turn into a 500 because healing failed.
+
+    Args:
+        session: Active database session.
+        cv_id: UUID of the CV missing its analysis row.
+        user_id: Owner of the CV, for log correlation only.
+    """
+    try:
+        claimed = session.execute(
+            pg_insert(CvAnalysis)
+            .values(
+                id=uuid.uuid4(),
+                cv_id=cv_id,
+                status="pending",
+                requested_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_nothing(constraint="uq_cv_analyses_cv_id")
+            .returning(CvAnalysis.id)
+        ).scalar_one_or_none()
+        session.commit()
+    except SQLAlchemyError:
+        logger.error("cv_analysis_backfill_claim_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        return
+
+    if claimed is None:
+        # Another poll (or the agent itself) already created the row.
+        return
+
+    try:
+        send_message(CV_ANALYSIS_QUEUE, {"cv_id": str(cv_id), "retry_quality_only": True})
+        logger.info("cv_analysis_backfill_dispatched", user_id=user_id, cv_id=str(cv_id))
+    except ServiceBusError:
+        logger.error("cv_analysis_backfill_dispatch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        try:
+            session.execute(
+                update(CvAnalysis).where(CvAnalysis.cv_id == cv_id).values(status="error")
+            )
+            session.commit()
+        except SQLAlchemyError:
+            logger.error("cv_analysis_backfill_error_status_write_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+
+
 @router.get("/{cv_id}/analysis", response_model=CvAnalysisOut)
 def get_cv_analysis(
     cv_id: uuid.UUID,
@@ -419,6 +477,10 @@ def get_cv_analysis(
     Returns status="pending" (all other fields empty/None) if the CV exists but the
     cv_analysis agent has not written a row yet — the row is only created by the
     agent itself, never at upload time.
+
+    If no row exists and the CV is past the upload pipeline (status is neither
+    "pending" nor "processing"), the upload-time analysis will never arrive —
+    a quality-only analysis is re-dispatched (see _backfill_cv_analysis).
 
     Args:
         cv_id: UUID of the CV.
@@ -456,6 +518,11 @@ def get_cv_analysis(
         status=analysis.status if analysis else "pending",
     )
     if analysis is None:
+        if cv.status not in ("pending", "processing"):
+            # The CV finished (or failed) its upload pipeline without an
+            # analysis row — predates the cv_analyses feature or the agent
+            # crashed before writing anything. Heal it now.
+            _backfill_cv_analysis(session, cv_id, user_id)
         return CvAnalysisOut(status="pending")
     return CvAnalysisOut.model_validate(analysis)
 

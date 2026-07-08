@@ -173,64 +173,78 @@ def main() -> None:
         logger.error("migrations_failed", exc_info=True)
         raise
 
-    with receive_message(OFFER_READY_QUEUE) as msg:
-        run_date = msg.get("run_date", "")
-        logger.info("matching_run_started", run_date=run_date)
+    # receive_message is a @contextmanager that yields the decoded payload dict
+    # and handles complete/abandon on exit. RuntimeError means no messages available.
+    try:
+        with receive_message(OFFER_READY_QUEUE) as msg:
+            run_date = msg.get("run_date", "")
+            logger.info("matching_run_started", run_date=run_date)
 
-        all_matches: list[dict] = []
-        new_matches = 0
-        offers_available: int = 0
-        newly_enqueued: list[uuid.UUID] = []
-        try:
-            with get_session() as session:
-                offers_available = session.execute(
-                    select(func.count()).select_from(Offer).where(Offer.embedding.isnot(None))
-                ).scalar()
-                all_matches = _get_all_matches(session)
-                if all_matches:
-                    new_matches = _upsert_matches(all_matches, session)
-                newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
-                # Advance CVs whose analysis is complete ("done") to "matched" so the
-                # frontend can distinguish "matching in progress" from "0 real results".
-                session.execute(
-                    update(CV).where(CV.status == "done").values(status="matched")
-                )
-                session.commit()
-        except SQLAlchemyError:
-            logger.error("matching_failed", exc_info=True)
-            raise
-
-        # Dispatched after commit — fire-and-forget, never fails the matching run
-        # (same trade-off as cv_upload_analysis_trigger_failed in routers/cv.py).
-        for match_id in newly_enqueued:
+            all_matches: list[dict] = []
+            new_matches = 0
+            offers_available: int = 0
+            newly_enqueued: list[uuid.UUID] = []
             try:
-                send_message(MATCH_ANALYSIS_QUEUE, {"match_id": str(match_id)})
-            except ServiceBusError:
-                logger.error("matching_analysis_dispatch_failed", match_id=str(match_id), exc_info=True)
+                with get_session() as session:
+                    offers_available = session.execute(
+                        select(func.count()).select_from(Offer).where(Offer.embedding.isnot(None))
+                    ).scalar()
+                    all_matches = _get_all_matches(session)
+                    if all_matches:
+                        new_matches = _upsert_matches(all_matches, session)
+                    newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
+                    # Advance CVs whose analysis is complete ("done") to "matched" so the
+                    # frontend can distinguish "matching in progress" from "0 real results".
+                    session.execute(
+                        update(CV).where(CV.status == "done").values(status="matched")
+                    )
+                    session.commit()
+            except SQLAlchemyError:
+                logger.error("matching_failed", exc_info=True)
+                raise
 
-        if not all_matches:
-            logger.info("matching_no_cvs_found")
-            return
+            # Dispatched after commit — fire-and-forget, never fails the matching run
+            # (same trade-off as cv_upload_analysis_trigger_failed in routers/cv.py).
+            for match_id in newly_enqueued:
+                try:
+                    send_message(MATCH_ANALYSIS_QUEUE, {"match_id": str(match_id)})
+                except ServiceBusError:
+                    logger.error("matching_analysis_dispatch_failed", match_id=str(match_id), exc_info=True)
 
-        cvs_processed = len({m["cv_id"] for m in all_matches})
+            if not all_matches:
+                logger.info("matching_no_cvs_found")
+                return
 
-        send_message(
-            MATCH_READY_QUEUE,
-            {
-                "run_date": run_date,
-                "cvs_processed": cvs_processed,
-                "new_matches": new_matches,
-                "offers_available": offers_available,
-            },
-        )
+            cvs_processed = len({m["cv_id"] for m in all_matches})
 
-        logger.info(
-            "matching_run_completed",
-            run_date=run_date,
-            cvs_processed=cvs_processed,
-            new_matches=new_matches,
-            offers_available=offers_available,
-        )
+            send_message(
+                MATCH_READY_QUEUE,
+                {
+                    "run_date": run_date,
+                    "cvs_processed": cvs_processed,
+                    "new_matches": new_matches,
+                    "offers_available": offers_available,
+                },
+            )
+
+            logger.info(
+                "matching_run_completed",
+                run_date=run_date,
+                cvs_processed=cvs_processed,
+                new_matches=new_matches,
+                offers_available=offers_available,
+            )
+
+    except RuntimeError:
+        # receive_message returns without yielding when the queue is empty —
+        # typically a manual "Run now" without a pending offer-ready message.
+        # Unlike cv_analysis/match_analysis (per-message workers where an
+        # empty-queue race is a normal no-op), a matching run that consumed
+        # nothing must be reported Failed: it performed no matching and must
+        # not look like a successful run. The log line states the cause; the
+        # re-raise makes the execution exit non-zero.
+        logger.error("matching_no_message_failing_run")
+        raise
 
 
 if __name__ == "__main__":

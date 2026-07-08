@@ -4140,3 +4140,46 @@ Le prompt système de l'agent `match_analysis` (PR #162) était resté à sa ver
 - **Un seul validator `mode="before"` pour `points_amelioration`** (NULL → `[]` + coercition legacy) plutôt que deux validators empilés : l'ordre d'exécution de deux before-validators sur le même champ est une subtilité Pydantic qu'un seul validator élimine.
 - **`questions_entretien_potentielles` ajoutée au validator NULL → `[]` existant** : même régime que les autres colonnes JSONB de liste — NULL tant que l'agent n'a pas écrit une ligne `done`, et NULL définitif sur les lignes analysées avant 020.
 - **Deux retours de revue déclinés, avec justification** : (1) l'asymétrie colonne nullable / défaut Pydantic `[]` sur `questions_entretien_potentielles` est exactement le régime existant de `points_forts`/`points_amelioration`, déjà documenté par le commentaire du validator — la faire diverger (colonne `default=list` façon `matched_skills`) créerait une incohérence avec la migration 020 (`NULL`) ; (2) les commentaires `//` dans le bloc JSON du prompt font partie du texte validé avec Claude Cowork — le restructurer passe par lui, et `response_format=json_object` garantit de toute façon une sortie sans commentaires.
+
+---
+
+## PR #163 — fix: backfill des analyses CV manquantes + timeout de réception Service Bus
+
+**Date :** 2026-07-08
+**Branche :** `fix/cv-analysis-backfill-and-receive-timeout` → `dev`
+
+### Contexte
+
+Deux symptômes remontés par l'utilisateur après le déploiement des PR #161 et #162 : « changer la description ne relance pas le matching » et « la review du CV reste bloquée sur "Analyse de votre CV en cours" pour mes CV déjà en place ». Session de diagnostic menée directement dans Azure (Log Analytics, files Service Bus, exécutions Container App Jobs) plutôt que dans le code seul — les trois conclusions ci-dessous en sont sorties, dont un faux positif.
+
+**Le re-matching sur changement d'intention (PR #161) fonctionne.** Les logs de production le prouvent : à 09:36:58 UTC, la suppression d'un « . » dans les informations complémentaires a produit `profile_intent_changed (description_changed=True)` puis `profile_put_offer_ready_sent` ; le job matching a consommé le message à 09:37:10 et terminé à 09:37:39 (`matching_run_completed cvs_processed=2 new_matches=408`). Le PUT de 10:11 pointé comme « sans effet » ne contenait aucun champ d'intention (c'était l'enregistrement de zone de communes de la page d'accueil — la page profil, elle, envoie toujours les deux champs). La fonctionnalité a été perçue comme cassée car l'UI n'en montre rien : pas d'indicateur « matching relancé », pas de rafraîchissement des correspondances — noté au backlog en `[recommandé]`.
+
+**Le blocage « Analyse de votre CV en cours » est un vrai bug de la PR #162.** Les CV importés avant cette PR n'ont aucune ligne `cv_analyses`, et le dispatch de l'analyse n'a lieu qu'à l'upload : `GET /cv/{id}/analysis` masquait l'absence de ligne en renvoyant `status="pending"`, `CvAnalysisCard` pollait toutes les 3 s un résultat qui ne pouvait jamais arriver, et le bouton « Relancer » n'apparaît que sur `error`. Aucune issue dans l'UI.
+
+**Bug latent découvert au passage :** l'exécution matching `c1ak134` (09:48 UTC) a échoué en `DeadlineExceeded` — `receive_messages` sans `max_wait_time` bloque indéfiniment sur une queue vide, alors que le chemin « queue vide → RuntimeError » documenté dans `bus.py` suppose un retour. Cause identifiée après coup avec l'utilisateur : c'était son **rerun manuel** du job, lancé alors que la queue était vide (le message de 09:36 avait déjà été consommé par le run automatique de 09:37) — le job a pendu 5 minutes en attente d'un message inexistant, a été tué par le replica timeout et remonté **Failed**. Le même blocage frapperait une course KEDA (job déclenché pour un message consommé par un run chevauchant ou expiré vers la DLQ avant le démarrage du conteneur) ; le correctif couvre les deux cas.
+
+### Ce qui a été fait
+
+**Backend (`agents/webapp/routers/cv.py`) :**
+- `GET /cv/{id}/analysis` devient auto-réparateur : si aucune ligne n'existe et que le CV a dépassé le pipeline d'upload (statut ∉ {pending, processing}), l'endpoint réserve une ligne `pending` puis re-dispatche un message `retry_quality_only` (helper `_backfill_cv_analysis`).
+- La réservation passe par `INSERT ... ON CONFLICT DO NOTHING ... RETURNING` : avec le polling frontend à 3 s, seul le poll qui gagne l'insert dispatche — sans cette réclamation, chaque tick enverrait un nouveau message jusqu'à ce que l'agent écrive la ligne.
+- Si l'envoi Service Bus échoue, la réservation bascule en `error` : l'UI affiche alors le bouton « Relancer l'analyse » au lieu d'attendre un message jamais parti.
+- Rattrapage best-effort de bout en bout : toute erreur (DB ou bus) est loguée et avalée — une lecture qui a réussi ne devient jamais un 500 parce que la réparation a échoué.
+- Aucun changement frontend : la carte polle déjà, elle se remplit seule au passage de l'agent (~30–60 s).
+
+**Shared (`shared/bus.py`) :**
+- `receive_message` passe `max_wait_time=RECEIVE_MAX_WAIT_SECONDS` (30 s) à `receive_messages` — le chemin « queue vide » existe désormais réellement : le job sort proprement en `no_message` au lieu de pendre jusqu'au timeout du replica.
+
+**Matching (`agents/matching/main.py`) :**
+- Question de l'utilisateur (« le job marchera sans message ? ») qui a révélé un trou dans le fix : `matching` n'attrapait pas le `RuntimeError` levé quand `receive_message` ne yield pas (queue vide) — l'exécution échouait en traceback brut, sans log expliquant la cause. D'abord aligné sur `cv_analysis`/`match_analysis` (no-op « Succeeded »), puis **décision inverse actée avec l'utilisateur** : un run matching qui n'a rien consommé n'a fait aucun matching et ne doit pas ressembler à un succès — `except RuntimeError` → `logger.error("matching_no_message_failing_run")` puis re-raise, l'exécution sort en « Failed » en ~30 s avec un log explicite (au lieu de 5 min de blocage muet). L'asymétrie avec les deux autres agents est volontaire : ce sont des workers par message où une queue vide est une course normale sans travail attendu, alors qu'un run matching est censé traiter quelque chose.
+
+**Tests (`test_webapp_cv.py`) :** 5 nouveaux tests sur le backfill — dispatch pour un CV terminal sans ligne, aucun dispatch pendant le pipeline d'upload, réservation perdue → pas de dispatch, échec d'envoi → ligne en `error` (réponse toujours 200), erreur DB sur la réservation → toujours 200. Suite complète : 189 passed.
+
+### Décisions techniques
+
+- **Auto-rattrapage dans le GET plutôt qu'un script de backfill one-shot** : un script ponctuel aurait réparé les CV existants mais pas les cas futurs (crash de l'agent avant toute écriture de ligne) ; le GET se déclenche exactement quand un utilisateur regarde l'analyse, ne répare que ce qui est consulté, et ne nécessite aucune opération manuelle au déploiement.
+- **Réservation en base avant dispatch, plutôt que dispatch à chaque détection** : le polling 3 s de `CvAnalysisCard` transformerait sinon chaque affichage en rafale de messages Service Bus (et d'exécutions de job KEDA) tant que l'agent n'a pas écrit sa ligne.
+- **Garde sur le statut du CV (∉ pending/processing) plutôt que sur l'âge de la ligne** : pendant le pipeline d'upload, l'absence de ligne est légitime (l'agent ne l'écrit qu'en cours de traitement) — déclencher le backfill là créerait des doublons d'analyse systématiques à chaque upload.
+- **`max_wait_time=30 s`** : largement suffisant pour un message réellement présent (retour immédiat), assez long pour absorber une lenteur d'authentification/connexion AMQP, très en dessous du replica timeout de 300 s qui transformait chaque course KEDA/message en exécution `Failed`.
+- **Diagnostic en production avant tout code** : les deux symptômes remontés pointaient vers la PR #161 ; les logs ont montré que le premier était un faux positif (le mécanisme fonctionnait, seul le feedback UI manque) et que le second venait de la PR #162 — sans cette vérification, le correctif aurait visé le mauvais composant.
+

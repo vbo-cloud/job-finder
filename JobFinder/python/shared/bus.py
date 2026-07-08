@@ -10,6 +10,8 @@ from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.exceptions import ServiceBusError
 
+RECEIVE_MAX_WAIT_SECONDS = 30
+
 logger = structlog.get_logger()
 
 _namespace = os.environ.get("AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE")
@@ -61,7 +63,15 @@ def receive_message(queue_name: str) -> Generator[dict, None, None]:
     logger.info("servicebus_receive_started", queue=queue_name)
     with ServiceBusClient(fully_qualified_namespace=_namespace, credential=_credential) as client:
         with client.get_queue_receiver(queue_name) as receiver:
-            messages = receiver.receive_messages(max_message_count=1)
+            # max_wait_time is required for the empty-queue path to exist at
+            # all: without it the SDK blocks until a message arrives. KEDA can
+            # fire a job for a message that is gone by the time the container
+            # starts (consumed by an overlapping run, expired to the DLQ) —
+            # the job must then exit as "no message", not hang until its
+            # replica timeout kills it and reports the execution as Failed.
+            messages = receiver.receive_messages(
+                max_message_count=1, max_wait_time=RECEIVE_MAX_WAIT_SECONDS
+            )
             if not messages:
                 logger.info("servicebus_no_messages", queue=queue_name)
                 return

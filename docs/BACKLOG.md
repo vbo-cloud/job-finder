@@ -137,7 +137,9 @@ Page d'accueil avec l'animation sphères + upload CV.
 
 ---
 
-### [M4 bis — PR 8] Agent cv-review — analyse CV vs offres (forces/faiblesses/suggestions)
+### [SUPERSEDED — voir ADR-018] Agent cv-review — analyse CV vs offres (forces/faiblesses/suggestions)
+
+> ⚠️ Conception remplacée par `docs/adr/ADR-018-monetization-architecture.md` : review globale par CV → analyse par paire CV↔offre (table `match_analyses`), déclenchée automatiquement sur le top N courant par palier + à la demande via crédits. Le détail ci-dessous est conservé pour mémoire mais ne doit plus servir de base d'implémentation.
 
 Agent Python consommant `match-ready`. Analyse le CV contre les top offres matchées et produit une review structurée.
 
@@ -339,6 +341,45 @@ au lieu de les afficher. Ne garder en console que les identifiants non sensibles
 fraîchement généré (le bloc idempotent ne régénère pas un secret encore valide).
 
 **Fichier :** `JobFinder/powershell/setup-entra-external-tenant.ps1`
+
+---
+
+### [hardening, pre-v1.0.0] Passe sécurité — séparation des privilèges, à commencer par PostgreSQL
+
+**Contexte**
+
+Diagnostic remonté par Claude Code (session d'investigation, pas encore de correctif appliqué) :
+il n'existe aujourd'hui qu'un seul rôle Postgres, `administrator_login` (superutilisateur), avec un
+unique mot de passe généré (`random_password.admin`). Ce rôle est stocké une seule fois dans Key
+Vault (`postgresql-connection-string`, `main.tf:74-82`) et cette même chaîne de connexion admin est
+injectée telle quelle comme `DATABASE_URL` dans **tous** les services : le webapp (seul service
+exposé publiquement, qui accepte des uploads de CV/PDF venant d'utilisateurs non fiables) ET tous
+les jobs batch internes (`offer_fetching`, `matching`, `cv_analysis`...). Aucun `CREATE ROLE` limité,
+aucun `GRANT` restreint nulle part dans les migrations ou le Terraform.
+
+C'est une violation classique du principe du moindre privilège, pas critique en dev, mais à corriger
+avant une mise en prod : si le webapp était compromis (dépendance vulnérable, faille de parsing PDF,
+etc.), l'attaquant aurait un contrôle total sur toute la base — y compris les tables `offers` et
+`matches` dont il n'a normalement pas besoin — au lieu d'être cantonné à `user_profiles`/`cvs`.
+
+**Solution cible (Postgres)**
+
+Créer des rôles Postgres distincts par service avec des `GRANT` ciblés — ex. un rôle `webapp` limité
+en lecture/écriture à `user_profiles`, `cvs`, `matches` (pas `offers`), un rôle par job batch limité
+aux tables qu'il touche réellement. Chaque rôle avec son propre secret Key Vault plutôt qu'une
+`DATABASE_URL` admin partagée.
+
+**Périmètre élargi**
+
+Ce point PostgreSQL est le déclencheur, mais l'idée est d'en faire une passe de sécurité plus large
+sur la séparation des privilèges dans le projet (accès Key Vault, scopes des managed identities,
+permissions storage account, etc.) plutôt qu'un correctif isolé. À cadrer avec Claude Cowork avant
+implémentation (choix des rôles, granularité des `GRANT`, impact sur les migrations Alembic
+existantes) — rien n'a été modifié à ce stade.
+
+**Fichiers concernés (au moins) :** `lz_dev/postgresql.tf` ou équivalent (rôle admin actuel),
+migrations Alembic (`python/migrations/`), définitions des variables d'environnement `DATABASE_URL`
+par service (`envs/dev/container_apps.tf` et jobs associés).
 
 ---
 
@@ -684,3 +725,28 @@ statuts. Un endpoint plus chirurgical (ex. `GET /matches/{cvId}/offers/{offerId}
 ou un `GET` batché sur la liste des `offerId` en attente) éviterait de retélécharger tout le
 match list à chaque tick. À faire si `MATCH_ANALYSIS_AUTO_TOP_N` est relevé au-delà de la
 bêta ou si des CVs avec de très nombreux matchs deviennent courants.
+
+## Diagnostic pipeline post-PR #162 (fix/cv-analysis-backfill-and-receive-timeout, PR #163) — suites identifiées
+
+### [recommandé] Feedback UI après relance du matching depuis /profile
+Changer l'expérience ou les informations complémentaires relance bien le matching
+(PR #161, vérifié en production le 08/07 : run complet ~40 s après l'enregistrement),
+mais l'UI ne le montre nulle part : ni indication « matching relancé / en cours » après
+l'enregistrement, ni rafraîchissement des correspondances une fois le run terminé — il
+faut recharger la page pour voir les nouveaux scores. C'est ce silence qui a fait
+percevoir la fonctionnalité comme cassée. Pistes : état « Recherche mise à jour —
+recalcul des correspondances… » sur la page profil après un enregistrement qui a
+dispatché, et/ou re-fetch des matchs au retour sur l'accueil (poll léger de quelques
+dizaines de secondes, sur le modèle du polling de `CvAnalysisCard`).
+
+### [optional] `match-ready` sans consommateur — messages qui expirent en DLQ
+La queue `match-ready` (job-matching → notification utilisateur, servicebus.tf) n'a
+aucun consommateur : 27 messages actifs et 26 en dead-letter constatés le 08/07, les
+plus anciens expirant vers la DLQ au fil de l'eau. Sans impact fonctionnel, mais du
+bruit dans les métriques. À purger et/ou à doter d'un TTL court tant que l'agent de
+notification n'existe pas.
+
+### [optional] Purger la DLQ d'`offer-ready` (50 messages historiques)
+50 messages accumulés en dead-letter sur `offer-ready` (constat du 08/07, antérieurs
+aux fixes de la PR #163). Sans impact — le matching consomme normalement la queue —
+mais à purger pour que le compteur DLQ redevienne un signal utile d'alerte.

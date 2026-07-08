@@ -204,8 +204,12 @@ class TestGetCvAnalysis:
 
         assert resp.status_code == 404
 
-    def test_returns_pending_when_no_analysis_row(self, test_client, mock_session):
+    def test_returns_pending_when_no_analysis_row(self, test_client, mock_session, mocker):
+        # CV still in the upload pipeline — its analysis is genuinely on the
+        # way, so no backfill dispatch must happen.
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
         cv = MagicMock()
+        cv.status = "processing"
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": cv}),    # select CV
             MagicMock(**{"scalar_one_or_none.return_value": None}),  # select CvAnalysis
@@ -221,6 +225,86 @@ class TestGetCvAnalysis:
         assert body["points_faibles"] == []
         assert body["suggestions"] == []
         assert body["coherence_intention"] is None
+        mock_send.assert_not_called()
+
+    def test_backfills_analysis_for_terminal_cv_without_row(self, test_client, mock_session, mocker):
+        # CV past the upload pipeline with no analysis row (pre-feature CV or
+        # agent crash) — the endpoint claims a pending row and re-dispatches.
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        cv.status = "matched"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),           # select CV
+            MagicMock(**{"scalar_one_or_none.return_value": None}),         # select CvAnalysis
+            MagicMock(**{"scalar_one_or_none.return_value": uuid.uuid4()}),  # insert claim
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        mock_send.assert_called_once_with(
+            "cv-analysis", {"cv_id": str(TEST_CV_ID), "retry_quality_only": True}
+        )
+        mock_session.commit.assert_called_once()
+
+    def test_backfill_skips_dispatch_when_claim_already_taken(self, test_client, mock_session, mocker):
+        # A concurrent poll (or the agent) already inserted the row — the
+        # on_conflict_do_nothing claim returns no id, so nothing is dispatched.
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        cv.status = "matched"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),  # claim lost
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        mock_send.assert_not_called()
+
+    def test_backfill_flips_claim_to_error_when_dispatch_fails(self, test_client, mock_session, mocker):
+        # The claim was inserted but the Service Bus send failed — the row is
+        # flipped to "error" so the UI offers the manual retry button, and the
+        # response stays 200.
+        from azure.servicebus.exceptions import ServiceBusError
+
+        mocker.patch.object(cv_router_module, "send_message", side_effect=ServiceBusError("boom"))
+        cv = MagicMock()
+        cv.status = "matched"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            MagicMock(**{"scalar_one_or_none.return_value": uuid.uuid4()}),  # insert claim
+            MagicMock(),                                                     # update to error
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        assert mock_session.commit.call_count == 2
+
+    def test_backfill_claim_db_error_still_returns_pending(self, test_client, mock_session, mocker):
+        # Healing is best-effort: a DB error on the claim insert must not turn
+        # a successful read into a 500.
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        cv.status = "matched"
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            SQLAlchemyError("DB error"),
+        ]
+
+        resp = test_client.get(f"/cv/{TEST_CV_ID}/analysis")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        mock_send.assert_not_called()
 
     def test_returns_done_analysis(self, test_client, mock_session):
         cv = MagicMock()
