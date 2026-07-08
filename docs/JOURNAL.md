@@ -4183,3 +4183,35 @@ Deux symptômes remontés par l'utilisateur après le déploiement des PR #161 e
 - **`max_wait_time=30 s`** : largement suffisant pour un message réellement présent (retour immédiat), assez long pour absorber une lenteur d'authentification/connexion AMQP, très en dessous du replica timeout de 300 s qui transformait chaque course KEDA/message en exécution `Failed`.
 - **Diagnostic en production avant tout code** : les deux symptômes remontés pointaient vers la PR #161 ; les logs ont montré que le premier était un faux positif (le mécanisme fonctionnait, seul le feedback UI manque) et que le second venait de la PR #162 — sans cette vérification, le correctif aurait visé le mauvais composant.
 
+
+---
+
+## PR #166 — fix(match-analysis): réduire redondance et hallucination dans le prompt de review
+
+**Date :** 2026-07-08
+**Branche :** `feature/match-analysis-prompt-qualite` → `dev`
+
+### Contexte
+
+Une review réelle générée par l'agent `match_analysis` (score 57 %, CV junior 0-2 ans vs poste DevOps exigeant 5 ans) a révélé six défauts de contenu : redondance du même fait (l'écart d'expérience) dans `mission`, `why_good_fit_for_user` et `score_explanation` ; explication de score auto-contradictoire ; points forts génériques sans lien avec l'offre ; lacune de compétence affirmée sans ancrage dans le CV ; conseils passe-partout ignorant le contexte de reconversion pourtant fourni en entrée ; questions d'entretien template. Cause racine du point score (diagnostic Claude Cowork) : le `match_score` est une similarité cosinus pgvector calculée sans LLM (ADR-018) — le prompt demandait au modèle d'« expliquer » un score dont il ne connaît pas la décomposition, le poussant structurellement à confabuler.
+
+### Ce qui a été fait
+
+Réécriture de `MATCH_ANALYSIS_SYSTEM_PROMPT` (seul changement — schéma JSON de sortie, `_parse_analysis_payload` et `_analyze_match` intacts) avec six règles :
+
+1. **Non-redondance entre champs** — un fait marquant ne se développe qu'une fois (dans `synthese`, `score_explanation` OU `points_amelioration`), les autres champs apportent un angle différent.
+2. **`score_explanation` ancré dans ce qui est su** — le score est présenté comme une similarité sémantique globale dont le modèle ne connaît pas la décomposition ; interdiction de le décomposer en poids par critère ; description qualitative cohérente avec le niveau du score (pas de signaux contradictoires non hiérarchisés).
+3. **`points_forts` reliés à un besoin explicite de l'offre** — formulations généralistes interdites ; liste courte acceptée plutôt que du remplissage.
+4. **Anti-hallucination étendue aux lacunes** — un `constat` d'absence de compétence exige que la compétence soit demandée par l'offre ET absente du texte du CV, jamais déduite du métier.
+5. **`suggestion_concrete` personnalisée** — doit exploiter `experience_level` / `candidate_description` ; conseils passe-partout interdits sauf rattachés à un élément concret du profil.
+6. **Questions d'entretien dérivées de l'analyse** — au moins une question reformule un `constat` de `points_amelioration` de cette même analyse.
+
+Conservé tel quel : la règle absolue `company_summary` (désormais première puce du bloc « règles absolues » qui l'étend aux lacunes), la contrainte de variation d'ouverture de `synthese`, le ton coach bienveillant, le bloc JSON de sortie.
+
+**Vérification :** `pytest tests/test_match_analysis.py` — 15 passed sans modification (les tests n'assertent que la forme des données). Relecture de cohérence interne du prompt : non-redondance compatible avec la consigne d'ouverture de `synthese` ; l'exemple « Match élevé (87 %) » cite le score sans le décomposer. Le test manuel recommandé (rejouer le cas junior/DevOps et juger la sortie à l'œil) reste à faire en environnement réel — LLM non déterministe, non automatisable.
+
+### Décisions techniques
+
+- **Correctif prompt uniquement, pas de changement de schéma ni de parsing** : les défauts sont des défauts de contenu, pas de forme — toucher `_parse_analysis_payload` aurait élargi le périmètre sans bénéfice.
+- **Le calcul du score reste hors périmètre** : la séparation gratuit (matching pgvector) / payant (analyse LLM) est un choix délibéré de l'ADR-018 — le correctif aligne le discours du modèle sur ce qu'il sait réellement du score au lieu de changer le score.
+- **Règles regroupées par blocs thématiques titrés** plutôt qu'une liste plate : chaque défaut observé correspond à un bloc nommé (score, redondance, ancrage, personnalisation, questions), ce qui rend le prompt auditable règle par règle lors des prochaines itérations qualité.
