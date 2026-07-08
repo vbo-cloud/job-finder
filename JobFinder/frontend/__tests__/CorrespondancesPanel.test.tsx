@@ -270,6 +270,39 @@ describe("CorrespondancesPanel — onglet Sauvegardées", () => {
     expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Offre 02/ })).not.toBeInTheDocument();
   });
+
+  it("shows an offer saved on page 2 regardless of the Offres tab pagination", () => {
+    renderPanel(makeMatches(25));
+
+    // Navigate to page 2 and save Offre 21 (only offer there among 21-25 we pick the first)
+    fireEvent.click(screen.getByRole("button", { name: "Suivant" }));
+    expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Sauvegarder" })[0]);
+
+    // Back to page 1 — the saved offer is no longer in the paginated Offres list
+    fireEvent.click(screen.getByRole("button", { name: "Précédent" }));
+    expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
+  });
+
+  it("keeps a saved offer visible when its Nouvelles/Vues bucket is filtered out on the Offres tab", () => {
+    // Offer is is_new: true and never expanded → belongs to the "Nouvelles" bucket
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegarder" }));
+
+    // Uncheck "Nouvelles" in the filter menu — the offer disappears from Offres
+    fireEvent.click(screen.getByRole("button", { name: /Filtre/ }));
+    fireEvent.click(screen.getByLabelText("Nouvelles"));
+    expect(screen.queryByRole("button", { name: /Ingénieur Cloud/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sauvegardées" }));
+
+    expect(screen.getByRole("button", { name: /Ingénieur Cloud/i })).toBeInTheDocument();
+  });
 });
 
 describe("CorrespondancesPanel — manual analysis request", () => {

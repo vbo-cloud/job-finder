@@ -212,7 +212,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     contentRef.current?.scrollTo({ top: 0 });
   }
 
-  const items: MatchItemData[] = paginated.map((m) => {
+  function toItemData(m: MatchOut): MatchItemData {
     const override = analysisOverrides.get(m.offer.id);
     return {
       match:      override ? { ...m, analysis: override } : m,
@@ -230,13 +230,19 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       },
       onAnalyze:  () => requestAnalysis(m.offer.id),
     };
-  });
+  }
 
-  // Intentional coupling: `items` is already narrowed upstream by the
-  // Nouvelles/Vues filters and pagination (see `filtered`/`paginated`), so a
-  // saved offer hidden by those won't show here either. Accepted trade-off —
-  // the saved list is short by nature; don't "fix" without a product decision.
-  const displayedItems = tab === "Sauvegardées" ? items.filter((i) => i.isSaved) : items;
+  const items: MatchItemData[] = paginated.map(toItemData);
+
+  // The Sauvegardées list is built from the full `matches` set (minus rejected
+  // offers), independent of the Offres tab's query/contract/score/Nouvelles-Vues
+  // filters and pagination — a saved offer stays visible here no matter how the
+  // Offres tab is currently narrowed.
+  const savedItems: MatchItemData[] = matches
+    .filter((m) => !rejected.has(m.offer.id) && saved.has(m.offer.id))
+    .map(toItemData);
+
+  const displayedItems = tab === "Sauvegardées" ? savedItems : items;
 
   const filterActive = !(filters.nouvelle && filters.vue);
 
