@@ -34,6 +34,7 @@ export default function ProfilePage() {
   const [candidateDescription, setCandidateDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [analysisCredits, setAnalysisCredits] = useState<number | null>(null);
 
   function handleExperienceChange(next: "0-2" | "2-5" | "5+" | null) {
     setExperienceLevel(next);
@@ -56,6 +57,7 @@ export default function ProfilePage() {
       .then((res) => {
         setExperienceLevel(res.data.experience_level ?? null);
         setCandidateDescription(res.data.candidate_description ?? "");
+        setAnalysisCredits(res.data.analysis_credits_remaining);
         setSaved(false);
       })
       .catch((err: unknown) => {
@@ -141,6 +143,14 @@ export default function ProfilePage() {
             </h1>
           </div>
         </div>
+
+        {analysisCredits !== null && (
+          <div className="mt-6 flex items-center gap-1.5 rounded-2xl bg-profile-surface p-6">
+            <span className={microLabel}>Crédits d&apos;analyse restants</span>
+            <InfoTooltip text="1 crédit = 1 analyse détaillée d'une offre par l'IA. 30 crédits offerts à l'inscription, cadeau de bienvenue bêta-testeur non renouvelable." />
+            <span className="ml-auto text-lg font-bold text-strong">{analysisCredits}</span>
+          </div>
+        )}
 
         <div className="mt-6 rounded-2xl bg-profile-surface p-6">
           <div className="flex items-center gap-1.5">

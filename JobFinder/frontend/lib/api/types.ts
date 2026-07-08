@@ -26,6 +26,7 @@ export interface ProfileData {
   commune_codes: string[];
   experience_level: "0-2" | "2-5" | "5+" | null;
   candidate_description: string | null;
+  analysis_credits_remaining: number;
 }
 
 export interface OfferOut {

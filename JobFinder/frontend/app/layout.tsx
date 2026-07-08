@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 
 import AuthButton from "@/app/_components/AuthButton";
+import CreditsBadge from "@/app/_components/CreditsBadge";
 import { AuthProvider } from "@/lib/auth/AuthProvider";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +25,8 @@ export default function RootLayout({
       <body className={cn(inter.className, "min-h-screen bg-page text-strong antialiased")}>
         <AuthProvider>
           <div className="pointer-events-none fixed right-3 top-2 z-50">
-            <div className="pointer-events-auto">
+            <div className="pointer-events-auto flex items-center gap-2">
+              <CreditsBadge />
               <AuthButton />
             </div>
           </div>
