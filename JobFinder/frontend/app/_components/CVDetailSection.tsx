@@ -3,7 +3,9 @@
 import { forwardRef, useCallback, useEffect, useState } from "react";
 import apiClient from "@/lib/api/client";
 import type { CVData, CVMatchesOut } from "@/lib/api/types";
+import { cn } from "@/lib/utils";
 import CorrespondancesPanel from "./CorrespondancesPanel";
+import CvAnalysisCard from "./CvAnalysisCard";
 
 interface Props {
   cvs: CVData[];
@@ -30,6 +32,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
     const [thumbnailSrc, setThumbnailSrc]     = useState<string | null>(null);
     const [loadingMatches, setLoadingMatches] = useState(true);
     const [matchesError, setMatchesError]     = useState<string | null>(null);
+    const [analysisOpen, setAnalysisOpen]     = useState(true);
 
     useEffect(() => {
       setMatches(null);
@@ -126,6 +129,33 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               ) : (
                 <div className="flex h-full w-full items-center justify-center rounded-sm border border-black/20 bg-card">
                   <span className="text-xs text-label">PDF</span>
+                </div>
+              )}
+            </div>
+
+            {/* Analyse du CV — repliable, sous la vignette. shrink-0 + max-h borné en
+                lecture ouverte ; la vignette au-dessus (flex-1 min-h-0) se rétrécit
+                automatiquement pour lui laisser la place, sans mesure manuelle. */}
+            <div className={cn("w-full shrink-0 flex flex-col min-h-0", analysisOpen && "max-h-[46%]")}>
+              <button
+                onClick={() => setAnalysisOpen((o) => !o)}
+                aria-expanded={analysisOpen}
+                aria-controls="cv-analysis-panel"
+                className="flex-none flex items-center justify-between gap-2 w-full bg-transparent border-0 py-2 cursor-pointer text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
+              >
+                <span className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted">
+                  Analyse de votre CV
+                </span>
+                <svg
+                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                  className={cn("text-muted transition-transform shrink-0", analysisOpen && "rotate-180")}
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              {analysisOpen && (
+                <div id="cv-analysis-panel" className="flex-1 min-h-0 overflow-y-auto">
+                  <CvAnalysisCard cvId={selectedCvId} />
                 </div>
               )}
             </div>
