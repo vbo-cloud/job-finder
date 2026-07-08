@@ -10,6 +10,7 @@ import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
 
+import AdminRefillButton from "./_components/AdminRefillButton";
 import DeleteAccountSection from "./_components/DeleteAccountSection";
 import ExperienceToggle from "./_components/ExperienceToggle";
 import { InfoTooltip } from "./_components/InfoTooltip";
@@ -35,6 +36,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [analysisCredits, setAnalysisCredits] = useState<number | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   function handleExperienceChange(next: "0-2" | "2-5" | "5+" | null) {
     setExperienceLevel(next);
@@ -58,6 +60,7 @@ export default function ProfilePage() {
         setExperienceLevel(res.data.experience_level ?? null);
         setCandidateDescription(res.data.candidate_description ?? "");
         setAnalysisCredits(res.data.analysis_credits_remaining);
+        setIsAdmin(res.data.is_admin);
         setSaved(false);
       })
       .catch((err: unknown) => {
@@ -148,7 +151,10 @@ export default function ProfilePage() {
           <div className="mt-6 flex items-center gap-1.5 rounded-2xl bg-profile-surface p-6">
             <span className={microLabel}>Crédits d&apos;analyse restants</span>
             <InfoTooltip text="1 crédit = 1 analyse détaillée d'une offre par l'IA. 30 crédits offerts à l'inscription, cadeau de bienvenue bêta-testeur non renouvelable." />
-            <span className="ml-auto text-lg font-bold text-strong">{analysisCredits}</span>
+            <span className="ml-auto flex items-center gap-3">
+              {isAdmin && <AdminRefillButton onRefilled={setAnalysisCredits} />}
+              <span className="text-lg font-bold text-strong">{analysisCredits}</span>
+            </span>
           </div>
         )}
 

@@ -30,6 +30,13 @@ export interface ProfileData {
    * 1 per manual match analysis (POST /matches/.../analyze). Auto-triggered
    * analyses (top-N per matching run) never consume credits. */
   analysis_credits_remaining: number;
+  /** True when the user is listed in the backend's ADMIN_USER_IDS — unlocks
+   * admin-only UI such as the credits refill button on /profile. */
+  is_admin: boolean;
+}
+
+export interface CreditsRefillResponse {
+  analysis_credits_remaining: number;
 }
 
 export interface OfferOut {
