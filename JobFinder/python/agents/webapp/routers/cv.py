@@ -26,7 +26,7 @@ from shared.bus import send_message
 from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
 from shared.models import CV, CvAnalysis, Match, MatchAnalysis, Offer, UserProfile
-from auth import get_current_user
+from auth import UserIdentity, get_current_identity, get_current_user
 from dependencies import get_db
 from routers.matches import commune_zone_condition
 from schemas import CVListItemOut, CVUploadOut, CvAnalysisOut
@@ -195,7 +195,7 @@ def _delete_blob(blob_url: str, container: str) -> None:
 @router.post("/upload", response_model=CVUploadOut)
 async def upload_cv(
     file: UploadFile,
-    user_id: str = Depends(get_current_user),
+    identity: UserIdentity = Depends(get_current_identity),
     session: Session = Depends(get_db),
 ) -> CVUploadOut:
     """Upload a PDF CV, generate an embedding, and trigger ROME code analysis.
@@ -206,7 +206,8 @@ async def upload_cv(
 
     Args:
         file: The uploaded PDF file.
-        user_id: Authenticated user ID from the JWT sub claim.
+        identity: Authenticated identity claims from the JWT (sub, email, name) —
+            the profile created on first upload captures email/display_name.
         session: Active database session.
 
     Returns:
@@ -216,6 +217,7 @@ async def upload_cv(
         HTTPException 422: If the uploaded file is not a valid PDF.
         HTTPException 503: If Azure Blob Storage is unavailable.
     """
+    user_id = identity.user_id
     logger.info("cv_upload_started", user_id=user_id, filename=file.filename)
 
     if file.content_type != "application/pdf":
@@ -298,10 +300,13 @@ async def upload_cv(
         logger.info("cv_upload_cv_inserted", user_id=user_id, cv_id=str(cv_id))
 
         # Insert a default profile only if absent — never overwrite existing preferences.
+        # email/display_name are captured here at creation; PUT /profile refreshes them.
         session.execute(
             pg_insert(UserProfile).values(
                 id=uuid.uuid4(),
                 user_id=user_id,
+                email=identity.email,
+                display_name=identity.display_name,
                 rome_codes={},
                 commune_codes=[],
                 analysis_credits_remaining=30,

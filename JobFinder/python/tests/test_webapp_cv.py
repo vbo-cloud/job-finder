@@ -34,11 +34,14 @@ with patch("azure.storage.blob.BlobServiceClient", return_value=_mock_bsc):
     from routers import cv as cv_router_module  # noqa: E402
     from routers.cv import router  # noqa: E402
 
-from auth import get_current_user  # noqa: E402
+from auth import UserIdentity, get_current_identity, get_current_user  # noqa: E402
 from dependencies import get_db  # noqa: E402
 
 TEST_USER_ID = "test-user-cv"
 TEST_CV_ID = uuid.uuid4()
+TEST_IDENTITY = UserIdentity(
+    user_id=TEST_USER_ID, email="test@example.test", display_name="Test User"
+)
 
 
 @pytest.fixture()
@@ -59,6 +62,7 @@ def test_client(mock_session) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: TEST_USER_ID
+    app.dependency_overrides[get_current_identity] = lambda: TEST_IDENTITY
     app.dependency_overrides[get_db] = lambda: (yield mock_session)
     return TestClient(app, raise_server_exceptions=False)
 
