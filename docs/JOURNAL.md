@@ -4610,3 +4610,25 @@ Implémentation du prompt Claude Cowork `prompt-matching-corpus-relative-term-we
 - **Retours de review appliqués** : `TRUNCATE` au lieu de `DELETE` pour le full-replace (pas de verrou ligne à ligne ni de WAL par ligne) ; commentaires explicitant le choix de `tsvector_to_array` et la déduplication des lexèmes par construction (les `SUM(rarity)` ne double-comptent jamais).
 - **Retours de review écartés (assumés)** : `total_offers` répété sur chaque ligne (une table meta séparée serait plus propre mais sans intérêt pratique à ce volume) ; `created_at`/`computed_at` toujours égaux (les deux conservés — `created_at` exigé par les conventions SQL, `computed_at` porte la sémantique métier du snapshot).
 - **Validation post-déploiement à faire** (corpus réel probablement mono-sectoriel tech, cf. backlog) : vérifier après le premier run de fetch que les termes discriminants ne sont pas exclus par le seuil 0.75 — `SELECT term, doc_frequency, total_offers FROM term_stats WHERE term IN ('terraform','ci/cd');` — et valider le classement sur de vraies offres d'un secteur non-tech dès qu'un profil non-tech existe en base.
+
+---
+
+## PR #182 — feat(frontend): cases à cocher inline dans la barre de filtres de l'onglet Offres
+
+**Date :** 2026-07-09
+**Branche :** `feature/correspondances-filter-checkboxes` → `dev`
+
+### Contexte
+
+Sur demande utilisateur : la barre de filtres de l'onglet Offres portait 4 contrôles en dropdown (Trier, Contrat, Score, et le popover « Filtre » contenant Nouvelles/Vues), jugés trop nombreux et peu visibles. Clarification des attentes par questions ciblées avant implémentation, car convertir Contrat/Score en cases à cocher changeait leur sémantique (sélection exclusive → filtre OR) : décision retenue — suppression pure des dropdowns Trier/Contrat/Score (le tri reste fixé par pertinence, décroissant), et les cases Nouvelles/Vues affichées directement dans la barre au lieu d'être cachées dans le popover Filtre.
+
+### Ce qui a été fait
+
+- **`CorrespondancesPanel.tsx`** : suppression des états `sort`/`contract`/`minScore`/`filterOpen`, des types `SortKey`/`ContractFilter`/`ScoreFilter`, de `SCORE_THRESHOLDS` et de `parseSalaryMax()` (devenu mort avec le tri par salaire). Le tri du `useMemo` `filtered` est fixé à `b.score - a.score`. Les 3 `<select>` et le bouton/popover « Filtre » sont remplacés par un bloc unique dans la barre : label « Offres » suivi des cases à cocher Nouvelles/Vues, visibles sans interaction supplémentaire.
+- **Tests** : le test de reset de pagination au changement de tri (`getByDisplayValue("Trier : Pertinence")`) est remplacé par un équivalent sur changement de recherche texte, seul déclencheur de reset restant hors Nouvelles/Vues. Le test « offre sauvegardée visible malgré son bucket Nouvelles décoché » clique directement sur la case à cocher au lieu d'ouvrir le popover Filtre supprimé.
+
+**Vérification :** Jest 19/19 sur `CorrespondancesPanel.test.tsx`, `tsc --noEmit` et ESLint propres.
+
+### Décisions techniques
+
+- **Clarification avant implémentation plutôt qu'interprétation** : la demande groupait 4 dropdowns sous un même verbe « supprimer », mais Trier n'est pas un filtre (n'exclut rien) et Contrat/Score étaient des sélections exclusives — une conversion silencieuse en cases à cocher OR aurait changé le comportement sans validation. Questions posées via `AskUserQuestion` avant tout code ; réponses obtenues : tri retiré (pertinence fixe), Contrat et Score retirés purement et simplement (seuls Nouvelles/Vues restent).

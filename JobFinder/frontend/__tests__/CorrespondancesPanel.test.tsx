@@ -226,14 +226,15 @@ describe("CorrespondancesPanel — pagination", () => {
     expect(screen.queryByRole("navigation", { name: "Pagination des offres" })).not.toBeInTheDocument();
   });
 
-  it("returns to page 1 when the visible set is redefined (sort change)", () => {
+  it("returns to page 1 when the visible set is redefined (search query change)", () => {
     renderPanel(makeMatches(25));
 
     fireEvent.click(screen.getAllByRole("button", { name: "Suivant" })[0]);
     expect(screen.getByRole("button", { name: /Offre 21/ })).toBeInTheDocument();
 
-    // Same 25 offers, same A→Z order as by score — only the page should change
-    fireEvent.change(screen.getByDisplayValue("Trier : Pertinence"), { target: { value: "az" } });
+    fireEvent.change(screen.getByPlaceholderText("Rechercher un poste, une ville…"), {
+      target: { value: "Offre" },
+    });
 
     expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Offre 21/ })).not.toBeInTheDocument();
@@ -316,8 +317,7 @@ describe("CorrespondancesPanel — onglet Sauvegardées", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sauvegarder" }));
 
-    // Uncheck "Nouvelles" in the filter menu — the offer disappears from Offres
-    fireEvent.click(screen.getByRole("button", { name: /Filtre/ }));
+    // Uncheck "Nouvelles" in the filter bar — the offer disappears from Offres
     fireEvent.click(screen.getByLabelText("Nouvelles"));
     expect(screen.queryByRole("button", { name: /Ingénieur Cloud/i })).not.toBeInTheDocument();
 
