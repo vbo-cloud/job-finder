@@ -4728,6 +4728,8 @@ Demande utilisateur : la barre de recherche de l'onglet Offres ne matchait que t
 ### Ce qui a été fait
 
 - **`CorrespondancesPanel.tsx`** : le filtre de recherche (`useMemo` `filtered`) inclut désormais `offer.description` dans la chaîne concaténée testée par `.includes(q)`, en plus de titre/entreprise/localisation. Aucun changement backend : `description` était déjà retourné par `GET /matches` et typé dans `MatchOut` côté frontend, simplement pas exploité par la recherche.
-- **Tests** : nouveau cas — une offre matchée uniquement via un mot-clé présent dans sa description, une autre offre au même mot-clé absent restant exclue.
+- **Garde `?? ""`** sur `offer.description` dans le filtre : une description absente du payload se serait interpolée en la chaîne littérale `"undefined"`, produisant un faux positif pour une recherche sur ce mot.
+- **Retour visuel sur le match** (`MatchItem.tsx`) : la requête de recherche active est propagée via un nouveau champ `searchQuery` de `MatchItemData`, uniquement pour l'onglet Offres (l'onglet Sauvegardées ignore la recherche par design, aucune query ne lui est passée). `highlightMatches()` enveloppe chaque occurrence insensible à la casse dans un `<mark>` (tokens `bg-accent-muted`/`text-accent`), appliqué à la description affichée dans le panneau déplié — sans lui, un match en plein milieu d'une longue description n'offrait aucun indice visuel de la raison du rapprochement.
+- **Tests** : nouveau cas — une offre matchée uniquement via un mot-clé présent dans sa description, une autre offre au même mot-clé absent restant exclue ; côté `MatchItem`, mise en évidence effective avec query, absence de `<mark>` sans query ou sans correspondance.
 
-**Vérification :** Jest 20/20 sur `CorrespondancesPanel.test.tsx`.
+**Vérification :** Jest 48/48 (`CorrespondancesPanel.test.tsx` + `MatchItem.test.tsx`), `tsc --noEmit` et ESLint propres.
