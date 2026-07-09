@@ -4654,3 +4654,29 @@ Bug remonté par Vincent : quand l'analyse d'un CV se termine et que son `match_
 ### Décisions techniques
 
 - **Aucun changement côté `LibrarySection.tsx`, `HomeClient.tsx` ni backend** : `match_count` était déjà correct et déjà propagé jusqu'à `CVDetailSection` ; il manquait uniquement le fil entre les deux composants frontend, conformément au prompt.
+
+---
+
+## PR #185 — refactor(matching): retirer tout bonus lexical du score de matching
+
+**Date :** 2026-07-09
+**Branche :** `feature/matching-remove-lexical-bonus` → `dev`
+
+### Contexte
+
+Exécution de `docs/prompts/prompt-matching-remove-lexical-bonus.md`. Décision actée avec Vincent le 09/07 : sur 6 offres réelles diagnostiquées, aucune formule purement statistique sur des mots isolés ne peut distinguer un terme rare-mais-pertinent d'un terme rare-mais-hors-sujet (ex. « sport » d'une offre QA, « jeux » d'un CV avec passé Unity) — le bonus lexical est retiré entièrement, pas juste corrigé. Le score final devient `GREATEST(0, base_score - pénalité_expérience)`.
+
+### Ce qui a été fait
+
+- **Étape 0 (obligatoire avant tout retrait)** a corrigé deux prémisses du prompt : le mécanisme `term_stats`/rareté corpus-relative (PR #180) n'était pas incertain — déjà mergé et vivant sur `dev`, ayant déjà remplacé le bonus `tech_keywords` dans la requête de scoring elle-même (`shared/tech_keywords.py`/`.json` et les colonnes restaient cependant vivants ailleurs, en poids mort). PR #177 référencée dans le prompt est déjà **mergée** et concerne une PR différente (introduction initiale de `tech_keywords`) — rien à fermer. La branche `feature/matching-skills-bonus-ratio-fix` n'a aucun commit d'avance sur `dev` et aucun WIP retrouvé dans les 3 worktrees — abandon = no-op (suppression de la branche locale laissée à Vincent, bloquée par le classifieur de sécurité auto-mode).
+- **`agents/matching/main.py::_get_all_matches`** : retrait des CTEs `offer_terms`/`cv_terms`/`offer_rarity_mass`/`covered_rarity`/`final` ; `scored`/`after_experience` (blend embedding + pénalité expérience) inchangés. Docstring réécrite.
+- **Découverte absente du prompt** : `_refresh_term_stats()` (`agents/offer_fetching/main.py`) et le modèle ORM `TermStat` (`shared/models.py`) devenaient orphelins après le retrait des CTEs — retirés également.
+- Suppression complète de `shared/tech_keywords.py`/`.json`, des colonnes `offers.tech_keywords`/`cvs.tech_keywords`, de la table `term_stats`, des call sites d'extraction (`offer_fetching/main.py`, `webapp/routers/cv.py`), et des constantes `SHARED_TERM_BONUS_WEIGHT`/`TERM_STOPWORD_THRESHOLD` (`TECH_KEYWORDS_WEIGHT` déjà absent). Aucun `env_vars` Terraform ne les référençait.
+- Migration `026_remove_lexical_bonus` (downgrade recrée colonnes/table sans données). Tests mis à jour, `test_tech_keywords.py` supprimé.
+
+**Vérification :** `pytest tests/` 221/221. Cycle migration `upgrade head` → `downgrade -1` → `upgrade head` validé contre Postgres 16 + pgvector jetable (Docker). Requête simplifiée rejouée sur données synthétiques reproduisant le cas diagnostique (offre truffée de « sport »/« jeux » hors-sujet) : score = embedding pur (1.0, aucun bonus résiduel) ; offre avec écart d'expérience de 3 ans : score = 0.91 = 1.0 − (3 × 0.03), pénalité seule.
+
+### Décisions techniques
+
+- **Remplacer par rien, pas par une formule alternative** : contrairement au remplacement `tech_keywords` → `term_stats` de PR #180, aucun mécanisme lexical de repli n'est introduit — la décision actée est qu'un LLM en amont de l'embedding (`prompt-offer-distillation-pipeline.md`, indépendant) est la seule voie retenue pour ce signal.
+- **Bénéfice complet différé** : le classement sur les 6 offres de référence ne sera pleinement correct qu'une fois la distillation LLM également en production (le `base_score` actuel reste sur texte brut) — ce retrait est correct et livrable indépendamment.

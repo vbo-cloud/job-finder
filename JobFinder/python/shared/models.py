@@ -37,9 +37,6 @@ class Offer(Base):
     experience_min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
-    # Mots-clés techniques extraits lexicalement de la description (shared/tech_keywords.py) —
-    # bonus additif au score de matching, jamais un malus.
-    tech_keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -63,8 +60,6 @@ class CV(Base):
     thumbnail_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     thumbnail_url_lg: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
-    # Mots-clés techniques extraits lexicalement du texte brut à l'upload (shared/tech_keywords.py).
-    tech_keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
@@ -129,27 +124,6 @@ class UserProfile(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-
-
-class TermStat(Base):
-    """Corpus-wide document frequency of a lexeme across all offer descriptions.
-
-    Entièrement recalculée (remplacement complet) à la fin de chaque run
-    offer_fetching via ts_stat() de Postgres sur to_tsvector('french',
-    description). Le matching pondère les termes partagés CV<->offre par leur
-    rareté (1 - doc_frequency / total_offers) et écarte les termes
-    quasi universels au-dessus de TERM_STOPWORD_THRESHOLD (mots vides de fait).
-    total_offers est stocké avec chaque terme pour que le ratio reste exact par
-    rapport au snapshot du corpus qui a produit les fréquences.
-    """
-
-    __tablename__ = "term_stats"
-
-    term: Mapped[str] = mapped_column(Text, primary_key=True)
-    doc_frequency: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_offers: Mapped[int] = mapped_column(Integer, nullable=False)
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class Match(Base):

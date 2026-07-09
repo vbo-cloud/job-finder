@@ -27,7 +27,6 @@ from shared.db import get_session, run_migrations
 from shared.embedder import embed
 from shared.geo import parse_department_from_location, parse_region_from_location
 from shared.models import Offer, UserProfile
-from shared.tech_keywords import extract_tech_keywords
 from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
@@ -159,7 +158,6 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
             "experience_min_years": _parse_experience_min_years(raw.get("experienceLibelle")),
             "description": raw.get("description", ""),
             "skills": [c["libelle"] for c in raw.get("competences", [])],
-            "tech_keywords": extract_tech_keywords(raw.get("description", "")),
             "rome_code": rome_code,
             "collected_at": now,
             "ft_updated_at": ft_updated_at,
@@ -184,7 +182,6 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
                     "experience_min_years": insert_stmt.excluded.experience_min_years,
                     "description": insert_stmt.excluded.description,
                     "skills": insert_stmt.excluded.skills,
-                    "tech_keywords": insert_stmt.excluded.tech_keywords,
                     "rome_code": insert_stmt.excluded.rome_code,
                     "collected_at": insert_stmt.excluded.collected_at,
                     "ft_updated_at": insert_stmt.excluded.ft_updated_at,
@@ -261,51 +258,6 @@ def _embed_pending_offers() -> int:
     return len(pending)
 
 
-def _refresh_term_stats() -> int:
-    """Recompute corpus-wide term document frequencies into term_stats.
-
-    Uses Postgres ts_stat() over to_tsvector('french', description) applied to
-    the whole offers table: one row per French-stemmed lexeme with the number
-    of offers containing it (ndoc). The previous content is entirely replaced
-    in the same transaction — the corpus changes at every fetch/cleanup cycle,
-    stale frequencies have no value to keep. total_offers is captured in the
-    same statement so the ratio doc_frequency/total_offers stays exact for the
-    snapshot the frequencies were computed from.
-
-    Returns:
-        Number of distinct terms written to term_stats.
-
-    Raises:
-        SQLAlchemyError: If a database operation fails.
-    """
-    logger.info("term_stats_refresh_started")
-    try:
-        with get_session() as session:
-            # TRUNCATE plutôt que DELETE : transactionnel sous Postgres, pas de verrou
-            # ligne à ligne ni de WAL par ligne supprimée — la table n'a ni référence
-            # entrante ni autre écrivain que ce job.
-            session.execute(text("TRUNCATE term_stats"))
-            result = session.execute(
-                text("""
-                    INSERT INTO term_stats (term, doc_frequency, total_offers, computed_at, created_at)
-                    SELECT stat.word,
-                           stat.ndoc,
-                           (SELECT COUNT(*) FROM offers),
-                           NOW(),
-                           NOW()
-                    FROM ts_stat('SELECT to_tsvector(''french'', description) FROM offers') AS stat
-                """)
-            )
-            term_count = result.rowcount
-            session.commit()
-    except SQLAlchemyError:
-        logger.error("term_stats_refresh_failed", exc_info=True)
-        raise
-
-    logger.info("term_stats_refresh_completed", term_count=term_count)
-    return term_count
-
-
 def main() -> None:
     """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
     configure_telemetry("offer-fetching")
@@ -328,12 +280,6 @@ def main() -> None:
         total_new += _upsert_offers(raw_offers, rome_code)
 
     embedded_count = _embed_pending_offers()
-
-    # Toujours rafraîchi (même sans nouvelle offre) : les descriptions d'offres
-    # existantes peuvent avoir changé via l'upsert, et le cleanup fait aussi
-    # évoluer le corpus entre deux fetches. Avant l'envoi d'offer-ready, pour
-    # que le matching déclenché par ce message voie des statistiques fraîches.
-    _refresh_term_stats()
 
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if total_new > 0:

@@ -20,8 +20,6 @@ from shared.config import (
     INTENT_EMBEDDING_WEIGHT,
     MATCH_ANALYSIS_AUTO_TOP_N,
     MATCHING_SCORE_THRESHOLD,
-    SHARED_TERM_BONUS_WEIGHT,
-    TERM_STOPWORD_THRESHOLD,
 )
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, MatchAnalysis, Offer
@@ -59,21 +57,11 @@ def _get_all_matches(session: Session) -> list[dict]:
     parseable experience label) never penalizes — absence of data is not a
     candidate or offer defect.
 
-    Finally a strictly additive skills bonus rewards terms shared between the
-    CV text and the offer description, sector-agnostic by construction: both
-    sides are tokenized/stemmed by Postgres full-text search (French config)
-    and each shared lexeme is weighted by its rarity in the offer corpus,
-    1 - doc_frequency/total_offers from term_stats (recomputed after every
-    offer_fetching run). Lexemes present in more than TERM_STOPWORD_THRESHOLD
-    of all offers are de facto stopwords and fully excluded — a hard cutoff,
-    not a smooth downweighting, so moderately frequent but discriminating
-    terms keep full weight. The bonus is the CV-covered share of the offer's
-    total rarity mass, weighted by SHARED_TERM_BONUS_WEIGHT and capped so the
-    total never exceeds 1.0. It is never negative — no shared term, an empty
-    term_stats table, or an offer made only of stopwords all yield a zero
-    bonus, never lowering the experience-penalized score. Lexemes absent from
-    term_stats (offers newer than the last stats refresh) are ignored on both
-    sides of the ratio, keeping numerator and denominator consistent.
+    No lexical bonus is applied: the final score is the experience-penalized
+    embedding similarity alone. Distinguishing a rare-but-relevant shared term
+    from a rare-but-irrelevant one (e.g. "sport", "jeux") requires semantic
+    judgment that no purely statistical measure over isolated words can make —
+    see prompt-matching-remove-lexical-bonus.md for the diagnostic behind this.
 
     Raises:
         SQLAlchemyError: If the database query fails.
@@ -118,75 +106,14 @@ def _get_all_matches(session: Session) -> list[dict]:
                         ) * :penalty_per_year
                     ) AS score
                 FROM scored
-            ),
-            offer_terms AS (
-                -- Lexèmes français racinisés de chaque offre, pondérés par leur rareté
-                -- dans le corpus (1 - fréquence documentaire relative). INNER JOIN sur
-                -- term_stats : un lexème absent des stats (offre plus récente que le
-                -- dernier calcul batch) est ignoré des deux côtés du ratio. Les termes
-                -- quasi universels (au-delà du seuil) sont des mots vides de fait,
-                -- écartés totalement — couperet net, pas de pondération graduelle.
-                -- tsvector_to_array est un choix délibéré : il retourne les lexèmes en
-                -- text[], dédupliqués par construction (sémantique tsvector — un lexème
-                -- apparaît une seule fois par document), donc les SUM(rarity) en aval
-                -- ne comptent jamais deux fois le même terme d'une même offre.
-                SELECT
-                    o.id AS offer_id,
-                    t.lexeme,
-                    1 - ts.doc_frequency::float / ts.total_offers AS rarity
-                FROM offers o
-                CROSS JOIN LATERAL unnest(tsvector_to_array(to_tsvector('french', o.description))) AS t(lexeme)
-                JOIN term_stats ts ON ts.term = t.lexeme
-                WHERE o.embedding IS NOT NULL
-                  AND ts.doc_frequency::float / ts.total_offers <= :stopword_threshold
-            ),
-            cv_terms AS (
-                SELECT c.id AS cv_id, t.lexeme
-                FROM cvs c
-                CROSS JOIN LATERAL unnest(tsvector_to_array(to_tsvector('french', c.raw_text))) AS t(lexeme)
-                WHERE c.embedding IS NOT NULL
-            ),
-            offer_rarity_mass AS (
-                SELECT offer_id, SUM(rarity) AS total_rarity
-                FROM offer_terms
-                GROUP BY offer_id
-            ),
-            covered_rarity AS (
-                SELECT ct.cv_id, ot.offer_id, SUM(ot.rarity) AS covered
-                FROM cv_terms ct
-                JOIN offer_terms ot ON ot.lexeme = ct.lexeme
-                GROUP BY ct.cv_id, ot.offer_id
-            ),
-            final AS (
-                -- Bonus strictement additif : part de la masse de rareté de l'offre
-                -- couverte par le CV (dénominateur = termes discriminants de l'offre,
-                -- pas l'union). COALESCE(..., 0) couvre l'absence de terme partagé,
-                -- une table term_stats vide ou une offre faite uniquement de mots
-                -- vides — bonus nul, jamais un malus.
-                SELECT
-                    ae.cv_id,
-                    ae.offer_id,
-                    LEAST(
-                        1.0,
-                        ae.score + COALESCE(
-                            cr.covered / NULLIF(orm.total_rarity, 0),
-                            0
-                        ) * :shared_term_weight
-                    ) AS score
-                FROM after_experience ae
-                LEFT JOIN offer_rarity_mass orm ON orm.offer_id = ae.offer_id
-                LEFT JOIN covered_rarity cr
-                    ON cr.cv_id = ae.cv_id AND cr.offer_id = ae.offer_id
             )
-            SELECT cv_id, offer_id, score FROM final WHERE score >= :threshold
+            SELECT cv_id, offer_id, score FROM after_experience WHERE score >= :threshold
         """),
         {
             "threshold": MATCHING_SCORE_THRESHOLD,
             "intent_weight": INTENT_EMBEDDING_WEIGHT,
             "penalty_per_year": EXPERIENCE_PENALTY_PER_YEAR_GAP,
             "max_penalty": EXPERIENCE_MAX_PENALTY,
-            "stopword_threshold": TERM_STOPWORD_THRESHOLD,
-            "shared_term_weight": SHARED_TERM_BONUS_WEIGHT,
         },
     )
 

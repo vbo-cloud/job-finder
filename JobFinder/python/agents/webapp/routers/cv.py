@@ -26,7 +26,6 @@ from shared.bus import send_message
 from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
 from shared.models import CV, CvAnalysis, Match, MatchAnalysis, Offer, UserProfile
-from shared.tech_keywords import extract_tech_keywords
 from auth import UserIdentity, get_current_identity, get_current_user
 from dependencies import get_db
 from profile_defaults import default_profile_values
@@ -296,7 +295,6 @@ async def upload_cv(
             thumbnail_url=thumbnail_url,
             thumbnail_url_lg=thumbnail_url_lg,
             embedding=embedding,
-            tech_keywords=extract_tech_keywords(raw_text),
             uploaded_at=now,
             created_at=now,
         ))

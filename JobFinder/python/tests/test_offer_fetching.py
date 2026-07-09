@@ -1,7 +1,6 @@
 """Tests for agents/offer_fetching/main.py.
 
-Covers: _parse_experience_min_years, _upsert_offers (values wiring),
-_refresh_term_stats (full-replace transaction wiring).
+Covers: _parse_experience_min_years, _upsert_offers (values wiring).
 
 The module is loaded via importlib under the unique name 'offer_fetching_main'
 to avoid sys.modules collision with the other agents' main.py. The
@@ -29,7 +28,6 @@ _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 _parse_experience_min_years = _mod._parse_experience_min_years
 _upsert_offers = _mod._upsert_offers
-_refresh_term_stats = _mod._refresh_term_stats
 
 
 def _session_cm(session: MagicMock):
@@ -88,7 +86,7 @@ class TestParseExperienceMinYears:
 
 
 class TestUpsertOffersValues:
-    def test_populates_experience_and_tech_keywords_from_raw_offer(self, mocker):
+    def test_populates_experience_min_years_from_raw_offer(self, mocker):
         mock_pg_insert = mocker.patch.object(_mod, "pg_insert")
         mock_session = MagicMock()
         mock_session.execute.return_value = []
@@ -109,29 +107,5 @@ class TestUpsertOffersValues:
 
         values = mock_pg_insert.return_value.values.call_args.args[0]
         assert values[0]["experience_min_years"] == 5
-        assert values[0]["tech_keywords"] == ["Azure", "Kubernetes", "Terraform"]
         assert values[0]["skills"] == ["Cloud computing"]
-        mock_session.commit.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _refresh_term_stats — full-replace transaction wiring
-# ---------------------------------------------------------------------------
-
-
-class TestRefreshTermStats:
-    def test_deletes_then_inserts_in_one_transaction(self, mocker):
-        mock_session = MagicMock()
-        mock_session.execute.return_value.rowcount = 42
-        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
-
-        result = _refresh_term_stats()
-
-        assert result == 42
-        # Remplacement complet : TRUNCATE puis INSERT ... FROM ts_stat(), un seul commit
-        statements = [str(call.args[0]) for call in mock_session.execute.call_args_list]
-        assert len(statements) == 2
-        assert "TRUNCATE term_stats" in statements[0]
-        assert "INSERT INTO term_stats" in statements[1]
-        assert "ts_stat" in statements[1]
         mock_session.commit.assert_called_once()
