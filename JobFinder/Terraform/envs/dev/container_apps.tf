@@ -26,11 +26,13 @@ module "container_app_environment" {
 # ==============================================================================
 # Agent Jobs
 # ==============================================================================
-# Agent 1 — Matching (queue: offer-ready)
+# Agent 1 — Matching (queue: start-matching)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
 # Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
 # Agent 4 — CV Analysis (queue: cv-analysis)
 # Agent 5 — Match Analysis (queue: match-analysis)
+# Agent 6 — Offer Distillation (queue: distillate-offer-fetched)
+# Agent 7 — Matching Heartbeat (timer: every 15 minutes)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -61,7 +63,7 @@ data "azurerm_user_assigned_identity" "caj" {
   resource_group_name = data.azurerm_resource_group.rg_core.name
 }
 
-# Agent 1 — Matching (queue: offer-ready)
+# Agent 1 — Matching (queue: start-matching)
 module "job_matching" {
   source = "../../modules/container_app_job"
 
@@ -70,7 +72,7 @@ module "job_matching" {
   resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
-  queue_name           = "offer-ready"
+  queue_name           = "start-matching"
   servicebus_namespace = module.servicebus.name
   image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
@@ -207,10 +209,6 @@ module "job_offer_fetching" {
       value = local.postgresql_connection_string
     },
     {
-      name  = "openai-api-key"
-      value = local.openai_api_key
-    },
-    {
       name  = "ft-client-id"
       value = local.ft_client_id
     },
@@ -227,14 +225,6 @@ module "job_offer_fetching" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
-    },
-    {
-      name  = "AZURE_OPENAI_ENDPOINT"
-      value = local.openai_endpoint
     },
     {
       name        = "FT_CLIENT_ID"
@@ -390,6 +380,130 @@ module "job_match_analysis" {
     {
       name  = "AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT"
       value = "gpt-4o-mini"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent offer-distillation (queue: distillate-offer-fetched)
+# ==============================================================================
+# max_executions overridden to 20 (module default is 1): absorbs a fan-out of
+# thousands of per-offer messages (backfill or ROME-code spike) in parallel —
+# the bottleneck for this step is cumulative per-call network latency across
+# many sequential LLM calls, not cost or TPM quota (see
+# docs/prompts/prompt-offer-distillation-pipeline.md).
+module "job_offer_distillation" {
+  source = "../../modules/container_app_job"
+
+  name                 = "job-jf-dev-frc-distill"
+  location             = var.location
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
+  environment_id       = module.container_app_environment.id
+  trigger_type         = "queue"
+  queue_name           = "distillate-offer-fetched"
+  servicebus_namespace = module.servicebus.name
+  max_executions       = 20
+  image                = "${module.container_registry.login_server}/agents/offer-distillation:latest"
+  environment          = var.env
+  project              = var.project
+  owner                = var.owner
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "openai-api-key"
+      value = local.openai_api_key
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name        = "AZURE_OPENAI_API_KEY"
+      secret_name = "openai-api-key"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_OPENAI_OFFER_DISTILLATION_DEPLOYMENT"
+      value = "gpt-4o-mini"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent matching-heartbeat (timer: every 15 minutes)
+# ==============================================================================
+# Minimal by design — sends one message to start-matching and exits. No
+# DATABASE_URL, no OpenAI/France Travail secret: this job never touches the
+# database or any external API besides Service Bus itself (see
+# docs/prompts/prompt-offer-distillation-pipeline.md). A Container App Job
+# supports only one trigger type, so this catch-up signal cannot live on the
+# queue-triggered job_matching resource itself.
+module "job_matching_heartbeat" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-heartbeat"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "*/15 * * * *"
+  replica_timeout_in_seconds = 60
+  image                      = "${module.container_registry.login_server}/agents/matching-heartbeat:latest"
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  secrets = [
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
     },
     {
       name  = "AZURE_CLIENT_ID"
