@@ -164,7 +164,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     let arr = matches.filter((m) => !rejected.has(m.offer.id));
     const q = query.trim().toLowerCase();
     if (q) arr = arr.filter((m) =>
-      `${m.offer.title} ${m.offer.company} ${m.offer.location}`.toLowerCase().includes(q),
+      `${m.offer.title} ${m.offer.company} ${m.offer.location} ${m.offer.description ?? ""}`.toLowerCase().includes(q),
     );
     arr = arr.filter((m) => {
       const novel = m.is_new && !seenIdsRef.current.has(m.offer.id);
@@ -201,7 +201,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     contentRef.current?.scrollTo({ top: 0 });
   }
 
-  function toItemData(m: MatchOut): MatchItemData {
+  function toItemData(m: MatchOut, searchQuery?: string): MatchItemData {
     const override = analysisOverrides.get(m.offer.id);
     return {
       match:      override ? { ...m, analysis: override } : m,
@@ -210,6 +210,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       isApplied:  applied.has(m.offer.id),
       isExpanded: selectedId === m.offer.id,
       analysisPending: analysisPending.has(m.offer.id),
+      searchQuery,
       onSelect:   () => toggleExpand(m.offer.id),
       onSave:     () => toggleSaved(m.offer.id),
       onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)), // TODO: persist applied state to backend
@@ -221,7 +222,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     };
   }
 
-  const items: MatchItemData[] = paginated.map(toItemData);
+  const items: MatchItemData[] = paginated.map((m) => toItemData(m, query));
 
   // The Sauvegardées list is built from the full `matches` set (minus rejected
   // offers), independent of the Offres tab's query/Nouvelles-Vues filters — a
@@ -232,7 +233,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const savedCurrentPage = Math.min(savedPage, savedTotalPages);
   const savedItems: MatchItemData[] = savedMatches
     .slice((savedCurrentPage - 1) * PAGE_SIZE, savedCurrentPage * PAGE_SIZE)
-    .map(toItemData);
+    .map((m) => toItemData(m));
 
   const displayedItems = tab === "Sauvegardées" ? savedItems : items;
 

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { MatchOut } from "@/lib/api/types";
 import MatchAnalysisPanel from "./MatchAnalysisPanel";
@@ -12,11 +13,34 @@ export interface MatchItemData {
   isExpanded: boolean;
   /** True between the "Analyser cette offre" click and the polling resolution. */
   analysisPending: boolean;
+  /** Active search bar text, used to highlight matches inside the offer description. Empty/absent = no highlight. */
+  searchQuery?: string;
   onSelect: () => void;
   onSave: () => void;
   onApply: () => void;
   onReject: () => void;
   onAnalyze: () => void;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Wraps every case-insensitive occurrence of `query` inside `text` in a <mark>. Returns `text` unchanged when `query` is empty. */
+function highlightMatches(text: string, query: string | undefined): ReactNode {
+  const q = query?.trim();
+  if (!q) return text;
+  const parts = text.split(new RegExp(`(${escapeRegExp(q)})`, "gi"));
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className="bg-accent-muted text-accent rounded-[3px] px-0.5">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
 }
 
 const FT_OFFER_URL = "https://candidat.francetravail.fr/offres/recherche/detail";
@@ -71,7 +95,7 @@ function logoBadge(company: string): { mono: string; bg: string; fg: string } {
 }
 
 export default function MatchItem({
-  match, isNew, isSaved, isApplied, isExpanded, analysisPending,
+  match, isNew, isSaved, isApplied, isExpanded, analysisPending, searchQuery,
   onSelect, onSave, onApply, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
@@ -249,7 +273,7 @@ export default function MatchItem({
             </div>
             {offer.description && (
               <p className="mt-4 text-[12.5px] text-body leading-relaxed whitespace-pre-line">
-                {offer.description}
+                {highlightMatches(offer.description, searchQuery)}
               </p>
             )}
             <div className="flex gap-2 mt-[18px] flex-wrap">
