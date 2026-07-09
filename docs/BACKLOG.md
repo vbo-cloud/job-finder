@@ -780,3 +780,21 @@ sur `offers`/`cvs` avec index GIN.
 Chaque ligne de `term_stats` porte le même `total_offers` pour un cycle donné —
 redondant mais sans conséquence à ce volume. Une table snapshot séparée (ou une
 ligne meta unique) serait plus propre si la table devait grossir ou être historisée.
+
+---
+
+## Pipeline de distillation LLM des offres (feature/offer-distillation-pipeline, PR #184) — suites identifiées
+
+### [optional] Pas de transaction autour du SELECT + publish dans `_publish_pending_offers_for_distillation`
+`agents/offer_fetching/main.py::_publish_pending_offers_for_distillation` lit les
+`offer_id` avec `embedding IS NULL` dans une session, puis publie les messages
+`distillate-offer-fetched` hors de toute transaction. Si le process crashe après la
+lecture mais avant la fin de la publication, les offres non publiées restent avec un
+embedding `NULL` jusqu'au prochain run planifié d'`offer_fetching` (12h/20h) — le job
+`matching_heartbeat` ne rattrape que le déclenchement de `matching`, pas la
+distillation elle-même, donc ces offres resteraient simplement non embarquées dans le
+scoring jusqu'au prochain fetch. Acceptable pour un projet portfolio et cohérent avec
+la tolérance "au moins une fois" / cohérence éventuelle déjà présente ailleurs dans
+l'architecture (retries Service Bus, idempotence par `embedding IS NULL`) — à
+durcir avant une vraie mise en production (ex. publier via un outbox transactionnel,
+ou déplacer la publication dans la même transaction que l'upsert des offres).

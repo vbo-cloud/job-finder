@@ -431,6 +431,11 @@ module "job_offer_distillation" {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
+    # Not surfaced as an env var on purpose — this secret is consumed directly by the
+    # module's KEDA event_trigger_config authentication block (see
+    # modules/container_app_job/main.tf), to authorize the queue-depth scaler. It is
+    # unrelated to the app's own Service Bus client, which authenticates via
+    # DefaultAzureCredential + AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE below.
     {
       name  = "servicebus-connection-string"
       value = module.servicebus.primary_connection_string
