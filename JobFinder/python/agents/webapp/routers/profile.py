@@ -25,7 +25,7 @@ from profile_defaults import default_profile_values
 from routers.cv import _delete_cv
 from schemas import CreditsRefillOut, ProfileOut, ProfileUpdate
 
-OFFER_READY_QUEUE = "offer-ready"
+START_MATCHING_QUEUE = "start-matching"
 ADMIN_CREDITS_REFILL_AMOUNT = 10
 _INTENT_FIELDS = {"experience_level", "candidate_description"}
 
@@ -55,8 +55,8 @@ def _build_intent_text(
     return "\n".join(fragments)
 
 
-def _dispatch_offer_ready(user_id: str, run_date: str) -> None:
-    """Send an offer-ready message so the matching agent re-scores existing offers.
+def _dispatch_start_matching(user_id: str, run_date: str) -> None:
+    """Send a start-matching message so the matching agent re-scores existing offers.
 
     Fire-and-forget: a Service Bus failure is logged but never fails the request —
     the profile is already committed and the next scheduled matching run will pick
@@ -68,7 +68,7 @@ def _dispatch_offer_ready(user_id: str, run_date: str) -> None:
     """
     try:
         send_message(
-            OFFER_READY_QUEUE,
+            START_MATCHING_QUEUE,
             {
                 "run_date": run_date,
                 "rome_codes": [],
@@ -77,9 +77,9 @@ def _dispatch_offer_ready(user_id: str, run_date: str) -> None:
                 "trigger": "profile_update",
             },
         )
-        logger.info("profile_put_offer_ready_sent", user_id=user_id)
+        logger.info("profile_put_start_matching_sent", user_id=user_id)
     except ServiceBusError:
-        logger.error("profile_put_offer_ready_failed", user_id=user_id, exc_info=True)
+        logger.error("profile_put_start_matching_failed", user_id=user_id, exc_info=True)
 
 
 @router.get("", response_model=ProfileOut)
@@ -149,8 +149,8 @@ def put_profile(
     Preferences only — rome_codes are managed by the CV upload pipeline
     and are never overwritten here.
 
-    When experience_level or candidate_description actually changes, an
-    offer-ready message is dispatched after commit so the matching agent
+    When experience_level or candidate_description actually changes, a
+    start-matching message is dispatched after commit so the matching agent
     re-scores existing offers against the new intent_embedding.
 
     Args:
@@ -258,7 +258,7 @@ def put_profile(
             experience_changed=experience_changed,
             description_changed=description_changed,
         )
-        _dispatch_offer_ready(user_id, now.date().isoformat())
+        _dispatch_start_matching(user_id, now.date().isoformat())
 
     logger.info("profile_put_completed", user_id=user_id)
     return ProfileOut.model_validate(profile).model_copy(

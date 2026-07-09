@@ -1,7 +1,7 @@
 """Tests for agents/webapp/routers/profile.py.
 
 Covers: GET /profile, PUT /profile (happy path, 404, 500, partial-update
-upsert behaviour, intent_embedding recomputation, offer-ready re-trigger on
+upsert behaviour, intent_embedding recomputation, start-matching re-trigger on
 intent change), DELETE /profile (account erasure).
 """
 import sys
@@ -270,7 +270,7 @@ class TestPutProfile:
         assert resp.status_code == 422
         mock_embed.assert_not_called()
 
-    def test_intent_change_dispatches_offer_ready(
+    def test_intent_change_dispatches_start_matching(
         self, test_client, mock_session, mock_send_message
     ):
         profile = _make_profile()
@@ -286,11 +286,11 @@ class TestPutProfile:
         assert resp.status_code == 200
         mock_send_message.assert_called_once()
         queue, body = mock_send_message.call_args.args
-        assert queue == "offer-ready"
+        assert queue == "start-matching"
         assert body["trigger"] == "profile_update"
         assert body["rome_codes"] == []
 
-    def test_unchanged_intent_values_do_not_dispatch_offer_ready(
+    def test_unchanged_intent_values_do_not_dispatch_start_matching(
         self, test_client, mock_session, mock_send_message
     ):
         profile = _make_profile()
@@ -308,7 +308,7 @@ class TestPutProfile:
         assert resp.status_code == 200
         mock_send_message.assert_not_called()
 
-    def test_commune_codes_only_does_not_dispatch_offer_ready(
+    def test_commune_codes_only_does_not_dispatch_start_matching(
         self, test_client, mock_session, mock_send_message
     ):
         profile = _make_profile()
@@ -349,7 +349,7 @@ class TestPutProfile:
         assert "email" not in set_clause
         assert "display_name" not in set_clause
 
-    def test_offer_ready_dispatch_failure_does_not_fail_request(
+    def test_start_matching_dispatch_failure_does_not_fail_request(
         self, test_client, mock_session, mock_send_message
     ):
         profile = _make_profile()

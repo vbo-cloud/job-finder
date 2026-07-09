@@ -28,7 +28,7 @@ from shared.telemetry import configure_telemetry
 # ==============================================================================
 
 CV_ANALYSIS_QUEUE = "cv-analysis"
-OFFER_READY_QUEUE = "offer-ready"
+START_MATCHING_QUEUE = "start-matching"
 
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
 if not AZURE_OPENAI_API_KEY:
@@ -538,7 +538,7 @@ def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
 
 
 def main() -> None:
-    """Consume one cv-analysis message, extract ROME codes, and dispatch offer-ready."""
+    """Consume one cv-analysis message, extract ROME codes, and dispatch start-matching."""
     configure_telemetry("cv-analysis")
     logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))
 
@@ -603,7 +603,7 @@ def main() -> None:
             rome_codes = [item["code"] for item in rome_items]
             try:
                 send_message(
-                    OFFER_READY_QUEUE,
+                    START_MATCHING_QUEUE,
                     {
                         "run_date": datetime.now(timezone.utc).date().isoformat(),
                         "rome_codes": rome_codes,
@@ -612,9 +612,9 @@ def main() -> None:
                         "trigger": "cv_analysis",
                     },
                 )
-                logger.info("cv_analysis_offer_ready_sent", cv_id=cv_id, user_id=user_id)
+                logger.info("cv_analysis_start_matching_sent", cv_id=cv_id, user_id=user_id)
             except ServiceBusError:
-                logger.error("cv_analysis_offer_ready_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
+                logger.error("cv_analysis_start_matching_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
                 raise
 
             logger.info("cv_analysis_completed", cv_id=cv_id, user_id=user_id, rome_codes=rome_codes)
