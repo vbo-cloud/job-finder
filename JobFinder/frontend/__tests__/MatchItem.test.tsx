@@ -174,6 +174,42 @@ describe("MatchItem", () => {
     });
   });
 
+  describe("search highlight in description", () => {
+    it("wraps a matching substring of the description in a <mark>", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          searchQuery: "azure",
+          match: makeMatch(0.85, { description: "Déploiement Azure avec Terraform." }),
+        })} />
+      );
+      const mark = screen.getByText("Azure");
+      expect(mark.tagName).toBe("MARK");
+    });
+
+    it("renders the description as plain text when there is no search query", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, { description: "Déploiement Azure avec Terraform." }),
+        })} />
+      );
+      expect(screen.getByText(/Déploiement Azure avec Terraform/)).toBeInTheDocument();
+      expect(document.querySelector("mark")).not.toBeInTheDocument();
+    });
+
+    it("does not highlight when the query does not appear in the description", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          searchQuery: "kubernetes",
+          match: makeMatch(0.85, { description: "Déploiement Azure avec Terraform." }),
+        })} />
+      );
+      expect(document.querySelector("mark")).not.toBeInTheDocument();
+    });
+  });
+
   describe("matched skills badges (compact view)", () => {
     it("shows up to 3 matched_skills badges when an analysis is done", () => {
       render(
