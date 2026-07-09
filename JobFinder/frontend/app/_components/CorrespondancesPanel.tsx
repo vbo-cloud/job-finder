@@ -164,7 +164,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     let arr = matches.filter((m) => !rejected.has(m.offer.id));
     const q = query.trim().toLowerCase();
     if (q) arr = arr.filter((m) =>
-      `${m.offer.title} ${m.offer.company} ${m.offer.location}`.toLowerCase().includes(q),
+      `${m.offer.title} ${m.offer.company} ${m.offer.location} ${m.offer.description}`.toLowerCase().includes(q),
     );
     arr = arr.filter((m) => {
       const novel = m.is_new && !seenIdsRef.current.has(m.offer.id);

@@ -241,6 +241,23 @@ describe("CorrespondancesPanel — pagination", () => {
   });
 });
 
+describe("CorrespondancesPanel — recherche", () => {
+  it("matches offers on a keyword found only in the description", () => {
+    const [first, second] = makeMatches(2);
+    renderPanel([
+      { ...first, offer: { ...first.offer, description: "Stack technique : Azure, Terraform, AKS." } },
+      { ...second, offer: { ...second.offer, description: "Stack technique : AWS, Docker, GCP." } },
+    ]);
+
+    fireEvent.change(screen.getByPlaceholderText("Rechercher un poste, une ville…"), {
+      target: { value: "azure" },
+    });
+
+    expect(screen.getByRole("button", { name: /Offre 01/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Offre 02/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("CorrespondancesPanel — onglet Sauvegardées", () => {
   it("shows a saved offer in the Sauvegardées tab", () => {
     renderPanel();
