@@ -4713,3 +4713,21 @@ Exécution de `docs/prompts/prompt-matching-remove-lexical-bonus.md`. Décision 
 
 - **Remplacer par rien, pas par une formule alternative** : contrairement au remplacement `tech_keywords` → `term_stats` de PR #180, aucun mécanisme lexical de repli n'est introduit — la décision actée est qu'un LLM en amont de l'embedding (`prompt-offer-distillation-pipeline.md`, indépendant) est la seule voie retenue pour ce signal.
 - **Bénéfice complet différé** : le classement sur les 6 offres de référence ne sera pleinement correct qu'une fois la distillation LLM également en production (le `base_score` actuel reste sur texte brut) — ce retrait est correct et livrable indépendamment.
+
+---
+
+## PR #186 — feat(frontend): inclure la description de l'offre dans la recherche des correspondances
+
+**Date :** 2026-07-09
+**Branche :** `feature/correspondances-search-description` → `dev`
+
+### Contexte
+
+Demande utilisateur : la barre de recherche de l'onglet Offres ne matchait que titre/entreprise/localisation — une recherche « Azure » ne remontait pas une offre qui mentionne Azure uniquement dans sa description.
+
+### Ce qui a été fait
+
+- **`CorrespondancesPanel.tsx`** : le filtre de recherche (`useMemo` `filtered`) inclut désormais `offer.description` dans la chaîne concaténée testée par `.includes(q)`, en plus de titre/entreprise/localisation. Aucun changement backend : `description` était déjà retourné par `GET /matches` et typé dans `MatchOut` côté frontend, simplement pas exploité par la recherche.
+- **Tests** : nouveau cas — une offre matchée uniquement via un mot-clé présent dans sa description, une autre offre au même mot-clé absent restant exclue.
+
+**Vérification :** Jest 20/20 sur `CorrespondancesPanel.test.tsx`.
