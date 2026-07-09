@@ -2,7 +2,9 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CVDetailSection from "@/app/_components/CVDetailSection";
 import apiClient from "@/lib/api/client";
-import type { CVData } from "@/lib/api/types";
+import type { CVData, MatchOut } from "@/lib/api/types";
+
+const ANALYSIS_RESPONSE = { status: "error", ats_score: null, points_forts: [], points_faibles: [], suggestions: [], coherence_intention: null };
 
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
@@ -12,7 +14,7 @@ jest.mock("@/lib/api/client", () => ({
     // thumbnail fetch (skipped anyway: has_thumbnail is false below).
     get: jest.fn((url: string) =>
       url.includes("/analysis")
-        ? Promise.resolve({ data: { status: "error", ats_score: null, points_forts: [], points_faibles: [], suggestions: [], coherence_intention: null } })
+        ? Promise.resolve({ data: ANALYSIS_RESPONSE })
         : Promise.resolve({ data: { matches: [] } }),
     ),
     patch: jest.fn().mockResolvedValue({}),
@@ -30,19 +32,49 @@ const CV: CVData = {
   has_thumbnail: false,
 };
 
-function renderSection() {
+function makeMatch(id: string): MatchOut {
+  return {
+    score: 0.75,
+    analysis: null,
+    is_new: false,
+    offer: {
+      id,
+      ft_id: id,
+      title: `Offre ${id}`,
+      company: "ACME",
+      location: "Paris (75)",
+      contract_type: "CDI",
+      description: "",
+      salary: null,
+      rome_code: null,
+      skills: [],
+      expires_at: null,
+    },
+  };
+}
+
+function renderSection(cvs: CVData[] = [CV], selectedCvId: string = CV.id) {
   return render(
     <CVDetailSection
-      cvs={[CV]}
-      selectedCvId={CV.id}
+      cvs={cvs}
+      selectedCvId={selectedCvId}
       onCvChange={jest.fn()}
       onClose={jest.fn()}
     />,
   );
 }
 
+function matchesCallCount() {
+  return (apiClient.get as jest.Mock).mock.calls.filter(([url]) => url.includes("/matches/cv/")).length;
+}
+
 beforeEach(() => {
   (apiClient.get as jest.Mock).mockClear();
+  (apiClient.get as jest.Mock).mockImplementation((url: string) =>
+    url.includes("/analysis")
+      ? Promise.resolve({ data: ANALYSIS_RESPONSE })
+      : Promise.resolve({ data: { matches: [] } }),
+  );
 });
 
 describe("CVDetailSection — accordéon d'analyse du CV", () => {
@@ -102,5 +134,78 @@ describe("CVDetailSection — accordéon d'analyse du CV", () => {
     fireEvent.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("CVDetailSection — rafraîchissement des correspondances quand match_count change", () => {
+  it("refetches matches when match_count changes without selectedCvId or zoneVersion changing", async () => {
+    let matchesCall = 0;
+    (apiClient.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes("/analysis")) return Promise.resolve({ data: ANALYSIS_RESPONSE });
+      matchesCall += 1;
+      return Promise.resolve({ data: { matches: matchesCall === 1 ? [] : [makeMatch("o1"), makeMatch("o2")] } });
+    });
+
+    const { rerender } = renderSection();
+    await waitFor(() => expect(matchesCallCount()).toBe(1));
+
+    rerender(
+      <CVDetailSection
+        cvs={[{ ...CV, match_count: 2 }]}
+        selectedCvId={CV.id}
+        onCvChange={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(matchesCallCount()).toBe(2));
+    expect(await screen.findByText("2 correspondances analysées")).toBeInTheDocument();
+  });
+
+  it("does not refetch matches when an unrelated prop changes with the same match_count", async () => {
+    const { rerender } = renderSection();
+    await waitFor(() => expect(matchesCallCount()).toBe(1));
+
+    // New array/object references, same match_count value — the effect must
+    // key off the value, not the identity of the `cvs` array.
+    rerender(
+      <CVDetailSection
+        cvs={[{ ...CV }]}
+        selectedCvId={CV.id}
+        onCvChange={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    // Give any accidental effect a tick to fire before asserting it didn't.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(matchesCallCount()).toBe(1);
+  });
+
+  it("keeps the displayed matches and shows no error when the silent refresh fails", async () => {
+    let matchesCall = 0;
+    (apiClient.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes("/analysis")) return Promise.resolve({ data: ANALYSIS_RESPONSE });
+      matchesCall += 1;
+      return matchesCall === 1
+        ? Promise.resolve({ data: { matches: [makeMatch("o1")] } })
+        : Promise.reject(new Error("network down"));
+    });
+
+    const { rerender } = renderSection();
+    await waitFor(() => expect(screen.getByText("1 correspondances analysées")).toBeInTheDocument());
+
+    rerender(
+      <CVDetailSection
+        cvs={[{ ...CV, match_count: 2 }]}
+        selectedCvId={CV.id}
+        onCvChange={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(matchesCallCount()).toBe(2));
+    expect(screen.getByText("1 correspondances analysées")).toBeInTheDocument();
+    expect(screen.queryByText(/impossible de charger les matchs/i)).not.toBeInTheDocument();
   });
 });
