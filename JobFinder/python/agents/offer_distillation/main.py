@@ -212,7 +212,15 @@ def main() -> None:
                 return
             title, description = fetched
 
-            distilled_skills = _distill(f"{title}\n\n{description}")
+            combined_text = f"{title}\n\n{description}"
+            if len(combined_text) > OFFER_TEXT_MAX_CHARS:
+                logger.warning(
+                    "offer_distillation_text_truncated",
+                    offer_id=offer_id,
+                    original_len=len(combined_text),
+                    max_chars=OFFER_TEXT_MAX_CHARS,
+                )
+            distilled_skills = _distill(combined_text)
             embedding = embed([distilled_skills])[0]
             _save_distillation(offer_id, distilled_skills, embedding)
 
