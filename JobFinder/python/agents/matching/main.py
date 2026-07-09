@@ -25,7 +25,7 @@ from shared.db import get_session, run_migrations
 from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
 
-OFFER_READY_QUEUE = "offer-ready"
+START_MATCHING_QUEUE = "start-matching"
 MATCH_READY_QUEUE = "match-ready"
 MATCH_ANALYSIS_QUEUE = "match-analysis"
 
@@ -211,7 +211,7 @@ def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
 
 
 def main() -> None:
-    """Consume one offer-ready message and run matching for all CVs."""
+    """Consume one start-matching message and run matching for all CVs."""
     configure_telemetry("matching")
 
     try:
@@ -223,7 +223,7 @@ def main() -> None:
     # receive_message is a @contextmanager that yields the decoded payload dict
     # and handles complete/abandon on exit. RuntimeError means no messages available.
     try:
-        with receive_message(OFFER_READY_QUEUE) as msg:
+        with receive_message(START_MATCHING_QUEUE) as msg:
             run_date = msg.get("run_date", "")
             logger.info("matching_run_started", run_date=run_date)
 
@@ -284,7 +284,7 @@ def main() -> None:
 
     except RuntimeError:
         # receive_message returns without yielding when the queue is empty —
-        # typically a manual "Run now" without a pending offer-ready message.
+        # typically a manual "Run now" without a pending start-matching message.
         # Unlike cv_analysis/match_analysis (per-message workers where an
         # empty-queue race is a normal no-op), a matching run that consumed
         # nothing must be reported Failed: it performed no matching and must

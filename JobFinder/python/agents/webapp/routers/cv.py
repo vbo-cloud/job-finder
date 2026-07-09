@@ -203,7 +203,7 @@ async def upload_cv(
 
     Inserts a new CV row and a default user profile (if absent), then sends a
     message to the cv-analysis queue. The cv-analysis agent extracts ROME codes
-    from the raw text and dispatches the offer-ready trigger once codes are populated.
+    from the raw text and dispatches the start-matching trigger once codes are populated.
 
     Args:
         file: The uploaded PDF file.

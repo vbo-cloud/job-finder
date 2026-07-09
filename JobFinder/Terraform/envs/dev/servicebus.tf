@@ -2,10 +2,15 @@
 # Service Bus
 # ==============================================================================
 # Queues:
-#   offer-ready     — agent cv-analysis → job-matching
-#   match-ready     — job-matching → notification utilisateur
-#   cv-analysis     — POST /cv/upload → agent cv-analysis (codes ROME + qualité du CV)
-#   match-analysis  — job-matching (top N auto) + POST /matches/.../analyze → agent match-analysis
+#   distillate-offer-fetched — agent offer-fetching (une fois par offre à distiller) → agent
+#                              offer-distillation (distillation LLM puis embedding, un message par offer_id)
+#   start-matching           — profile.py (changement d'intention) + agent cv-analysis (nouveau CV) +
+#                              agent matching-heartbeat (timer de rattrapage) → job-matching
+#                              (renommage de offer-ready : granularité par événement déclencheur,
+#                              jamais par offre — voir docs/prompts/prompt-offer-distillation-pipeline.md)
+#   match-ready               — job-matching → notification utilisateur
+#   cv-analysis               — POST /cv/upload → agent cv-analysis (codes ROME + qualité du CV)
+#   match-analysis            — job-matching (top N auto) + POST /matches/.../analyze → agent match-analysis
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -19,7 +24,8 @@ module "servicebus" {
   owner               = var.owner
 
   queues = [
-    "offer-ready",
+    "distillate-offer-fetched",
+    "start-matching",
     "match-ready",
     "cv-analysis",
     "match-analysis",

@@ -38,6 +38,9 @@ class Offer(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    # Texte distillé par LLM (compétences/technologies/missions, verbe + objet) avant embedding —
+    # voir agents/offer_distillation/main.py. NULL tant que la distillation n'a pas encore tourné.
+    distilled_skills: Mapped[str | None] = mapped_column(Text, nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

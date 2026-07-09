@@ -8,7 +8,7 @@ from typing import Generator
 import structlog
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
-from azure.servicebus.exceptions import ServiceBusError
+from azure.servicebus.exceptions import MessageSizeExceededError, ServiceBusError
 
 RECEIVE_MAX_WAIT_SECONDS = 30
 
@@ -41,6 +41,47 @@ def send_message(queue_name: str, body: dict) -> None:
                 logger.error("servicebus_send_failed", queue=queue_name, exc_info=True)
                 raise
             logger.info("servicebus_message_sent", queue=queue_name)
+
+
+def send_messages_batch(queue_name: str, bodies: list[dict]) -> None:
+    """Serialize and send multiple message bodies over a single connection/sender.
+
+    Unlike send_message (one ServiceBusClient/sender per call), this reuses a
+    single connection for the whole batch — needed for large fan-outs (e.g.
+    offer_fetching publishing one message per pending offer, potentially
+    thousands per run) where per-message connection handshakes would
+    reintroduce the latency the async pipeline is meant to remove. Messages
+    are packed into ServiceBusMessageBatch instances honoring the transport
+    size limit, sending as many batches as required.
+
+    Args:
+        queue_name: Target Service Bus queue name.
+        bodies: Message payloads to serialize as JSON, one per message.
+
+    Returns:
+        None
+    """
+    if not bodies:
+        return
+    logger.info("servicebus_send_batch_started", queue=queue_name, count=len(bodies))
+    with ServiceBusClient(fully_qualified_namespace=_namespace, credential=_credential) as client:
+        with client.get_queue_sender(queue_name) as sender:
+            try:
+                batch = sender.create_message_batch()
+                for body in bodies:
+                    message = ServiceBusMessage(json.dumps(body))
+                    try:
+                        batch.add_message(message)
+                    except MessageSizeExceededError:
+                        # Batch full (transport size limit) — flush it and start a new one.
+                        sender.send_messages(batch)
+                        batch = sender.create_message_batch()
+                        batch.add_message(message)
+                sender.send_messages(batch)
+            except ServiceBusError:
+                logger.error("servicebus_send_batch_failed", queue=queue_name, exc_info=True)
+                raise
+    logger.info("servicebus_send_batch_completed", queue=queue_name, count=len(bodies))
 
 
 @contextmanager

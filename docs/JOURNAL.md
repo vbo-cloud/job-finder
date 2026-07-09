@@ -4657,6 +4657,39 @@ Bug remonté par Vincent : quand l'analyse d'un CV se termine et que son `match_
 
 ---
 
+## PR #184 — feat(offer-distillation): pipeline asynchrone de distillation LLM des offres avant embedding
+
+**Date :** 2026-07-09
+**Branche :** `feature/offer-distillation-pipeline` → `dev`
+
+### Contexte
+
+Suite du diagnostic mené avec Vincent les 09-10/07 (`docs/prompts/prompt-matching-skills-bonus-ratio-fix.md`, `docs/prompts/prompt-matching-llm-distillation-manual-test.md`). Le test manuel a validé qu'un prompt de distillation en verbe + objet (plutôt qu'une liste de noms d'outils bruts) sépare nettement mieux les offres pertinentes des hors-sujet avant embedding. Cette tâche (`docs/prompts/prompt-offer-distillation-pipeline.md`) passe cette distillation en production dans le pipeline d'ingestion, sans faire de `offer_fetching` un point bloquant : la distillation devient un agent asynchrone séparé, déclenché par offre via Service Bus.
+
+### Ce qui a été fait
+
+- **Migration 027 + `Offer.distilled_skills`** : colonne texte nullable persistant le texte distillé (débogabilité) — le prompt suggérait le numéro 025, déjà pris par `term_stats` (PR #180) ; d'abord numérotée 026, puis renumérotée en 027 lors du rebase sur `dev` une fois PR #185 mergée (qui avait elle-même pris le numéro 026 entre-temps).
+- **`shared/bus.py::send_messages_batch`** : nouveau helper réutilisant une seule connexion/sender pour publier plusieurs messages, au lieu d'ouvrir une connexion AMQP par message (`send_message` existant) — nécessaire pour le fan-out par offre (potentiellement des milliers par run) sans réintroduire la latence que l'architecture asynchrone est censée éliminer.
+- **`offer_fetching`** : ne fait plus que fetch + upsert. `_embed_pending_offers` et l'appel `embed()` supprimés ; publie désormais un message par offre à `embedding IS NULL` sur la nouvelle queue `distillate-offer-fetched`. Le dispatch de fin de run vers l'ancienne `offer-ready` est supprimé (il ne captait plus rien d'utile une fois la distillation asynchrone). Secrets/env vars OpenAI retirés du job Terraform associé, devenus inutiles.
+- **Nouvel agent `agents/offer_distillation`** : consomme `distillate-offer-fetched` (un `offer_id` par message), idempotent (no-op si l'offre a déjà un embedding — message rejoué), distille via GPT-4o-mini (prompt verbe + objet validé, texte brut en sortie), embed via `shared/embedder.py::embed()`, écrit `distilled_skills` + `embedding`. Aucun message en sortie. Pas de boucle de retry JSON (contrairement à `cv_analysis`) : la sortie est du texte brut, pas de JSON à parser — une erreur (API ou réponse vide) remonte telle quelle, laissant Service Bus réessayer le message au niveau transport (pas de colonne de statut sur `offers`).
+- **Nouvel agent `agents/matching_heartbeat`** : job timer minimal (`*/15 * * * *`), envoie un seul message `start-matching` et termine — filet de rattrapage puisque la distillation asynchrone n'a plus de signal "lot terminé" par offre (un compteur partagé a été envisagé puis écarté avec Vincent, fragile face à la livraison "au moins une fois"). N'importe ni `shared.db` ni `shared.models` — ce job n'a délibérément aucun accès base ni secret OpenAI/France Travail.
+- **Renommage `offer-ready` → `start-matching`** : constante `OFFER_READY_QUEUE`/valeur dans `agents/matching`, `agents/cv_analysis`, `agents/webapp/routers/profile.py` (+ commentaire dans `routers/cv.py`) — comportement inchangé, granularité par événement déclencheur (jamais par offre), cohérent avec la nouvelle `distillate-offer-fetched` qui elle est bien par offre.
+- **Terraform** : queue `distillate-offer-fetched` ajoutée, `offer-ready` renommée `start-matching` dans `servicebus.tf` ; deux nouveaux modules `job_offer_distillation` (`job-jf-dev-frc-distill`, queue, `max_executions = 20` pour absorber un afflux de milliers d'offres) et `job_matching_heartbeat` (`job-jf-dev-frc-heartbeat`, timer, secrets réduits au strict nécessaire Service Bus + Application Insights) dans `container_apps.tf`.
+- **CI (`buildAgents.yml`)** : ajout des deux nouvelles images (`offer-distillation`, `matching-heartbeat`) — build/push, résumé de build, mise à jour du Container App Job. Non demandé explicitement par le prompt de tâche (qui ne couvre que l'architecture des 6 commits Python/Terraform), mais sans ce câblage les deux nouveaux jobs Terraform référenceraient des images jamais construites — fonctionnalité non déployable sinon.
+
+**Vérification :** `pytest` 243/243 après rebase sur `dev` (nouveau `test_offer_distillation.py`/`test_bus.py`, mise à jour `test_offer_fetching.py`/`test_webapp_profile.py` pour le renommage de queue et pour le retrait de `_refresh_term_stats`). `terraform fmt -check` et `terraform validate` propres sur `envs/dev`. Grep du dépôt entier : plus aucune référence code à `offer-ready`/`OFFER_READY_QUEUE` (seules les mentions historiques dans `BACKLOG.md`/`ROADMAP.md`/`JOURNAL.md`/ADR subsistent, volontairement non réécrites). Aucune ressource critique détruite/remplacée — seules des queues et jobs ajoutés/modifiés à l'intérieur du namespace Service Bus existant (`prevent_destroy`/`protect` inchangés).
+
+### Décisions techniques
+
+- **Hygiène de branche avant de démarrer** : la branche `feature/matching-skills-bonus-ratio-fix` avait un diff local non commité sur `agents/matching/main.py` alors que le nouveau prompt indiquait ce fix "déjà mergé" — écart confirmé réel (aucun commit sur `dev`), et le diff s'est avéré être une copie obsolète du fix déjà réellement appliqué ailleurs (branche `tmp` parallèle de Vincent, contenant le test manuel de distillation validé). Diff écarté sur confirmation explicite de Vincent avant de repartir de `dev` à jour.
+- **Numéro de migration 027, pas 025** : le prompt de tâche suggérait 025, déjà pris par `term_stats` (PR #180, mergée après la rédaction du prompt) — un numéro dupliqué aurait fait échouer Alembic au démarrage. Numérotée 026 dans un premier temps, puis 027 après rebase (voir plus bas).
+- **Pas de retry JSON dans `offer_distillation`** : le prompt demandait "même politique que `_extract_rome_codes`", mais cette politique retry sur erreur de parsing JSON — la distillation retourne du texte brut, il n'y a rien à parser. Propagation de l'erreur (transport Service Bus) retenue à la place, cohérente avec l'esprit du prompt ("laisser Service Bus gérer le retry").
+- **`send_messages_batch` ajouté, non demandé explicitement** : publier un message par offre avec `send_message` (une connexion AMQP par appel) aurait réintroduit à l'intérieur d'`offer_fetching` la latence cumulée que l'architecture asynchrone cherche justement à éliminer, à l'échelle de milliers d'offres. Justifié par l'échelle mentionnée dans le prompt lui-même (10 000 offres/run), pas une optimisation gratuite.
+- **Secrets OpenAI retirés du job `offer_fetching` en Terraform** : conséquence directe de la suppression de l'appel `embed()` de cet agent — non demandé explicitement par le prompt mais nécessaire (moindre privilège, l'agent n'a plus aucun besoin d'Azure OpenAI).
+- **Rebase sur `dev` après merge de PR #185** (qui retire tout le bonus lexical `tech_keywords`/`term_stats`) : deuxième collision de numéro de migration (026 pris cette fois par `026_remove_lexical_bonus`, en plus du 025 déjà pris par `term_stats`) — renumérotée en 027, `down_revision` rebasé sur 026. `_refresh_term_stats()` n'existe plus après PR #185 : l'appel prévu dans `offer_fetching.main()` après `_publish_pending_offers_for_distillation()` est retiré (plus rien à rafraîchir), de même que les imports `UserProfile`/`tech_keywords` devenus morts et la classe de test `TestRefreshTermStats`.
+
+---
+
 ## PR #185 — refactor(matching): retirer tout bonus lexical du score de matching
 
 **Date :** 2026-07-09

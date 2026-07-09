@@ -1,12 +1,15 @@
-"""Offer fetching agent — fetch, embed, and dispatch job offers from France Travail.
+"""Offer fetching agent — fetch and upsert job offers from France Travail.
 
-Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC).
+Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC). Fetch +
+upsert only — no LLM call, no embedding. After upserting, publishes one
+message per offer with a NULL embedding to distillate-offer-fetched, where
+agents/offer_distillation picks it up asynchronously (distills via GPT-4o-mini,
+then embeds). Keeping this agent's own run fast is why that step was moved out
+(see docs/prompts/prompt-offer-distillation-pipeline.md).
 
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
-    AZURE_SERVICEBUS_CONNECTION_STRING: Service Bus connection string.
-    AZURE_OPENAI_API_KEY: Azure OpenAI API key.
-    AZURE_OPENAI_ENDPOINT: Azure OpenAI endpoint URL.
+    AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE: Service Bus namespace host.
     FT_CLIENT_ID: France Travail OAuth2 client ID.
     FT_CLIENT_SECRET: France Travail OAuth2 client secret.
 """
@@ -16,21 +19,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import case, func, literal_column, select, text, update
+from sqlalchemy import case, literal_column, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from ft_client import fetch_offers, get_access_token
-from shared.bus import send_message
+from shared.bus import send_messages_batch
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
-from shared.embedder import embed
 from shared.geo import parse_department_from_location, parse_region_from_location
-from shared.models import Offer, UserProfile
+from shared.models import Offer
 from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
-OFFER_READY_QUEUE = "offer-ready"
+DISTILLATE_OFFER_FETCHED_QUEUE = "distillate-offer-fetched"
 
 # Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
 # "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
@@ -210,56 +212,45 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     return new_count
 
 
-def _embed_pending_offers() -> int:
-    """Embed all offers that have no embedding vector.
+def _publish_pending_offers_for_distillation() -> int:
+    """Publish one distillation message per offer with a NULL embedding.
 
-    Fetches offers with embedding IS NULL, calls the batch embed API,
-    and writes vectors back to the database.
+    Same selection condition _embed_pending_offers used before distillation
+    moved to its own async agent: covers both newly upserted offers and
+    offers whose embedding was invalidated by a more recent ft_updated_at
+    (see the case() branch in _upsert_offers).
 
     Returns:
-        Number of offers embedded.
+        Number of offers published for distillation.
 
     Raises:
         SQLAlchemyError: If a database operation fails.
-        openai.OpenAIError: If the embedding API call fails.
+        ServiceBusError: If publishing fails.
     """
     try:
         with get_session() as session:
-            pending = session.execute(
-                select(Offer.id, Offer.description).where(Offer.embedding.is_(None))
-            ).all()
+            pending_ids = session.execute(
+                select(Offer.id).where(Offer.embedding.is_(None))
+            ).scalars().all()
     except SQLAlchemyError:
-        logger.error("embed_fetch_pending_failed", exc_info=True)
+        logger.error("distillation_publish_fetch_pending_failed", exc_info=True)
         raise
 
-    if not pending:
-        logger.info("embedding_no_pending_offers")
+    if not pending_ids:
+        logger.info("distillation_publish_no_pending_offers")
         return 0
 
-    logger.info("embedding_pending_offers", count=len(pending))
-    descriptions = [row.description for row in pending]
-    vectors = embed(descriptions)
-
-    update_mappings = [
-        {"id": row.id, "embedding": vector}
-        for row, vector in zip(pending, vectors)
-    ]
-    try:
-        with get_session() as session:
-            # ORM bulk UPDATE by PK — SQLAlchemy generates UPDATE ... WHERE id = ?
-            # from the PK in each dict; no .where() / .values() needed
-            session.execute(update(Offer), update_mappings)
-            session.commit()
-    except SQLAlchemyError:
-        logger.error("embed_update_failed", count=len(pending), exc_info=True)
-        raise
-
-    logger.info("embedding_completed", count=len(pending))
-    return len(pending)
+    logger.info("distillation_publish_started", count=len(pending_ids))
+    send_messages_batch(
+        DISTILLATE_OFFER_FETCHED_QUEUE,
+        [{"offer_id": str(offer_id)} for offer_id in pending_ids],
+    )
+    logger.info("distillation_publish_completed", count=len(pending_ids))
+    return len(pending_ids)
 
 
 def main() -> None:
-    """Run the offer-fetch job: fetch, upsert, embed, and signal readiness."""
+    """Run the offer-fetch job: fetch, upsert, and publish pending offers for distillation."""
     configure_telemetry("offer-fetching")
 
     try:
@@ -279,28 +270,15 @@ def main() -> None:
         raw_offers = fetch_offers(token, rome_code, min_date=min_date)
         total_new += _upsert_offers(raw_offers, rome_code)
 
-    embedded_count = _embed_pending_offers()
+    distillation_published = _publish_pending_offers_for_distillation()
 
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if total_new > 0:
-        send_message(
-            OFFER_READY_QUEUE,
-            {
-                "run_date": run_date,
-                "rome_codes": rome_codes,
-                "new_offers_count": total_new,
-                "embedded_count": embedded_count,
-            },
-        )
-    else:
-        logger.info("offer_ready_skipped", reason="no_new_offers")
-
     logger.info(
         "offer_fetch_run_completed",
         run_date=run_date,
         rome_codes=rome_codes,
         new_offers_count=total_new,
-        embedded_count=embedded_count,
+        distillation_published=distillation_published,
     )
 
 

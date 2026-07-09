@@ -1,6 +1,7 @@
 """Tests for agents/offer_fetching/main.py.
 
-Covers: _parse_experience_min_years, _upsert_offers (values wiring).
+Covers: _parse_experience_min_years, _upsert_offers (values wiring),
+_publish_pending_offers_for_distillation.
 
 The module is loaded via importlib under the unique name 'offer_fetching_main'
 to avoid sys.modules collision with the other agents' main.py. The
@@ -28,6 +29,7 @@ _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 _parse_experience_min_years = _mod._parse_experience_min_years
 _upsert_offers = _mod._upsert_offers
+_publish_pending_offers_for_distillation = _mod._publish_pending_offers_for_distillation
 
 
 def _session_cm(session: MagicMock):
@@ -109,3 +111,38 @@ class TestUpsertOffersValues:
         assert values[0]["experience_min_years"] == 5
         assert values[0]["skills"] == ["Cloud computing"]
         mock_session.commit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _publish_pending_offers_for_distillation
+# ---------------------------------------------------------------------------
+
+
+class TestPublishPendingOffersForDistillation:
+    def test_publishes_one_message_per_offer_with_null_embedding(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [
+            "offer-uuid-1",
+            "offer-uuid-2",
+        ]
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+        mock_send_batch = mocker.patch.object(_mod, "send_messages_batch")
+
+        result = _publish_pending_offers_for_distillation()
+
+        assert result == 2
+        mock_send_batch.assert_called_once_with(
+            _mod.DISTILLATE_OFFER_FETCHED_QUEUE,
+            [{"offer_id": "offer-uuid-1"}, {"offer_id": "offer-uuid-2"}],
+        )
+
+    def test_does_not_publish_when_no_pending_offers(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalars.return_value.all.return_value = []
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+        mock_send_batch = mocker.patch.object(_mod, "send_messages_batch")
+
+        result = _publish_pending_offers_for_distillation()
+
+        assert result == 0
+        mock_send_batch.assert_not_called()

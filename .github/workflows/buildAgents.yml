@@ -140,6 +140,30 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/match-analysis:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/match-analysis:cache,mode=max
 
+      - name: Build and push offer-distillation image
+        uses: docker/build-push-action@v6
+        with:
+          context: JobFinder/python
+          file: JobFinder/python/agents/offer_distillation/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/agents/offer-distillation:latest
+            ${{ env.ACR_LOGIN_SERVER }}/agents/offer-distillation:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-distillation:cache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-distillation:cache,mode=max
+
+      - name: Build and push matching-heartbeat image
+        uses: docker/build-push-action@v6
+        with:
+          context: JobFinder/python
+          file: JobFinder/python/agents/matching_heartbeat/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/agents/matching-heartbeat:latest
+            ${{ env.ACR_LOGIN_SERVER }}/agents/matching-heartbeat:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/matching-heartbeat:cache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/matching-heartbeat:cache,mode=max
+
       - name: Build summary
         run: |
           echo "### Images pushed" >> $GITHUB_STEP_SUMMARY
@@ -149,6 +173,8 @@ jobs:
           echo "- \`$ACR_LOGIN_SERVER/agents/webapp:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/cv-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/match-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`$ACR_LOGIN_SERVER/agents/offer-distillation:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`$ACR_LOGIN_SERVER/agents/matching-heartbeat:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Update Container App Job images
         run: |
@@ -182,3 +208,13 @@ jobs:
             --resource-group rg-jf-dev-frc-app \
             --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/match-analysis:${{ github.sha }}
+          az containerapp job update \
+            --name job-jf-dev-frc-distill \
+            --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --image $ACR_LOGIN_SERVER/agents/offer-distillation:${{ github.sha }}
+          az containerapp job update \
+            --name job-jf-dev-frc-heartbeat \
+            --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --image $ACR_LOGIN_SERVER/agents/matching-heartbeat:${{ github.sha }}
