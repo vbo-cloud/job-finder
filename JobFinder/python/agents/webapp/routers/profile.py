@@ -138,9 +138,17 @@ def put_profile(
     Preferences only — rome_codes are managed by the CV upload pipeline
     and are never overwritten here.
 
+    intent_embedding reflects candidate_description only — experience_level
+    never contributes to it, it only feeds the numeric experience malus in
+    matching. Recomputing intent_embedding therefore only happens when
+    candidate_description actually changes; a change to experience_level alone
+    leaves the stored embedding untouched.
+
     When experience_level or candidate_description actually changes, a
-    start-matching message is dispatched after commit so the matching agent
-    re-scores existing offers against the new intent_embedding.
+    start-matching message is still dispatched after commit so the matching
+    agent re-scores existing offers — the malus depends on experience_level,
+    so its change alone must still trigger a rescore even though the
+    embedding itself is untouched.
 
     Args:
         body: New profile preferences.
@@ -184,11 +192,15 @@ def put_profile(
         experience_changed = new_experience != old_experience
         description_changed = new_description != old_description
         intent_changed = experience_changed or description_changed
-        intent_text = _build_intent_text(new_description)
-        if intent_text:
-            embedded = embed([intent_text])
-            intent_embedding = embedded[0] if embedded else None
-        updated["intent_embedding"] = intent_embedding
+        # experience_level only feeds the matching malus, never the embedding —
+        # recomputing intent_embedding when only it changed would overwrite a
+        # correctly-stored value with the same text, wastefully re-embedding it.
+        if description_changed:
+            intent_text = _build_intent_text(new_description)
+            if intent_text:
+                embedded = embed([intent_text])
+                intent_embedding = embedded[0] if embedded else None
+            updated["intent_embedding"] = intent_embedding
 
     if "commune_codes" in updated and updated["commune_codes"] is None:
         # commune_codes is NOT NULL in the DB — a null-clear over the wire
