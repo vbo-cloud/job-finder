@@ -33,7 +33,7 @@ Az-104 certification obtained.
 
 ## Terraform Conventions
 
-→ See `docs/conventions-terraform.md`. Read this file before writing or editing any Terraform code.
+→ Enforced via the `conventions-terraform` skill (`.claude/skills/conventions-terraform/`). Consult it before writing or editing any Terraform code.
 
 ## CI/CD
 
@@ -108,21 +108,45 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub variable
 - Never use merge to catch up with the base branch, always rebase
 - Never force push without `--force-with-lease`
 
+### Enforcement via hooks
+
+The rules above that are mechanically checkable are enforced by a `PreToolUse` hook on
+the Bash tool (`.claude/settings.json` → `.claude/hooks/pre_bash_guard.py`), not just
+documented here. It blocks, for either Claude instance:
+- Direct `git push` to `main`/`dev`
+- Force-push without `--force-with-lease`
+- `git merge` used to catch up a branch (the `--ff-only` local sync in the workflow above stays allowed)
+- Local `terraform apply`/`terraform destroy` (CI-only, see Terraform Conventions)
+- Mutating Azure CLI commands (`az ... create/update/delete/set/remove/assign/deploy/restore/purge/...`) — read-only verbs (`show`, `list`, `get`...) stay allowed
+- Mutating Azure PowerShell cmdlets (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
+- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, or if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits
+
+This same hook applies identically inside `claude-code-action` CI runs (see `.github/CLAUDE_ACTION.md`), since the action runs the real Claude Code engine against the checked-out repo and reads the same `.claude/settings.json`. The Azure CLI/PowerShell verb list is a backstop, not exhaustive — it covers common mutating verb families, not every possible destructive command; `reviewer-infra`'s own judgment and the CI-only apply pipeline remain the primary controls.
+
+A `PostToolUse` hook (`.claude/hooks/post_edit_format.py`) best-effort runs `terraform fmt`
+after editing a `.tf` file and `eslint --fix` after editing a frontend file, to preempt
+CI formatting failures. It never blocks — PostToolUse can't undo an edit that already happened.
+
+Known limitation: hooks can't technically distinguish a Claude Cowork session from a
+Claude Code session (no reliable signal exposed to hook scripts for that), so the
+Cowork/Code role boundary described above is still enforced by instruction only, not
+by a hook.
+
 ## Python Conventions
 
-→ See `docs/conventions-python.md`. Read this file before writing or editing any Python code.
+→ Enforced via the `conventions-python` skill (`.claude/skills/conventions-python/`). Consult it before writing or editing any Python code.
 
 ---
 
 ## SQL / Alembic Conventions
 
-→ See `docs/conventions-sql.md`. Read this file before writing or editing any SQLAlchemy models or Alembic migrations.
+→ Enforced via the `conventions-sql` skill (`.claude/skills/conventions-sql/`). Consult it before writing or editing any SQLAlchemy models or Alembic migrations.
 
 ---
 
 ## Frontend / Next.js Conventions
 
-→ See `docs/conventions-frontend.md`. Read this file before writing or editing any Next.js / React / TypeScript frontend code.
+→ Enforced via the `conventions-frontend` skill (`.claude/skills/conventions-frontend/`). Consult it before writing or editing any Next.js / React / TypeScript frontend code.
 
 ---
 
@@ -174,3 +198,18 @@ A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
+
+### Reviewer subagents
+
+Three read-only reviewer subagents live in `.claude/agents/`, one per layer:
+- **`reviewer-frontend`** — `.ts`/`.tsx`/`.jsx`/`.js` under `JobFinder/frontend/`, checked against the `conventions-frontend` skill. Tools: `Read, Grep, Glob` only — no Edit/Write/Bash, so it is structurally unable to modify anything.
+- **`reviewer-backend`** — `.py` under `JobFinder/python/` (excluding migrations), checked against `conventions-python`. Same read-only tool set.
+- **`reviewer-infra`** — `.tf`, Alembic migrations, PowerShell/Azure CLI scripts, checked against `conventions-terraform` and `conventions-sql`. Tools: `Read, Grep, Glob, Bash` — Bash is scoped by instruction to read-only commands (`terraform plan`, `terraform validate`, `terraform fmt -check`, `tflint`); it must never run `terraform apply` or a mutating `az`/`New-Az*`/`Set-Az*`/`Remove-Az*` command. The `pre_bash_guard.py` hook independently blocks `terraform apply` regardless of caller, but that's a backstop, not the primary control.
+
+Every reviewer's job is to report findings (verdict + `file:line` + violated rule), never to fix them itself.
+
+**Enforcement:** a `Stop` hook (`.claude/hooks/require_reviewer.py`) inspects the session transcript before Claude finishes responding. Per category, it tracks the position of the *last* edit and the position of the *last* call to the matching reviewer subagent — if a category was edited more recently than its reviewer was last called, the stop is blocked. It then also reads the reviewer's actual report text (the `tool_result` of that last call) and blocks again if it doesn't read as `APPROUVÉ` (contains `CHANGEMENTS REQUIS`, or the verdict can't be identified at all — ambiguous is treated as not-approved here, on purpose). Concretely: calling the reviewer once doesn't cover edits made afterwards, and getting a `CHANGEMENTS REQUIS` verdict doesn't let the task end either — both require the loop to continue (fix → re-review → `APPROUVÉ`) before Claude can stop.
+
+Known limitation: this is a keyword match on the reviewer's own report text, not semantic understanding of whether the underlying issues were actually fixed — it can't tell a genuine fix from a reviewer that was talked into changing its verdict. It also fails open (allows the stop) if the transcript itself can't be parsed (unreadable file, unexpected schema) so a structural mismatch never leaves a session stuck — but an ambiguous or negative verdict on a successfully-parsed report is deliberately NOT treated as one of those failures, and blocks. Treat it as a safety net on top of the instruction to call reviewers and act on their feedback, not as a substitute for it.
+
+**Cycle limit:** each reviewer gets at most 3 consecutive blocks (a small counter persisted next to the transcript, reset as soon as that reviewer comes back `APPROUVÉ` or stops being touched). Past that, the hook stops enforcing that specific reviewer and lets the stop through with a non-blocking warning instead of blocking forever — this deliberately does *not* rely on Claude Code's `stop_hook_active` flag, because that flag lets a single retry through unconditionally regardless of whether anything actually changed, which would have defeated the verdict check above.
