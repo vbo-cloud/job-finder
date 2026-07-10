@@ -244,22 +244,69 @@ def verdict_ok(report_text: str):
     return None
 
 
+# Reviewer subagents are required to always include a "Remarques non-bloquantes :"
+# line (see .claude/agents/reviewer-*.md), even on an APPROUVE verdict, precisely
+# so this can be parsed mechanically instead of relying on free-text prose.
+NON_BLOCKING_REMARKS_RE = re.compile(r"remarques non-bloquantes\s*:\s*(.+)", re.IGNORECASE)
+MAX_WARNING_ATTEMPTS = 3
+
+
+def has_warnings(report_text: str):
+    """True/False/None (line missing -- treated the same as an unclear verdict:
+    conservatively counted as 'has warnings' by the caller) for whether the
+    reviewer flagged non-blocking remarks on an otherwise-approved report."""
+    m = NON_BLOCKING_REMARKS_RE.search(report_text)
+    if not m:
+        return None
+    return not m.group(1).strip().lower().startswith("aucune")
+
+
+def state_path_for(transcript_path: str) -> Path:
+    p = Path(transcript_path)
+    return p.parent / f".pr_create_warning_state.{p.stem}.json"
+
+
+def load_state(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_state(path: Path, state: dict):
+    try:
+        if state:
+            path.write_text(json.dumps(state), encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    except Exception:
+        pass  # best-effort persistence -- a lost counter just resets to 0, not a hang
+
+
 def docs_and_reviews_readiness(transcript_path: str):
     """Single pass over the transcript: is doc-writer up to date, and is
     every touched reviewer category approved, since the last edit?
 
-    Returns a list of human-readable problem strings (empty = all clear).
-    Fails OPEN (returns []) on any structural parsing issue -- a schema
+    Returns (problems, warning_by_agent):
+      - problems: list of human-readable strings for anything unconditionally
+        blocking (missing doc-writer call, reviewer not recalled, or a verdict
+        that isn't APPROUVE) -- empty means those hard requirements are clear.
+      - warning_by_agent: {agent_name: True/False/None} for every reviewer
+        whose category was touched AND whose verdict is APPROUVE -- i.e. only
+        for agents where a non-blocking-remarks decision is even meaningful.
+        The caller applies the capped-retry logic on top of this.
+
+    Fails OPEN (returns ([], {})) on any structural parsing issue -- a schema
     mismatch or unreadable transcript should never leave the agent stuck,
     only a genuinely missing/stale/unapproved call should block.
     """
     if not transcript_path:
-        return []
+        return [], {}
     try:
         if not Path(transcript_path).exists():
-            return []
+            return [], {}
     except Exception:
-        return []
+        return [], {}
 
     last_edit_line = -1                  # any Edit/Write/NotebookEdit -- for doc-writer
     last_touch = {}                      # category -> line_no of last edit in it
@@ -308,9 +355,10 @@ def docs_and_reviews_readiness(transcript_path: str):
                         if tuid:
                             results_by_id[tuid] = extract_text(c_block.get("content"))
     except Exception:
-        return []
+        return [], {}
 
     problems = []
+    warning_by_agent = {}
 
     if last_call_line.get("doc-writer", -1) <= last_edit_line:
         problems.append(
@@ -331,8 +379,10 @@ def docs_and_reviews_readiness(transcript_path: str):
                 f"{agent} n'a pas rendu un verdict APPROUVE (CHANGEMENTS REQUIS, ou "
                 f"indetermine) sur son dernier passage ({cat})."
             )
+            continue
+        warning_by_agent[agent] = has_warnings(report_text)
 
-    return problems
+    return problems, warning_by_agent
 
 
 def check_pr_create(command: str, transcript_path: str = ""):
@@ -385,7 +435,37 @@ def check_pr_create(command: str, transcript_path: str = ""):
         )
 
     # --- doc-writer up to date, and every touched category's reviewer approved ---
-    problems = docs_and_reviews_readiness(transcript_path)
+    problems, warning_by_agent = docs_and_reviews_readiness(transcript_path)
+
+    # --- non-blocking remarks on an otherwise-approved reviewer: nudge up to
+    # MAX_WARNING_ATTEMPTS times, then give up and let the PR open anyway ---
+    state_path = state_path_for(transcript_path) if transcript_path else None
+    state = load_state(state_path) if state_path else {}
+
+    # w is True (has warnings) or None (line missing -- ambiguous, same
+    # conservative stance as verdict_ok) -- only an explicit "aucune" (False)
+    # clears an agent from needing another pass.
+    currently_warning = {a for a, w in warning_by_agent.items() if w is not False}
+
+    for agent in currently_warning:
+        count = state.get(agent, 0) + 1
+        if count > MAX_WARNING_ATTEMPTS:
+            state.pop(agent, None)  # give up -- let this PR open, fresh budget next time
+            continue
+        state[agent] = count
+        problems.append(
+            f"{agent} a signale des remarques non-bloquantes sur un verdict APPROUVE -- "
+            f"adresse-les puis relance 'gh pr create' (tentative {count}/{MAX_WARNING_ATTEMPTS} "
+            "avant abandon de cette relance)."
+        )
+
+    for agent in list(state.keys()):
+        if agent not in currently_warning:
+            state.pop(agent, None)  # resolved, or no longer touched -- fresh budget next time
+
+    if state_path:
+        save_state(state_path, state)
+
     if problems:
         listing = "\n".join(f"  - {p}" for p in problems)
         block(
