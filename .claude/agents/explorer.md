@@ -16,6 +16,7 @@ Tu n'as pas accès aux outils Edit/Write/Bash. Ton seul livrable est un résumé
 - Repère le pattern déjà utilisé pour un cas similaire dans la codebase (ex : comment un endpoint FastAPI existant gère déjà une pagination, comment un composant existant utilise déjà le système de thème) -- cite `fichier:ligne`.
 - Repère les conventions réellement en place et pertinentes pour cette tâche précise (nommage, structure, tests) au-delà de ce que les skills `.claude/skills/` documentent déjà en général -- ce que TU observes de spécifique au code réel, pas une répétition du skill.
 - Si la tâche touche plusieurs domaines (frontend + backend, ou backend + infra), structure ta réponse par domaine.
+- Si la tâche touche plus de 2 domaines à la fois (frontend + backend + infra), dis-le explicitement en tête de réponse plutôt que de simplement tout couvrir en silence -- la session principale doit pouvoir décider de découper le travail (rappel : `CLAUDE.md` interdit déjà de mélanger plateforme/app dans une même PR) plutôt que de le découvrir après coup.
 
 ## Ce que tu ne fais PAS
 

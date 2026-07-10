@@ -158,21 +158,45 @@ AZ_MUTATING_VERBS = (
     "create", "update", "delete", "set", "remove", "assign",
     "deploy", "restore", "purge", "add", "start", "stop", "restart",
 )
-AZ_MUTATING_RE = re.compile(
-    r"\baz\s+(?:[\w-]+\s+)*(" + "|".join(AZ_MUTATING_VERBS) + r")\b"
-)
 
 
 def check_azure_cli(command: str):
-    m = AZ_MUTATING_RE.search(command)
-    if m:
-        block(
-            "Bloque par hook (CLAUDE.md > Code Review Standards / Terraform Conventions) : "
-            f"commande Azure CLI mutante detectee ('{m.group(0).strip()}'). Les commandes "
-            "az qui creent/modifient/suppriment une ressource ne s'executent jamais en "
-            "local ni depuis un agent -- seules les commandes de lecture (show/list/get...) "
-            "sont autorisees."
-        )
+    """Anchored to the actual `az <group> [<subgroup>...] <verb>` positional
+    chain (tokens up to the first flag), not a bare word search across the
+    whole command -- a prior regex-based version matched a mutating verb
+    appearing anywhere, including as a flag VALUE: `az storage blob list
+    --prefix create` is a read-only listing filtered to blobs whose name
+    starts with "create", but the old regex flagged it as a mutating command.
+
+    Known gap, accepted rather than fully solving az's grammar: if a global
+    option appears immediately after `az` (e.g. `az --output json vm
+    create ...`), there's no positional token to anchor on before hitting
+    that flag. This is uncommon in how commands are actually issued in this
+    project (flags conventionally come after the command, not before), so
+    it's treated the same as check_merge's `-C <path>` gap -- a documented,
+    accepted imprecision rather than a full command-line parser.
+    """
+    tokens = shlex.split(command)
+    n = len(tokens)
+    i = 0
+    while i < n:
+        if tokens[i] != "az" and not tokens[i].endswith(("/az", "\\az")):
+            i += 1
+            continue
+        j = i + 1
+        verb = None
+        while j < n and not tokens[j].startswith("-"):
+            verb = tokens[j]
+            j += 1
+        if verb in AZ_MUTATING_VERBS:
+            block(
+                "Bloque par hook (CLAUDE.md > Code Review Standards / Terraform Conventions) : "
+                f"commande Azure CLI mutante detectee ('{' '.join(tokens[i:j])}'). Les commandes "
+                "az qui creent/modifient/suppriment une ressource ne s'executent jamais en "
+                "local ni depuis un agent -- seules les commandes de lecture (show/list/get...) "
+                "sont autorisees."
+            )
+        i = max(j, i + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +395,14 @@ def docs_and_reviews_readiness(transcript_path: str):
                                     last_touch[cat] = (line_no, fp)
 
                         if name in SUBAGENT_TOOL_NAMES:
+                            # Coupled to the current Task/Agent tool_use schema using
+                            # exactly this key. If a future Claude Code version (or a
+                            # different harness) identifies the called subagent under a
+                            # different key, this silently finds nothing here -- which
+                            # falls through to the same documented fail-open behaviour
+                            # as an unparseable transcript, not a hard crash, but it
+                            # does mean the whole gh-pr-create gate goes quiet rather
+                            # than erroring loudly if that ever happens.
                             subagent = tool_input.get("subagent_type")
                             if subagent:
                                 last_call_line[subagent] = line_no
@@ -446,7 +478,7 @@ def check_pr_create(command: str, transcript_path: str = ""):
     changed = diff.stdout.splitlines() if diff and diff.returncode == 0 else []
     if "docs/JOURNAL.md" not in changed:
         block(
-            "Bloque par hook (CLAUDE.md > Terraform Conventions) : docs/JOURNAL.md doit etre "
+            "Bloque par hook (CLAUDE.md > Git Workflow > Enforcement via hooks) : docs/JOURNAL.md doit etre "
             "mis a jour AVANT d'ouvrir cette PR (numero/titre de PR, date, resume, decisions "
             "techniques). Ajoute l'entree puis relance 'gh pr create'."
         )
@@ -461,6 +493,7 @@ def check_pr_create(command: str, transcript_path: str = ""):
             "Bloque par hook (CLAUDE.md > Commit conventions / Rules) : commits non conformes "
             "sur cette branche (marqueur WIP, ou hors Conventional Commits "
             f"feat/fix/chore/docs/refactor) :\n{listing}\n"
+            f"Voir 'git log --oneline {base_ref}..HEAD' pour les retrouver. "
             f"Nettoie l'historique avec 'git rebase -i {base_ref}' (commits atomiques) avant "
             "d'ouvrir la PR."
         )
