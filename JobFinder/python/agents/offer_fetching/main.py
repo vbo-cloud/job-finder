@@ -1,15 +1,20 @@
-"""Offer fetching agent — fetch and upsert job offers from France Travail.
+"""Offer fetching agent — fetch, upsert, and embed job offers from France Travail.
 
 Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC). Fetch +
-upsert only — no LLM call, no embedding. After upserting, publishes one
-message per offer with a NULL embedding to distillate-offer-fetched, where
-agents/offer_distillation picks it up asynchronously (distills via GPT-4o-mini,
-then embeds). Keeping this agent's own run fast is why that step was moved out
-(see docs/prompts/prompt-offer-distillation-pipeline.md).
+upsert, then embed directly: offers with a NULL embedding (new offers, or
+existing ones invalidated by a more recent ft_updated_at) are embedded on
+their raw title+description text via shared.embedder.embed(), one batched
+call for the whole pending set (embed() already batches internally by 100 —
+no LLM distillation call per offer, so this stays fast even for thousands of
+offers, unlike the retired agents/offer_distillation). If any offer was
+embedded, publishes one start-matching message — the direct, event-driven
+replacement for the retired agents/matching_heartbeat's periodic catch-up.
 
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
     AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE: Service Bus namespace host.
+    AZURE_OPENAI_API_KEY: Azure OpenAI API key.
+    AZURE_OPENAI_ENDPOINT: Azure OpenAI endpoint URL.
     FT_CLIENT_ID: France Travail OAuth2 client ID.
     FT_CLIENT_SECRET: France Travail OAuth2 client secret.
 """
@@ -19,20 +24,22 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import case, literal_column, select, text
+from azure.servicebus.exceptions import ServiceBusError
+from sqlalchemy import case, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from ft_client import fetch_offers, get_access_token
-from shared.bus import send_messages_batch
+from shared.bus import send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_session, run_migrations
+from shared.embedder import embed
 from shared.geo import parse_department_from_location, parse_region_from_location
 from shared.models import Offer
 from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
-DISTILLATE_OFFER_FETCHED_QUEUE = "distillate-offer-fetched"
+START_MATCHING_QUEUE = "start-matching"
 
 # Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
 # "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
@@ -212,45 +219,94 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     return new_count
 
 
-def _publish_pending_offers_for_distillation() -> int:
-    """Publish one distillation message per offer with a NULL embedding.
+def _embed_pending_offers() -> int:
+    """Embed offers with a NULL embedding directly on their raw title+description text.
 
-    Same selection condition _embed_pending_offers used before distillation
-    moved to its own async agent: covers both newly upserted offers and
-    offers whose embedding was invalidated by a more recent ft_updated_at
-    (see the case() branch in _upsert_offers).
+    Same selection condition the retired distillation publish step used:
+    covers both newly upserted offers and offers whose embedding was
+    invalidated by a more recent ft_updated_at (see the case() branch in
+    _upsert_offers). Mirrors routers/cv.py's CV-side embedding: no text
+    truncation before the call, no LLM distillation step first.
 
     Returns:
-        Number of offers published for distillation.
+        Number of offers embedded.
 
     Raises:
         SQLAlchemyError: If a database operation fails.
-        ServiceBusError: If publishing fails.
     """
+    # Two separate sessions around the embed() network call rather than one held open
+    # across it. `pending` holds plain Row tuples (not ORM instances), so there is no
+    # detached-instance risk in reusing them against the second session below.
     try:
         with get_session() as session:
-            pending_ids = session.execute(
-                select(Offer.id).where(Offer.embedding.is_(None))
-            ).scalars().all()
+            pending = session.execute(
+                select(Offer.id, Offer.title, Offer.description).where(Offer.embedding.is_(None))
+            ).all()
     except SQLAlchemyError:
-        logger.error("distillation_publish_fetch_pending_failed", exc_info=True)
+        logger.error("embed_pending_fetch_pending_failed", exc_info=True)
         raise
 
-    if not pending_ids:
-        logger.info("distillation_publish_no_pending_offers")
+    if not pending:
+        logger.info("embed_pending_no_pending_offers")
         return 0
 
-    logger.info("distillation_publish_started", count=len(pending_ids))
-    send_messages_batch(
-        DISTILLATE_OFFER_FETCHED_QUEUE,
-        [{"offer_id": str(offer_id)} for offer_id in pending_ids],
-    )
-    logger.info("distillation_publish_completed", count=len(pending_ids))
-    return len(pending_ids)
+    logger.info("embed_pending_started", count=len(pending))
+    vectors = embed([f"{row.title}\n\n{row.description}" for row in pending])
+
+    # One UPDATE per offer — fine at the current cardinality (hundreds/day) since it's
+    # a single transaction; revisit with a bulk UPDATE ... FROM/VALUES before running
+    # this against a large backfill (thousands of offers), see docs/BACKLOG.md.
+    try:
+        with get_session() as session:
+            for row, vector in zip(pending, vectors):
+                session.execute(update(Offer).where(Offer.id == row.id).values(embedding=vector))
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("embed_pending_save_failed", exc_info=True)
+        raise
+
+    logger.info("embed_pending_completed", count=len(pending))
+    return len(pending)
+
+
+def _dispatch_start_matching(run_date: str, rome_codes: list[str], new_offers_count: int, embedded_count: int) -> None:
+    """Send a start-matching message so the matching agent re-scores existing offers.
+
+    The direct, event-driven replacement for the retired agents/matching_heartbeat's
+    periodic catch-up — this agent is now the only producer that reacts to new offers.
+    Fire-and-forget: a Service Bus failure is logged but never fails the run, same
+    trade-off as the other start-matching producers (routers/profile.py, cv_analysis) —
+    the offers are already embedded and committed, and the next scheduled fetch run
+    will dispatch again regardless.
+
+    Args:
+        run_date: ISO date (YYYY-MM-DD) stamped on the message.
+        rome_codes: ROME codes fetched in this run.
+        new_offers_count: Number of newly inserted offers.
+        embedded_count: Number of offers embedded in this run.
+    """
+    try:
+        # rome_codes/new_offers_count/embedded_count/trigger are informational only —
+        # agents/matching::main() currently reads just run_date from the payload and
+        # recomputes everything else from the DB. No schema validation on the consumer
+        # side depends on these fields; they exist for log correlation across agents.
+        send_message(
+            START_MATCHING_QUEUE,
+            {
+                "run_date": run_date,
+                "rome_codes": rome_codes,
+                "new_offers_count": new_offers_count,
+                "embedded_count": embedded_count,
+                "trigger": "offer_fetching",
+            },
+        )
+        logger.info("offer_fetching_start_matching_sent", run_date=run_date)
+    except ServiceBusError:
+        logger.error("offer_fetching_start_matching_failed", run_date=run_date, exc_info=True)
 
 
 def main() -> None:
-    """Run the offer-fetch job: fetch, upsert, and publish pending offers for distillation."""
+    """Run the offer-fetch job: fetch, upsert, embed pending offers, and trigger matching."""
     configure_telemetry("offer-fetching")
 
     try:
@@ -270,15 +326,18 @@ def main() -> None:
         raw_offers = fetch_offers(token, rome_code, min_date=min_date)
         total_new += _upsert_offers(raw_offers, rome_code)
 
-    distillation_published = _publish_pending_offers_for_distillation()
+    embedded_count = _embed_pending_offers()
 
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if embedded_count:
+        _dispatch_start_matching(run_date, rome_codes, total_new, embedded_count)
+
     logger.info(
         "offer_fetch_run_completed",
         run_date=run_date,
         rome_codes=rome_codes,
         new_offers_count=total_new,
-        distillation_published=distillation_published,
+        embedded_count=embedded_count,
     )
 
 
