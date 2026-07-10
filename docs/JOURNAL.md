@@ -4733,3 +4733,29 @@ Demande utilisateur : la barre de recherche de l'onglet Offres ne matchait que t
 - **Tests** : nouveau cas — une offre matchée uniquement via un mot-clé présent dans sa description, une autre offre au même mot-clé absent restant exclue ; côté `MatchItem`, mise en évidence effective avec query, absence de `<mark>` sans query ou sans correspondance.
 
 **Vérification :** Jest 48/48 (`CorrespondancesPanel.test.tsx` + `MatchItem.test.tsx`), `tsc --noEmit` et ESLint propres.
+
+---
+
+## PR #187 — fix(profile): retirer experience_level du texte d'intent_embedding (garder uniquement le malus)
+
+**Date :** 2026-07-10
+**Branche :** `feature/profile-decouple-experience-from-intent-embedding` → `dev`
+
+### Contexte
+
+Exécution de `docs/prompts/prompt-profile-decouple-experience-intent.md`, suite du retrait du bonus lexical (PR #185) et du pipeline de distillation (PR #184). Diagnostic du 09/07 (Vincent, son propre profil vs l'offre WALLIX `ft_id 3976333`) : `base_score` en production tombait à 0.4971 — juste sous `MATCHING_SCORE_THRESHOLD = 0.5` — alors que la similarité CV↔offre distillée mesurée séparément était de ~0.696. Cause : `_build_intent_text` combinait une phrase générique dérivée d'`experience_level` (ex. « Profil confirmé, 2 à 5 ans d'expérience ») avec `candidate_description` ; quand cette dernière est vide (cas de Vincent), `intent_text` se réduisait à cette seule phrase, quasiment vide de contenu sémantique distinctif une fois embedée, et suffisait à faire chuter un excellent match sous le seuil une fois mélangée à 30 % (`INTENT_EMBEDDING_WEIGHT`) dans le score final.
+
+### Ce qui a été fait
+
+- **`agents/webapp/routers/profile.py::_build_intent_text`** : signature réduite à `candidate_description: str | None` seul, retrait des trois branches `if/elif` sur `experience_level`. Le corps retourne désormais `candidate_description.strip()` ou une chaîne vide.
+- **`agents/webapp/routers/profile.py::put_profile`** : le recalcul de l'embedding (`_build_intent_text` + `embed()`) ne s'exécute plus que si `description_changed` est vrai — un changement d'`experience_level` seul ne touche plus à `intent_embedding`, ni à la clé `"intent_embedding"` du dict `updated` passé à `on_conflict_do_update(set_=updated)` (la valeur déjà stockée n'est donc pas écrasée). `intent_changed = experience_changed or description_changed` reste inchangé — un changement d'`experience_level` seul redéclenche toujours `matching` via `_dispatch_start_matching`, puisque le malus d'expérience en dépend. Les deux déclenchements (recalcul d'embedding, redéclenchement de matching), auparavant confondus sous un seul flag, sont maintenant découplés.
+- **`agents/matching/main.py::_get_all_matches`** : docstring corrigée — `intent_embedding` ne reflète plus que `candidate_description`, le malus d'expérience reste documenté séparément.
+- **Tests (`test_webapp_profile.py`)** : `test_experience_level_bucket_text` remplacé par `test_experience_level_alone_never_recomputes_embedding` (les trois valeurs d'`experience_level`, seul, ne doivent jamais appeler `embed()`) ; `test_experience_and_candidate_description_recomputes_intent_embedding` mis à jour (`embed()` appelé avec la description seule, sans le fragment expérience) ; `test_partial_put_preserves_existing_candidate_description_in_intent` réécrit pour vérifier qu'`embed()` n'est plus appelé du tout quand seule la description reste inchangée, et que la clé `"intent_embedding"` est absente du `set_` de l'upsert ; nouveau test `test_experience_level_alone_still_dispatches_start_matching` distinguant explicitement « pas de recalcul d'embedding » de « pas de redéclenchement de matching ».
+- **Repéré mais volontairement laissé intact** : `agents/match_analysis/main.py::_analyze_match` et `agents/cv_analysis/main.py::_analyze_cv_quality` contiennent chacun une copie dupliquée des mêmes fragments `experience_level` (commentaire explicite : « dupliquée sciemment, les agents ne doivent pas dépendre d'agents/webapp »). Hors périmètre : ce texte alimente un prompt LLM (« Intention du candidat » pour l'analyse de correspondance / la cohérence CV↔intention), pas `intent_embedding` — un LLM n'est pas sensible à la dilution sémantique d'un embedding par une phrase générique, contrairement à une similarité cosinus.
+
+**Vérification :** `pytest` 244/244 (`test_webapp_profile.py` et `test_matching.py` inclus, ce dernier sans changement de comportement — docstring uniquement). Historique de commits vérifié à chaque étape (34/35 tests verts avant l'ajout du test de découplage, 244/244 après le commit final). Grep du dépôt entier sur les fragments `"Profil junior"/"Profil confirmé"/"Profil senior"` : seules les copies intentionnellement dupliquées de `match_analysis`/`cv_analysis` (hors périmètre) subsistent.
+
+### Décisions techniques
+
+- **Backfill non scripté** : les `intent_embedding` déjà stockés en base (calculés avec l'ancienne formule) ne sont pas recalculés automatiquement par ce déploiement — le recalcul ne se déclenche que sur un nouveau `PUT /profile` avec `candidate_description` modifié. Projet à un seul utilisateur actif : Vincent resauvegardera son profil manuellement après déploiement.
+- **Découpage en 3 commits atomiques** : le retrait du texte d'expérience (`_build_intent_text` + mise à jour du site d'appel, sans encore conditionner l'appel à `embed()`) est séparé du découplage des deux déclencheurs (ajout de la garde `if description_changed:`) — chaque commit intermédiaire reste vert (34 tests après le premier commit `test_webapp_profile.py` + `test_matching.py`, 35 après le second) plutôt que de livrer un diff monolithique sur `put_profile`.
