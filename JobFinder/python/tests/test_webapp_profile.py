@@ -194,30 +194,24 @@ class TestPutProfile:
             )
 
         assert resp.status_code == 200
-        mock_embed.assert_called_once_with(
-            ["Profil junior/débutant, 0 à 2 ans d'expérience\nprofil autodidacte"]
-        )
+        mock_embed.assert_called_once_with(["profil autodidacte"])
 
-    @pytest.mark.parametrize(
-        ("experience_level", "expected_text"),
-        [
-            ("0-2", "Profil junior/débutant, 0 à 2 ans d'expérience"),
-            ("2-5", "Profil confirmé, 2 à 5 ans d'expérience"),
-            ("5+", "Profil senior, 5 ans d'expérience et plus"),
-        ],
-    )
-    def test_experience_level_bucket_text(
-        self, test_client, mock_session, experience_level, expected_text
+    @pytest.mark.parametrize("experience_level", ["0-2", "2-5", "5+"])
+    def test_experience_level_alone_never_recomputes_embedding(
+        self, test_client, mock_session, experience_level
     ):
+        """experience_level only feeds the matching malus, never the embedded
+        text — setting it alone (no candidate_description change) must never
+        call embed()."""
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
-        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]) as mock_embed:
+        with patch("routers.profile.embed") as mock_embed:
             resp = test_client.put("/profile", json={"experience_level": experience_level})
 
         assert resp.status_code == 200
-        mock_embed.assert_called_once_with([expected_text])
+        mock_embed.assert_not_called()
 
     def test_partial_put_preserves_existing_candidate_description_in_intent(
         self, test_client, mock_session

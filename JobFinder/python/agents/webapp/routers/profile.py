@@ -33,26 +33,15 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 logger = structlog.get_logger()
 
 
-def _build_intent_text(
-    experience_level: str | None,
-    candidate_description: str | None,
-) -> str:
-    """Combine experience/description into the text embedded as intent_embedding.
+def _build_intent_text(candidate_description: str | None) -> str:
+    """Return the text embedded as intent_embedding — candidate_description only.
 
-    Callers must resolve both arguments against the existing profile row first —
-    a field absent from the PUT body should keep contributing its stored value,
-    not silently drop out of the embedding (see put_profile).
+    experience_level never contributes here; it only feeds the numeric
+    experience malus in matching (see put_profile, agents/matching/main.py).
     """
-    fragments = []
-    if experience_level == "0-2":
-        fragments.append("Profil junior/débutant, 0 à 2 ans d'expérience")
-    elif experience_level == "2-5":
-        fragments.append("Profil confirmé, 2 à 5 ans d'expérience")
-    elif experience_level == "5+":
-        fragments.append("Profil senior, 5 ans d'expérience et plus")
     if candidate_description and candidate_description.strip():
-        fragments.append(candidate_description.strip())
-    return "\n".join(fragments)
+        return candidate_description.strip()
+    return ""
 
 
 def _dispatch_start_matching(user_id: str, run_date: str) -> None:
@@ -195,7 +184,7 @@ def put_profile(
         experience_changed = new_experience != old_experience
         description_changed = new_description != old_description
         intent_changed = experience_changed or description_changed
-        intent_text = _build_intent_text(new_experience, new_description)
+        intent_text = _build_intent_text(new_description)
         if intent_text:
             embedded = embed([intent_text])
             intent_embedding = embedded[0] if embedded else None
