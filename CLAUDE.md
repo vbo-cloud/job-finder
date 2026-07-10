@@ -119,7 +119,7 @@ documented here. It blocks, for either Claude instance:
 - Local `terraform apply`/`terraform destroy` (CI-only, see Terraform Conventions)
 - Mutating Azure CLI commands (`az ... create/update/delete/set/remove/assign/deploy/restore/purge/...`) — read-only verbs (`show`, `list`, `get`...) stay allowed
 - Mutating Azure PowerShell cmdlets (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
-- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits, or if the `doc-writer` subagent hasn't run since the last edit (see Reviewer subagents below)
+- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits, if the `doc-writer` subagent hasn't run since the last edit, or if any touched category (frontend/backend/infra) doesn't have an `APPROUVÉ` verdict from its reviewer subagent since the last edit in that category (see Reviewer subagents below)
 
 This same hook applies identically inside `claude-code-action` CI runs (see `.github/CLAUDE_ACTION.md`), since the action runs the real Claude Code engine against the checked-out repo and reads the same `.claude/settings.json`. The Azure CLI/PowerShell verb list is a backstop, not exhaustive — it covers common mutating verb families, not every possible destructive command; `reviewer-infra`'s own judgment and the CI-only apply pipeline remain the primary controls.
 
@@ -225,16 +225,8 @@ and, unlike the reviewer subagents below, has `Edit`/`Write` and fixes what it
 finds directly instead of only reporting it. It's meant to run before the
 reviewers, around the time a PR is opened.
 
-**Enforcement:** the same `pre_bash_guard.py` hook that requires `docs/JOURNAL.md`
-to be part of the PR also blocks `gh pr create` unless `doc-writer` was called
-(via the `Task`/`Agent` tool) after the last `Edit`/`Write`/`NotebookEdit` in the
-session transcript. This guarantees it ran before the PR before opening it, but
-does **not** mechanically guarantee it ran *before* the reviewer subagents
-specifically — that ordering is enforced by instruction only (`doc-writer`'s own
-description says to call it before the reviewers), since the reviewers are
-Stop-hook-enforced (must run before the session ends) rather than tied to
-`gh pr create` itself, and reliably sequencing two independently-triggered
-subagents relative to each other from a hook wasn't worth the added fragility.
+**Enforcement:** see Reviewer subagents below — both are gated together on the
+same `gh pr create` check.
 
 ### Reviewer subagents
 
@@ -245,8 +237,31 @@ Three read-only reviewer subagents live in `.claude/agents/`, one per layer:
 
 Every reviewer's job is to report findings (verdict + `file:line` + violated rule), never to fix them itself.
 
-**Enforcement:** a `Stop` hook (`.claude/hooks/require_reviewer.py`) inspects the session transcript before Claude finishes responding. Per category, it tracks the position of the *last* edit and the position of the *last* call to the matching reviewer subagent — if a category was edited more recently than its reviewer was last called, the stop is blocked. It then also reads the reviewer's actual report text (the `tool_result` of that last call) and blocks again if it doesn't read as `APPROUVÉ` (contains `CHANGEMENTS REQUIS`, or the verdict can't be identified at all — ambiguous is treated as not-approved here, on purpose). Concretely: calling the reviewer once doesn't cover edits made afterwards, and getting a `CHANGEMENTS REQUIS` verdict doesn't let the task end either — both require the loop to continue (fix → re-review → `APPROUVÉ`) before Claude can stop.
+**Enforcement:** folded into the same `pre_bash_guard.py` `PreToolUse` hook that
+already gates `gh pr create` on `docs/JOURNAL.md` and clean commit history (this
+used to be a separate `Stop` hook blocking the session from ending at all;
+moved here so it gates PR creation specifically — see the note in
+`pre_bash_guard.py`'s `gh pr create` section for why). Before `gh pr create` is
+allowed to run, the hook inspects the session transcript and, per category
+touched since the branch diverged, requires that the matching reviewer subagent
+was called *after* the last edit in that category, and that its report reads as
+`APPROUVÉ` (contains `CHANGEMENTS REQUIS`, or an unidentifiable verdict, both
+block — ambiguous is treated as not-approved on purpose). `doc-writer` is
+checked the same way in the same pass (called since the last edit at all,
+no verdict concept since it isn't an approve/reject reviewer).
 
-Known limitation: this is a keyword match on the reviewer's own report text, not semantic understanding of whether the underlying issues were actually fixed — it can't tell a genuine fix from a reviewer that was talked into changing its verdict. It also fails open (allows the stop) if the transcript itself can't be parsed (unreadable file, unexpected schema) so a structural mismatch never leaves a session stuck — but an ambiguous or negative verdict on a successfully-parsed report is deliberately NOT treated as one of those failures, and blocks. Treat it as a safety net on top of the instruction to call reviewers and act on their feedback, not as a substitute for it.
+Known limitation: this is a keyword match on the reviewer's own report text, not
+semantic understanding of whether the underlying issues were actually fixed —
+it can't tell a genuine fix from a reviewer that was talked into changing its
+verdict. It also fails open (allows `gh pr create`) if the transcript itself
+can't be parsed (unreadable file, unexpected schema), so a structural mismatch
+never leaves the agent stuck — but an ambiguous or negative verdict on a
+successfully-parsed report is deliberately NOT treated as one of those
+failures, and blocks. Treat it as a safety net on top of the instruction to
+call reviewers and act on their feedback, not as a substitute for it.
 
-**Cycle limit:** each reviewer gets at most 3 consecutive blocks (a small counter persisted next to the transcript, reset as soon as that reviewer comes back `APPROUVÉ` or stops being touched). Past that, the hook stops enforcing that specific reviewer and lets the stop through with a non-blocking warning instead of blocking forever — this deliberately does *not* rely on Claude Code's `stop_hook_active` flag, because that flag lets a single retry through unconditionally regardless of whether anything actually changed, which would have defeated the verdict check above.
+There is no cycle limit / give-up counter here, unlike the Stop hook this
+replaced: if a reviewer never approves, `gh pr create` just stays blocked —
+Claude can still choose not to open the PR and report the disagreement to the
+user instead, so there's no risk of the session itself getting stuck the way
+there was when this same logic gated ending a response.
