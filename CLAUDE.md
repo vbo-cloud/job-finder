@@ -260,8 +260,22 @@ successfully-parsed report is deliberately NOT treated as one of those
 failures, and blocks. Treat it as a safety net on top of the instruction to
 call reviewers and act on their feedback, not as a substitute for it.
 
-There is no cycle limit / give-up counter here, unlike the Stop hook this
-replaced: if a reviewer never approves, `gh pr create` just stays blocked —
-Claude can still choose not to open the PR and report the disagreement to the
-user instead, so there's no risk of the session itself getting stuck the way
-there was when this same logic gated ending a response.
+There is no cycle limit / give-up counter for an actual `CHANGEMENTS REQUIS`
+verdict (or an unidentifiable one) — that always blocks `gh pr create` until
+resolved, unlike the old Stop hook: if a reviewer never approves, Claude can
+simply choose not to open the PR and report the disagreement to the user
+instead, so there's no risk of the session itself getting stuck the way there
+was when this same logic gated ending a response.
+
+**Non-blocking remarks, capped at 3 attempts.** Every reviewer report must
+include a `Remarques non-bloquantes :` line even on an `APPROUVÉ` verdict —
+`aucune`, or a short list (see `.claude/agents/reviewer-*.md`). If that line
+is non-empty (or missing entirely — treated the same as an unclear verdict,
+conservatively), `gh pr create` is blocked too, asking Claude to address them
+and re-run the reviewer, up to `MAX_WARNING_ATTEMPTS = 3` consecutive attempts
+per agent (a small counter persisted next to the transcript). Past that, the
+hook stops enforcing that specific agent's warnings and lets `gh pr create`
+through — this *is* a cycle limit, deliberately, unlike the blocking-verdict
+case above: minor remarks are worth a few nudges but not an unbounded loop.
+The counter resets to zero for an agent as soon as it explicitly reports
+`aucune`, or stops being touched.
