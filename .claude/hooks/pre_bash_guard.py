@@ -16,7 +16,11 @@ previously depended on Claude remembering to follow them on every single command
   - `gh pr create` is blocked unless docs/JOURNAL.md was updated on this branch AND
     every commit since the base branch is a clean, WIP-free Conventional Commit AND
     the doc-writer subagent has run since the last edit (checks/fixes docstrings,
-    WHY-comments, and the JOURNAL.md entry itself)
+    WHY-comments, and the JOURNAL.md entry itself) AND, for every file category
+    touched (frontend/backend/infra), the matching reviewer-* subagent was called
+    since the last edit in that category AND its verdict reads as APPROUVE (this
+    used to be a Stop hook -- moved here so it gates PR creation specifically,
+    instead of blocking the session from ending at all)
 
 This hook runs identically for a local Claude Code session and for a `claude-code-action`
 run in CI -- both execute the real Claude Code engine against the checked-out repo, so
@@ -171,29 +175,98 @@ def check_powershell(command: str):
 
 # ---------------------------------------------------------------------------
 # gh pr create -- JOURNAL.md is mandatory, commit history must be clean,
-# and the doc-writer subagent must have run since the last edit
+# doc-writer must have run since the last edit, and every touched category
+# (frontend/backend/infra) must have its reviewer-* subagent called since the
+# last edit in that category, with a verdict that reads as APPROUVE.
+#
+# This used to be split across two hooks: doc-writer was already gated here,
+# reviewer-* approval was a Stop hook (require_reviewer.py) blocking the
+# session from ending. Moved onto this single gh-pr-create gate for
+# consistency -- both are "must be true before this PR opens", not "must be
+# true before Claude can stop talking", so this is a more precise fit and
+# removes an entire hook + its per-agent cycle-limit/give-up machinery (that
+# machinery existed specifically to avoid a Stop hook leaving the agent
+# permanently unable to end a response; that risk doesn't apply here since
+# Claude can always choose not to run `gh pr create` and report to the user
+# instead, so no equivalent escape valve was carried over).
 # ---------------------------------------------------------------------------
 CONVENTIONAL_PREFIX = re.compile(r"^(feat|fix|chore|docs|refactor)(\([\w\-/.]+\))?:\s+\S")
 WIP_MARKER = re.compile(r"(?i)(^wip\b|\bwip\b|^fixup!|^squash!|^temp[: ]|^tmp[: ])")
 
+FRONTEND_RE = re.compile(r"JobFinder/frontend/.*\.(tsx?|jsx?|css)$")
+BACKEND_RE = re.compile(r"JobFinder/python/(?!migrations/).*\.py$")
+INFRA_RE = re.compile(
+    r"(JobFinder/Terraform/.*\.tf$|JobFinder/python/migrations/.*\.py$|"
+    r"JobFinder/powershell/.*\.ps1$|\.sql$)"
+)
+CATEGORY_AGENT = {
+    "frontend": "reviewer-frontend",
+    "backend": "reviewer-backend",
+    "infra": "reviewer-infra",
+}
+# Both names are checked because the subagent-launching tool is called
+# "Task" in Claude Code CLI transcripts and "Agent" in some Cowork contexts.
+SUBAGENT_TOOL_NAMES = ("Task", "Agent")
 
-def doc_writer_called_since_last_edit(transcript_path: str) -> bool:
-    """True if doc-writer doesn't need to run again (already called after the
-    last Edit/Write/NotebookEdit), or if the transcript can't be inspected --
-    this check fails OPEN on any structural parsing issue, same reasoning as
-    require_reviewer.py's Stop hook: a schema mismatch should never leave the
-    agent stuck, only a genuinely missing/stale call should block.
+
+def categorize(path: str):
+    cats = set()
+    if FRONTEND_RE.search(path):
+        cats.add("frontend")
+    if BACKEND_RE.search(path):
+        cats.add("backend")
+    if INFRA_RE.search(path):
+        cats.add("infra")
+    return cats
+
+
+def extract_text(content):
+    """Pull plain text out of an Anthropic-style content field, which may be
+    a bare string or a list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for c in content:
+            if isinstance(c, dict) and isinstance(c.get("text"), str):
+                parts.append(c["text"])
+        return "\n".join(parts)
+    return ""
+
+
+def verdict_ok(report_text: str):
+    """True = approved, False = changes required, None = can't tell."""
+    t = report_text.upper()
+    if "CHANGEMENTS REQUIS" in t:
+        return False
+    if "APPROUV" in t:  # matches APPROUVE / APPROUVÉ
+        return True
+    return None
+
+
+def docs_and_reviews_readiness(transcript_path: str):
+    """Single pass over the transcript: is doc-writer up to date, and is
+    every touched reviewer category approved, since the last edit?
+
+    Returns a list of human-readable problem strings (empty = all clear).
+    Fails OPEN (returns []) on any structural parsing issue -- a schema
+    mismatch or unreadable transcript should never leave the agent stuck,
+    only a genuinely missing/stale/unapproved call should block.
     """
     if not transcript_path:
-        return True
+        return []
     try:
         if not Path(transcript_path).exists():
-            return True
+            return []
     except Exception:
-        return True
+        return []
 
-    last_edit_line = -1
-    last_doc_writer_line = -1
+    last_edit_line = -1                  # any Edit/Write/NotebookEdit -- for doc-writer
+    last_touch = {}                      # category -> line_no of last edit in it
+    last_call_line = {"doc-writer": -1}   # subagent -> line_no of last call
+    last_call_id = {"doc-writer": None}   # subagent -> tool_use id of last call
+    results_by_id = {}                    # tool_use id -> result text
+
     try:
         with open(transcript_path, "r", encoding="utf-8") as f:
             for line_no, line in enumerate(f):
@@ -209,18 +282,57 @@ def doc_writer_called_since_last_edit(transcript_path: str) -> bool:
                 if not isinstance(content, list):
                     continue
                 for c_block in content:
-                    if not isinstance(c_block, dict) or c_block.get("type") != "tool_use":
+                    if not isinstance(c_block, dict):
                         continue
-                    name = c_block.get("name")
-                    tool_input = c_block.get("input", {}) or {}
-                    if name in ("Edit", "Write", "NotebookEdit"):
-                        last_edit_line = line_no
-                    if name in ("Task", "Agent") and tool_input.get("subagent_type") == "doc-writer":
-                        last_doc_writer_line = line_no
-    except Exception:
-        return True
+                    btype = c_block.get("type")
 
-    return last_doc_writer_line > last_edit_line
+                    if btype == "tool_use":
+                        name = c_block.get("name")
+                        tool_input = c_block.get("input", {}) or {}
+
+                        if name in ("Edit", "Write", "NotebookEdit"):
+                            last_edit_line = line_no
+                            fp = tool_input.get("file_path") or tool_input.get("notebook_path")
+                            if fp:
+                                for cat in categorize(fp):
+                                    last_touch[cat] = line_no
+
+                        if name in SUBAGENT_TOOL_NAMES:
+                            subagent = tool_input.get("subagent_type")
+                            if subagent:
+                                last_call_line[subagent] = line_no
+                                last_call_id[subagent] = c_block.get("id")
+
+                    elif btype == "tool_result":
+                        tuid = c_block.get("tool_use_id")
+                        if tuid:
+                            results_by_id[tuid] = extract_text(c_block.get("content"))
+    except Exception:
+        return []
+
+    problems = []
+
+    if last_call_line.get("doc-writer", -1) <= last_edit_line:
+        problems.append(
+            "doc-writer n'a pas tourne depuis la derniere edition (docstrings, "
+            "commentaires WHY, docs/JOURNAL.md)."
+        )
+
+    for cat, agent in CATEGORY_AGENT.items():
+        if cat not in last_touch:
+            continue
+        review_line = last_call_line.get(agent, -1)
+        if review_line < last_touch[cat]:
+            problems.append(f"{agent} n'a pas ete rappele depuis la derniere edition ({cat}).")
+            continue
+        report_text = results_by_id.get(last_call_id.get(agent), "")
+        if verdict_ok(report_text) is not True:
+            problems.append(
+                f"{agent} n'a pas rendu un verdict APPROUVE (CHANGEMENTS REQUIS, ou "
+                f"indetermine) sur son dernier passage ({cat})."
+            )
+
+    return problems
 
 
 def check_pr_create(command: str, transcript_path: str = ""):
@@ -272,13 +384,14 @@ def check_pr_create(command: str, transcript_path: str = ""):
             "d'ouvrir la PR."
         )
 
-    # --- doc-writer must have run since the last edit ---
-    if not doc_writer_called_since_last_edit(transcript_path):
+    # --- doc-writer up to date, and every touched category's reviewer approved ---
+    problems = docs_and_reviews_readiness(transcript_path)
+    if problems:
+        listing = "\n".join(f"  - {p}" for p in problems)
         block(
-            "Bloque par hook (CLAUDE.md > Code Review Standards / Documentation) : le subagent "
-            "doc-writer doit avoir tourne depuis la derniere edition avant d'ouvrir cette PR -- "
-            "il verifie/corrige la documentation (docstrings, commentaires WHY, docs/JOURNAL.md). "
-            "Appelle-le puis relance 'gh pr create'."
+            "Bloque par hook (CLAUDE.md > Code Review Standards) : documentation/reviews pas "
+            f"a jour avant l'ouverture de cette PR :\n{listing}\n"
+            "Corrige puis relance 'gh pr create'."
         )
 
 
