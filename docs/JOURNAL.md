@@ -4762,7 +4762,7 @@ Exécution de `docs/prompts/prompt-profile-decouple-experience-intent.md`, suite
 
 ---
 
-## PR #188 — feat(claude): process automation (skills, hooks, reviewer subagents, claude-code-action)
+## PR #189 — feat(claude): process automation (skills, hooks, reviewer subagents, claude-code-action)
 
 **Date :** 2026-07-10
 **Branche :** `feature/claude-process-automation` → `dev`
