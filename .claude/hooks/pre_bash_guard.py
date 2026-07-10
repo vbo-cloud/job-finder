@@ -14,7 +14,9 @@ previously depended on Claude remembering to follow them on every single command
     restore/purge`) -- read-only verbs (`show`, `list`, `get` and friends) stay allowed
   - no mutating Azure PowerShell cmdlet (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
   - `gh pr create` is blocked unless docs/JOURNAL.md was updated on this branch AND
-    every commit since the base branch is a clean, WIP-free Conventional Commit
+    every commit since the base branch is a clean, WIP-free Conventional Commit AND
+    the doc-writer subagent has run since the last edit (checks/fixes docstrings,
+    WHY-comments, and the JOURNAL.md entry itself)
 
 This hook runs identically for a local Claude Code session and for a `claude-code-action`
 run in CI -- both execute the real Claude Code engine against the checked-out repo, so
@@ -32,6 +34,7 @@ import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 
 def run(cmd, timeout=15):
@@ -167,13 +170,60 @@ def check_powershell(command: str):
 
 
 # ---------------------------------------------------------------------------
-# gh pr create -- JOURNAL.md is mandatory, commit history must be clean
+# gh pr create -- JOURNAL.md is mandatory, commit history must be clean,
+# and the doc-writer subagent must have run since the last edit
 # ---------------------------------------------------------------------------
 CONVENTIONAL_PREFIX = re.compile(r"^(feat|fix|chore|docs|refactor)(\([\w\-/.]+\))?:\s+\S")
 WIP_MARKER = re.compile(r"(?i)(^wip\b|\bwip\b|^fixup!|^squash!|^temp[: ]|^tmp[: ])")
 
 
-def check_pr_create(command: str):
+def doc_writer_called_since_last_edit(transcript_path: str) -> bool:
+    """True if doc-writer doesn't need to run again (already called after the
+    last Edit/Write/NotebookEdit), or if the transcript can't be inspected --
+    this check fails OPEN on any structural parsing issue, same reasoning as
+    require_reviewer.py's Stop hook: a schema mismatch should never leave the
+    agent stuck, only a genuinely missing/stale call should block.
+    """
+    if not transcript_path:
+        return True
+    try:
+        if not Path(transcript_path).exists():
+            return True
+    except Exception:
+        return True
+
+    last_edit_line = -1
+    last_doc_writer_line = -1
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            for line_no, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                message = entry.get("message", entry)
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for c_block in content:
+                    if not isinstance(c_block, dict) or c_block.get("type") != "tool_use":
+                        continue
+                    name = c_block.get("name")
+                    tool_input = c_block.get("input", {}) or {}
+                    if name in ("Edit", "Write", "NotebookEdit"):
+                        last_edit_line = line_no
+                    if name in ("Task", "Agent") and tool_input.get("subagent_type") == "doc-writer":
+                        last_doc_writer_line = line_no
+    except Exception:
+        return True
+
+    return last_doc_writer_line > last_edit_line
+
+
+def check_pr_create(command: str, transcript_path: str = ""):
     if "gh pr create" not in command:
         return
 
@@ -222,6 +272,15 @@ def check_pr_create(command: str):
             "d'ouvrir la PR."
         )
 
+    # --- doc-writer must have run since the last edit ---
+    if not doc_writer_called_since_last_edit(transcript_path):
+        block(
+            "Bloque par hook (CLAUDE.md > Code Review Standards / Documentation) : le subagent "
+            "doc-writer doit avoir tourne depuis la derniere edition avant d'ouvrir cette PR -- "
+            "il verifie/corrige la documentation (docstrings, commentaires WHY, docs/JOURNAL.md). "
+            "Appelle-le puis relance 'gh pr create'."
+        )
+
 
 def main():
     try:
@@ -236,12 +295,14 @@ def main():
     if not command:
         sys.exit(0)
 
+    transcript_path = payload.get("transcript_path", "")
+
     check_push(command)
     check_merge(command)
     check_terraform_destructive(command)
     check_azure_cli(command)
     check_powershell(command)
-    check_pr_create(command)
+    check_pr_create(command, transcript_path)
     sys.exit(0)
 
 
