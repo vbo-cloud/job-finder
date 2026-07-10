@@ -199,6 +199,24 @@ A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
 
+### Exploration subagent
+
+`explorer` (`.claude/agents/explorer.md`) is meant to run *before* implementation
+starts on a non-trivial feature: delegate the codebase reading (which files are
+relevant, what pattern an existing similar case already uses, what real
+conventions are in play beyond what a skill documents in general) to it,
+instead of filling the main session's context with dozens of `Read`/`Grep`
+calls that won't be needed once a plan is in place. It's read-only
+(`Read, Grep, Glob`) and returns a short, structured summary — relevant files,
+the existing pattern to reuse, conventions worth respecting — never a detailed
+implementation plan and never a code fix.
+
+Unlike the reviewer subagents and `doc-writer`, there's no hook enforcing that
+`explorer` gets called — "is this feature big enough to warrant delegating
+exploration" isn't something a hook can reliably judge, so this stays a
+judgment call driven by the subagent's own description, same as the general
+built-in `Explore` agent type this one specializes for the project.
+
 ### Documentation subagent
 
 `doc-writer` (`.claude/agents/doc-writer.md`) checks that docstrings, WHY-comments,
