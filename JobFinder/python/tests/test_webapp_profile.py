@@ -194,46 +194,46 @@ class TestPutProfile:
             )
 
         assert resp.status_code == 200
-        mock_embed.assert_called_once_with(
-            ["Profil junior/débutant, 0 à 2 ans d'expérience\nprofil autodidacte"]
-        )
+        mock_embed.assert_called_once_with(["profil autodidacte"])
 
-    @pytest.mark.parametrize(
-        ("experience_level", "expected_text"),
-        [
-            ("0-2", "Profil junior/débutant, 0 à 2 ans d'expérience"),
-            ("2-5", "Profil confirmé, 2 à 5 ans d'expérience"),
-            ("5+", "Profil senior, 5 ans d'expérience et plus"),
-        ],
-    )
-    def test_experience_level_bucket_text(
-        self, test_client, mock_session, experience_level, expected_text
+    @pytest.mark.parametrize("experience_level", ["0-2", "2-5", "5+"])
+    def test_experience_level_alone_never_recomputes_embedding(
+        self, test_client, mock_session, experience_level
     ):
+        """experience_level only feeds the matching malus, never the embedded
+        text — setting it alone (no candidate_description change) must never
+        call embed()."""
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
-        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]) as mock_embed:
+        with patch("routers.profile.embed") as mock_embed:
             resp = test_client.put("/profile", json={"experience_level": experience_level})
 
         assert resp.status_code == 200
-        mock_embed.assert_called_once_with([expected_text])
+        mock_embed.assert_not_called()
 
     def test_partial_put_preserves_existing_candidate_description_in_intent(
         self, test_client, mock_session
     ):
-        """A PUT that only clears experience_level must not drop the existing
-        candidate_description from the recomputed intent_embedding."""
+        """A PUT that only clears experience_level, with candidate_description
+        unchanged, must not recompute the embedding at all — and must not
+        overwrite the already-stored intent_embedding in the upsert."""
         profile = _make_profile()
         profile.candidate_description = "profil autodidacte"
         mock_session.execute.return_value.scalar_one.return_value = profile
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
-        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]) as mock_embed:
+        with patch("routers.profile.embed") as mock_embed:
             resp = test_client.put("/profile", json={"experience_level": None})
 
         assert resp.status_code == 200
-        mock_embed.assert_called_once_with(["profil autodidacte"])
+        mock_embed.assert_not_called()
+        # call 0 is the existing-row lookup for the intent fallback, call 1 is
+        # the upsert itself (see put_profile).
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "intent_embedding" not in set_clause
 
     def test_intent_fields_present_but_empty_clears_embedding_without_calling_embed(
         self, test_client, mock_session
@@ -289,6 +289,25 @@ class TestPutProfile:
         assert queue == "start-matching"
         assert body["trigger"] == "profile_update"
         assert body["rome_codes"] == []
+
+    def test_experience_level_alone_still_dispatches_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        """experience_level alone must still re-trigger matching (the malus
+        depends on it) even though it no longer recomputes the embedding —
+        the two triggers are decoupled, not both suppressed together."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": "2-5"})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+        mock_send_message.assert_called_once()
+        queue, body = mock_send_message.call_args.args
+        assert queue == "start-matching"
 
     def test_unchanged_intent_values_do_not_dispatch_start_matching(
         self, test_client, mock_session, mock_send_message

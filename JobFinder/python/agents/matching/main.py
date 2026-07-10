@@ -43,8 +43,9 @@ def _get_all_matches(session: Session) -> list[dict]:
 
     Note: base scores are computed as (1 - cosine_distance) between the CV and
     offer embeddings, blended with (1 - cosine_distance) against the profile's
-    intent_embedding (experience/search query/candidate description) when one
-    exists — weighted INTENT_EMBEDDING_WEIGHT / (1 - INTENT_EMBEDDING_WEIGHT).
+    intent_embedding (candidate_description only — experience_level feeds the
+    separate experience malus below, never the embedding) when one exists —
+    weighted INTENT_EMBEDDING_WEIGHT / (1 - INTENT_EMBEDDING_WEIGHT).
     Falls back to the CV-only score when the profile has no intent_embedding.
     OpenAI text-embedding-3-small produces normalized vectors, so scores are
     bounded in [0, 1] in practice.

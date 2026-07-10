@@ -33,26 +33,15 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 logger = structlog.get_logger()
 
 
-def _build_intent_text(
-    experience_level: str | None,
-    candidate_description: str | None,
-) -> str:
-    """Combine experience/description into the text embedded as intent_embedding.
+def _build_intent_text(candidate_description: str | None) -> str:
+    """Return the text embedded as intent_embedding — candidate_description only.
 
-    Callers must resolve both arguments against the existing profile row first —
-    a field absent from the PUT body should keep contributing its stored value,
-    not silently drop out of the embedding (see put_profile).
+    experience_level never contributes here; it only feeds the numeric
+    experience malus in matching (see put_profile, agents/matching/main.py).
     """
-    fragments = []
-    if experience_level == "0-2":
-        fragments.append("Profil junior/débutant, 0 à 2 ans d'expérience")
-    elif experience_level == "2-5":
-        fragments.append("Profil confirmé, 2 à 5 ans d'expérience")
-    elif experience_level == "5+":
-        fragments.append("Profil senior, 5 ans d'expérience et plus")
     if candidate_description and candidate_description.strip():
-        fragments.append(candidate_description.strip())
-    return "\n".join(fragments)
+        return candidate_description.strip()
+    return ""
 
 
 def _dispatch_start_matching(user_id: str, run_date: str) -> None:
@@ -149,9 +138,17 @@ def put_profile(
     Preferences only — rome_codes are managed by the CV upload pipeline
     and are never overwritten here.
 
+    intent_embedding reflects candidate_description only — experience_level
+    never contributes to it, it only feeds the numeric experience malus in
+    matching. Recomputing intent_embedding therefore only happens when
+    candidate_description actually changes; a change to experience_level alone
+    leaves the stored embedding untouched.
+
     When experience_level or candidate_description actually changes, a
-    start-matching message is dispatched after commit so the matching agent
-    re-scores existing offers against the new intent_embedding.
+    start-matching message is still dispatched after commit so the matching
+    agent re-scores existing offers — the malus depends on experience_level,
+    so its change alone must still trigger a rescore even though the
+    embedding itself is untouched.
 
     Args:
         body: New profile preferences.
@@ -195,11 +192,15 @@ def put_profile(
         experience_changed = new_experience != old_experience
         description_changed = new_description != old_description
         intent_changed = experience_changed or description_changed
-        intent_text = _build_intent_text(new_experience, new_description)
-        if intent_text:
-            embedded = embed([intent_text])
-            intent_embedding = embedded[0] if embedded else None
-        updated["intent_embedding"] = intent_embedding
+        # experience_level only feeds the matching malus, never the embedding —
+        # recomputing intent_embedding when only it changed would overwrite a
+        # correctly-stored value with the same text, wastefully re-embedding it.
+        if description_changed:
+            intent_text = _build_intent_text(new_description)
+            if intent_text:
+                embedded = embed([intent_text])
+                intent_embedding = embedded[0] if embedded else None
+            updated["intent_embedding"] = intent_embedding
 
     if "commune_codes" in updated and updated["commune_codes"] is None:
         # commune_codes is NOT NULL in the DB — a null-clear over the wire
