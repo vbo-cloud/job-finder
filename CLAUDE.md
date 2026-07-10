@@ -119,7 +119,7 @@ documented here. It blocks, for either Claude instance:
 - Local `terraform apply`/`terraform destroy` (CI-only, see Terraform Conventions)
 - Mutating Azure CLI commands (`az ... create/update/delete/set/remove/assign/deploy/restore/purge/...`) — read-only verbs (`show`, `list`, `get`...) stay allowed
 - Mutating Azure PowerShell cmdlets (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
-- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, or if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits
+- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits, or if the `doc-writer` subagent hasn't run since the last edit (see Reviewer subagents below)
 
 This same hook applies identically inside `claude-code-action` CI runs (see `.github/CLAUDE_ACTION.md`), since the action runs the real Claude Code engine against the checked-out repo and reads the same `.claude/settings.json`. The Azure CLI/PowerShell verb list is a backstop, not exhaustive — it covers common mutating verb families, not every possible destructive command; `reviewer-infra`'s own judgment and the CI-only apply pipeline remain the primary controls.
 
@@ -198,6 +198,25 @@ A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
+
+### Documentation subagent
+
+`doc-writer` (`.claude/agents/doc-writer.md`) checks that docstrings, WHY-comments,
+and the `docs/JOURNAL.md` entry for the current PR are accurate and complete —
+and, unlike the reviewer subagents below, has `Edit`/`Write` and fixes what it
+finds directly instead of only reporting it. It's meant to run before the
+reviewers, around the time a PR is opened.
+
+**Enforcement:** the same `pre_bash_guard.py` hook that requires `docs/JOURNAL.md`
+to be part of the PR also blocks `gh pr create` unless `doc-writer` was called
+(via the `Task`/`Agent` tool) after the last `Edit`/`Write`/`NotebookEdit` in the
+session transcript. This guarantees it ran before the PR before opening it, but
+does **not** mechanically guarantee it ran *before* the reviewer subagents
+specifically — that ordering is enforced by instruction only (`doc-writer`'s own
+description says to call it before the reviewers), since the reviewers are
+Stop-hook-enforced (must run before the session ends) rather than tied to
+`gh pr create` itself, and reliably sequencing two independently-triggered
+subagents relative to each other from a hook wasn't worth the added fragility.
 
 ### Reviewer subagents
 
