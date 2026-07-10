@@ -105,14 +105,32 @@ def check_push(command: str):
 
 # ---------------------------------------------------------------------------
 # git merge -- rebase-only policy (the documented --ff-only sync stays allowed)
+#
+# Tokenized rather than a raw substring regex on the whole command string --
+# `echo "please don't git merge here"` or `grep "git merge" file.py` would
+# otherwise false-positive, since \bgit\s+merge\b matches anywhere in the
+# string regardless of quoting. Scanning for an actual 'git' token (bare or
+# path-qualified) followed by 'merge' (skipping global git flags in between)
+# only matches a real invocation. Not a full shell parser -- an unquoted
+# `echo git merge` as a literal argument would still match, same imprecision
+# check_terraform_destructive/check_azure_cli/check_powershell still have.
 # ---------------------------------------------------------------------------
 def check_merge(command: str):
-    if re.search(r"\bgit\s+merge\b", command) and "--ff-only" not in command:
-        block(
-            "Bloque par hook (CLAUDE.md > Git Workflow > Rules) : 'git merge' est interdit "
-            "pour rattraper une base -- utilise 'git rebase origin/<base>'. "
-            "(--ff-only reste autorise pour synchroniser main/dev en local avec origin.)"
-        )
+    tokens = shlex.split(command)
+    for i, t in enumerate(tokens):
+        if t != "git" and not t.endswith(("/git", "\\git")):
+            continue
+        j = i + 1
+        while j < len(tokens) and tokens[j].startswith("-"):
+            j += 1
+        if j < len(tokens) and tokens[j] == "merge":
+            if "--ff-only" not in tokens:
+                block(
+                    "Bloque par hook (CLAUDE.md > Git Workflow > Rules) : 'git merge' est interdit "
+                    "pour rattraper une base -- utilise 'git rebase origin/<base>'. "
+                    "(--ff-only reste autorise pour synchroniser main/dev en local avec origin.)"
+                )
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -279,8 +297,16 @@ def save_state(path: Path, state: dict):
             path.write_text(json.dumps(state), encoding="utf-8")
         else:
             path.unlink(missing_ok=True)
-    except Exception:
-        pass  # best-effort persistence -- a lost counter just resets to 0, not a hang
+    except Exception as e:
+        # Best-effort, but NOT silent: a one-off failure just looks like a
+        # reset (fine, matches the comment this used to have). A *persistent*
+        # failure (e.g. permissions on the transcript's directory) means the
+        # counter can never be written, so state.get(agent, 0) reads 0 on
+        # every call and MAX_WARNING_ATTEMPTS is never reached -- gh pr
+        # create would then block indefinitely instead of ever giving up,
+        # the opposite of "just resets to 0". Surface it so that failure
+        # mode is visible instead of silently assumed benign.
+        sys.stderr.write(f"pre_bash_guard: impossible d'ecrire l'etat des tentatives ({e}).\n")
 
 
 def docs_and_reviews_readiness(transcript_path: str):
@@ -309,7 +335,7 @@ def docs_and_reviews_readiness(transcript_path: str):
         return [], {}
 
     last_edit_line = -1                  # any Edit/Write/NotebookEdit -- for doc-writer
-    last_touch = {}                      # category -> line_no of last edit in it
+    last_touch = {}                      # category -> (line_no, file_path) of last edit in it
     last_call_line = {"doc-writer": -1}   # subagent -> line_no of last call
     last_call_id = {"doc-writer": None}   # subagent -> tool_use id of last call
     results_by_id = {}                    # tool_use id -> result text
@@ -342,7 +368,7 @@ def docs_and_reviews_readiness(transcript_path: str):
                             fp = tool_input.get("file_path") or tool_input.get("notebook_path")
                             if fp:
                                 for cat in categorize(fp):
-                                    last_touch[cat] = line_no
+                                    last_touch[cat] = (line_no, fp)
 
                         if name in SUBAGENT_TOOL_NAMES:
                             subagent = tool_input.get("subagent_type")
@@ -369,15 +395,20 @@ def docs_and_reviews_readiness(transcript_path: str):
     for cat, agent in CATEGORY_AGENT.items():
         if cat not in last_touch:
             continue
+        touch_line, touch_path = last_touch[cat]
         review_line = last_call_line.get(agent, -1)
-        if review_line < last_touch[cat]:
-            problems.append(f"{agent} n'a pas ete rappele depuis la derniere edition ({cat}).")
+        if review_line < touch_line:
+            problems.append(
+                f"{agent} n'a pas ete rappele depuis la derniere edition ({cat}) -- "
+                f"dernier fichier touche : {touch_path}."
+            )
             continue
         report_text = results_by_id.get(last_call_id.get(agent), "")
         if verdict_ok(report_text) is not True:
             problems.append(
                 f"{agent} n'a pas rendu un verdict APPROUVE (CHANGEMENTS REQUIS, ou "
-                f"indetermine) sur son dernier passage ({cat})."
+                f"indetermine) sur son dernier passage ({cat}) -- dernier fichier "
+                f"touche : {touch_path}."
             )
             continue
         warning_by_agent[agent] = has_warnings(report_text)

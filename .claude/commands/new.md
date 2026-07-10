@@ -3,6 +3,11 @@ description: Mettre en place un prompt détaillé et complet afin de faire déma
 argument-hint: <description de la demande>
 ---
 
+Réservé aux sessions locales interactives (Cowork ou Code) : l'étape 4 suppose un
+échange humain en aller-retour, ce qu'un run `claude-code-action` en CI ne permet
+pas dans une seule invocation (voir `.github/CLAUDE_ACTION.md`). N'utilise pas cette
+commande dans ce contexte.
+
 Créer un prompt pour la feature suivante :
 $ARGUMENTS
 
