@@ -1,3 +1,8 @@
+---
+name: conventions-frontend
+description: Conventions Frontend / Next.js obligatoires du projet Job Finder — Server vs Client Components, système de thème obligatoire (tokens, jamais de couleur codée en dur), cn() pour les classes conditionnelles, dynamic import + cleanup Three.js, apiClient pour tout appel backend, NEXT_PUBLIC_* référencées statiquement, loading.tsx/error.tsx, nommage des fichiers, accessibilité. Utilise ce skill avant d'écrire ou modifier tout composant React/TypeScript, page, route Next.js, ou classe Tailwind — même si l'utilisateur ne mentionne pas explicitement "convention" ou "frontend".
+---
+
 # Frontend / Next.js Conventions
 
 ## Server Components vs Client Components
@@ -84,7 +89,7 @@
 - Pas de fichier `index.ts` dans les composants (Next.js résout directement le nom de fichier)
 
 ## Taille et découpe des composants
-- **Un composant = une responsabilité.** Si un composant dépasse ~80 lignes ou mélange deux préoccupations, le découper.
+- **Un composant = une responsabilité.** Si un composant dépasse ~80 lignes ou mélange deux préoccupations, le découper. Raison : un composant long mélange souvent état/logique et présentation, ce qui complique le choix Server/Client et le rend plus difficile à relire.
 - Colocation : les sous-composants utilisés uniquement par une page vivent dans `app/<route>/_components/` (le `_` exclut le dossier du routing Next.js).
 - Les composants réutilisables entre routes vivent dans `components/`.
 
