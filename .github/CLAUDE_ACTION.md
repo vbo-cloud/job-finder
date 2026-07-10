@@ -53,11 +53,11 @@ out the same repo.
 
 ## Required setup (manual, repo-admin only — not done by this PR)
 
-- **`ANTHROPIC_API_KEY`** repository (or organization) secret. This is a
-  different secret name from the existing `CLAUDE_API_KEY` used by
-  `reviewerAgent.yml` — `claude-code-action`'s `anthropic_api_key` input
-  expects this exact name. The same underlying Anthropic key can be reused
-  under both secret names if that's simpler to manage.
+- No new secret needed: the workflow reuses the existing **`CLAUDE_API_KEY`**
+  secret (already set up for `reviewerAgent.yml`) for the action's
+  `anthropic_api_key` input. The input name (`anthropic_api_key`) is unrelated
+  to the GitHub secret's name — any secret holding a valid Anthropic API key
+  works.
 - **The official Claude GitHub App** ([github.com/apps/claude](https://github.com/apps/claude))
   installed on this repository, with Contents/Issues/Pull requests set to
   read & write. This is what gives the action its `claude[bot]` identity for
