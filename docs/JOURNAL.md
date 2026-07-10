@@ -4659,6 +4659,10 @@ Bug remonté par Vincent : quand l'analyse d'un CV se termine et que son `match_
 
 ## PR #184 — feat(offer-distillation): pipeline asynchrone de distillation LLM des offres avant embedding
 
+> **Superseded** — la distillation décrite ci-dessous a été retirée entièrement (voir l'entrée
+> de retrait plus bas dans ce journal, `docs/prompts/prompt-remove-offer-distillation.md`).
+> Entrée conservée telle quelle pour l'historique.
+
 **Date :** 2026-07-09
 **Branche :** `feature/offer-distillation-pipeline` → `dev`
 
@@ -4811,3 +4815,67 @@ Mise en place de l'infrastructure `.claude/` du projet (jusque-là inexistante) 
 - **`doc-writer` et reviewer-\* désormais gatés ensemble sur `gh pr create`, plus sur deux hooks distincts** : initialement, `doc-writer` était vérifié par `pre_bash_guard.py` (`PreToolUse` sur `gh pr create`) tandis que les reviewer-* l'étaient par un `Stop` hook séparé (`require_reviewer.py`, fin de session). Demande explicite : uniformiser sur le modèle `gh pr create`, comme pour `doc-writer`. Bénéfice au passage, pas seulement la cohérence demandée : le `Stop` hook bloquait la *fin de session elle-même* si un reviewer ne validait jamais, ce qui justifiait sa mécanique de limite de cycles (3 blocages consécutifs puis abandon, pour ne jamais laisser l'agent définitivement bloqué) ; gaté sur `gh pr create` à la place, un reviewer qui ne valide jamais bloque seulement l'ouverture de la PR — Claude peut toujours choisir de ne pas ouvrir la PR et remonter le désaccord à l'utilisateur, donc plus besoin de cette soupape de sécurité, supprimée avec le hook.
 - **Séquencement `doc-writer` → reviewers toujours non garanti mécaniquement** : les deux sont désormais vérifiés dans le même passage du transcript (`docs_and_reviews_readiness()`), mais rien n'empêche qu'un reviewer ait été appelé avant `doc-writer` plutôt qu'après — seule leur présence individuelle depuis la dernière édition est vérifiée, pas leur ordre relatif. Reste une instruction (description du subagent `doc-writer`), au même titre que la frontière Cowork/Code déjà documentée comme non hook-enforced plus haut dans `CLAUDE.md`.
 - **Pas de hook pour `explorer`** : contrairement à `doc-writer` (`gh pr create` a un moment précis et détectable) et aux reviewer-* (une édition de fichier a un moment précis et détectable), « cette feature est assez grosse pour justifier une exploration dédiée » n'a pas de signal mécanique fiable — pas de fichier particulier touché, pas de commande particulière lancée. Reste une décision de jugement portée par la description du subagent, comme le générique `Explore` déjà disponible plus largement, dont `explorer` est ici la spécialisation projet (conventions/patterns réels de ce repo plutôt qu'une recherche générique).
+---
+
+## PR #188 — refactor(offer-fetching): retirer la distillation LLM des offres, revenir à l'embedding direct
+
+**Date :** 2026-07-10
+**Branche :** `feature/remove-offer-distillation` → `dev`
+
+### Contexte
+
+Suite de l'investigation menée avec Vincent le 2026-07-10 sur l'ajout d'un étage de reranking
+au-dessus du retrieval par embedding (jugement LLM en lot, cross-encoder BGE, fusion RRF
+embedding+lexical) — toutes ces pistes ont été testées via de vrais scripts diagnostiques et
+rejetées (coût, vitesse, ou angles morts sémantiques). Décision : rester sur un matching embedding
+simple. Ce constat a remis en question la distillation LLM des offres elle-même (PR #184) :
+`scripts/diagnostic_llm_distillation_embedding_test.py` avait testé 3 variantes du prompt de
+distillation contre la version en production pour corriger le biais de fine-ranking observé (offres
+verbeuses/hors-sujet surclassant des offres focalisées et pertinentes sur la seule similarité
+cosinus) — aucune variante ne l'a corrigé de façon fiable. Vincent a décidé de retirer la
+distillation entièrement et de revenir à un embedding direct du texte brut de l'offre
+(titre + description), comme c'est déjà le cas pour les CV.
+
+### Ce qui a été fait
+
+- **`agents/offer_fetching/main.py`** : `_publish_pending_offers_for_distillation` remplacée par
+  `_embed_pending_offers` — embed direct (`shared.embedder.embed()`, batché) des offres à
+  `embedding IS NULL`, sans distillation LLM préalable. Nouvelle fonction
+  `_dispatch_start_matching`, appelée uniquement si au moins une offre a été embedée dans le run —
+  remplacement direct et événementiel du rôle de `matching_heartbeat` (fire-and-forget, même
+  trade-off que les autres producteurs de `start-matching`).
+- **Suppression complète d'`agents/offer_distillation` et `agents/matching_heartbeat`** (main.py,
+  Dockerfile) — le premier n'a jamais tenu la promesse pour laquelle il avait été introduit, le
+  second n'existait que pour rattraper le délai qu'introduisait le premier.
+- **`shared/models.py`** : colonne `distilled_skills` retirée de `Offer`. Migration `028` (miroir de
+  la migration `026`) : `drop_column` en `upgrade()`, `add_column` sans restauration de données en
+  `downgrade()`.
+- **Terraform (`envs/dev`)** : queue `distillate-offer-fetched` retirée de `servicebus.tf` ; modules
+  `job_offer_distillation` et `job_matching_heartbeat` retirés de `container_apps.tf` ;
+  `job_offer_fetching` gagne le secret `openai-api-key` et les env vars `AZURE_OPENAI_*` qu'il lui
+  faut désormais pour embedder directement (miroir de `job_cv_analysis`).
+- **CI (`buildAgents.yml`)** : steps de build/push, lignes de résumé, et appels
+  `az containerapp job update` pour les deux agents retirés supprimés.
+- **Tests** : `test_offer_distillation.py` supprimé ; `test_offer_fetching.py` mis à jour pour
+  couvrir `_embed_pending_offers` et `_dispatch_start_matching` (cas avec offres en attente, cas
+  sans, cas d'échec Service Bus fire-and-forget).
+- **Documentation** : README et BACKLOG mis à jour (retrait des mentions de la queue/des agents
+  retirés) ; l'entrée PR #184 de ce journal est conservée telle quelle pour l'historique, flaguée
+  « superseded » en tête.
+
+**Vérification :** `pytest` 230/230. `terraform fmt -check` / `terraform validate` sur `envs/dev` —
+OK. Grep du dépôt entier sur `offer_distillation|offer-distillation|matching_heartbeat|matching-heartbeat|distillate-offer-fetched|distilled_skills` —
+aucune occurrence résiduelle hors historique (`docs/JOURNAL.md`, `docs/prompts/prompt-offer-distillation-pipeline.md`,
+migrations 027/028) et faux positif attendu (`test_bus.py`, nom de queue arbitraire pour tester
+`send_messages_batch`).
+
+### Décisions techniques
+
+- **Sûreté du retour au synchrone confirmée avant exécution** : l'architecture asynchrone de la
+  distillation n'existait que parce qu'un appel LLM par offre en séquentiel dépasserait le timeout
+  d'1h d'`offer_fetching` sur potentiellement des milliers d'offres. `shared.embedder.embed()` batch
+  déjà ses entrées par 100 en interne, sans appel générateur par offre — le retrait ne réintroduit
+  donc pas le problème de latence qui avait justifié l'architecture asynchrone à l'origine.
+- **`alembic upgrade head` / `downgrade -1` et le test manuel jumpbox non exécutés dans cette
+  session** : pas de connectivité à la base de dev depuis cet environnement — à vérifier sur le
+  jumpbox avant merge (indiqué dans la description de la PR).
