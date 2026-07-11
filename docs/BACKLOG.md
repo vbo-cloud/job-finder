@@ -883,3 +883,30 @@ pour `jobfinder.vincentboutin.dev` correspond toujours à la valeur réelle de `
 chaque apply touchant le Container App frontend.
 **Fichiers :** `JobFinder/Terraform/modules/container_app/outputs.tf`,
 `JobFinder/Terraform/envs/dev/outputs.tf` (commentaires à revoir une fois la source stabilisée).
+
+### [urgent] Un `terraform init -upgrade` remplacerait la VM jumpbox — drift confirmé, non lié au frontend
+Découvert lors de `fix/frontend-custom-domain-certificate-azapi` (PR #198) via un `terraform plan`
+réel exécuté en local contre le state distant : un `terraform init -upgrade` qui ferait passer le
+provider `azurerm` de `4.72.0` (version actuellement pincée dans `.terraform.lock.hcl`) à `4.80.0`
+déclenche un remplacement complet (`-/+ destroy and then create replacement`) de `module.jumpbox`.
+Confirmé indépendamment de tout changement applicatif de cette PR : le même comportement apparaît
+sur un checkout `origin/dev` propre et non modifié, testé via un worktree Git jetable dédié.
+
+**Impact concret** : n'importe quelle future PR qui exécuterait `terraform init -upgrade` (ou dont
+le lock file dériverait de `azurerm` `4.72.0` vers une version plus récente, même sans intention
+explicite de toucher au jumpbox) recréerait la VM jumpbox — perte de tout état local non sauvegardé
+dessus, changement d'IP/empreinte, interruption du seul accès de gestion au VNet dev.
+
+**Solution cible** : identifier précisément quel(s) attribut(s) du provider `azurerm` 4.80.0
+déclenchent ce replacement pour `azurerm_linux_virtual_machine`/ressources associées du module
+jumpbox (probablement un changement de defaulting ou un attribut devenu `ForceNew` entre 4.72.0 et
+4.80.0 — à confirmer par `terraform providers schema -json` sur les deux versions), puis soit
+absorber le changement proprement (import/state move si possible), soit documenter explicitement
+pourquoi rester pincé à `4.72.0` plus longtemps. Nécessite son propre `terraform plan` réel avec
+`-var alert_email=...` en contournement du `.tfvars` gitignored, comme fait pour cette PR et les
+PR #195/#196/#197.
+
+**Fichiers :** `JobFinder/Terraform/envs/dev/.terraform.lock.hcl`,
+`JobFinder/Terraform/envs/dev/jumpbox.tf`, `JobFinder/Terraform/modules/jumpbox/` (module non
+exploré en détail — hors scope du PR #198, qui n'a fait que confirmer le drift et revenir en
+arrière sur le lock file).
