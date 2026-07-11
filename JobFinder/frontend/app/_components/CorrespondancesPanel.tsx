@@ -47,7 +47,6 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [savedPage, setSavedPage]   = useState(1);
   const contentRef = useRef<HTMLDivElement>(null);
   const [saved, setSaved]           = useState(new Set<string>());
-  const [applied, setApplied]       = useState(new Set<string>());
   const [rejected, setRejected]     = useState(new Set<string>());
   const [seenIds, setSeenIds] = useState<Set<string>>(() => loadSeenIds(cvId));
   const seenIdsRef = useRef(seenIds);
@@ -171,7 +170,6 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       return novel ? filters.nouvelle : filters.vue;
     });
     return [...arr].sort((a, b) => b.score - a.score);
-    // `applied` is not a filter criterion today — add it here if "hide applied" is introduced
     // seenIdsRef intentionally absent from deps — it's a ref, not reactive state
   }, [matches, rejected, query, filters]);
 
@@ -207,13 +205,11 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       match:      override ? { ...m, analysis: override } : m,
       isNew:      m.is_new && !seenIds.has(m.offer.id),
       isSaved:    saved.has(m.offer.id),
-      isApplied:  applied.has(m.offer.id),
       isExpanded: selectedId === m.offer.id,
       analysisPending: analysisPending.has(m.offer.id),
       searchQuery,
       onSelect:   () => toggleExpand(m.offer.id),
       onSave:     () => toggleSaved(m.offer.id),
-      onApply:    () => setApplied((s) => new Set(s).add(m.offer.id)), // TODO: persist applied state to backend
       onReject:   () => {
         setRejected((s) => new Set(s).add(m.offer.id));
         if (selectedId === m.offer.id) setSelectedId(null);

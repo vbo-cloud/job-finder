@@ -54,12 +54,10 @@ function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
     match: makeMatch(),
     isNew: false,
     isSaved: false,
-    isApplied: false,
     isExpanded: false,
     analysisPending: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
-    onApply: jest.fn(),
     onReject: jest.fn(),
     onAnalyze: jest.fn(),
     ...overrides,
@@ -122,14 +120,12 @@ describe("MatchItem", () => {
   });
 
   describe("actions in accordion", () => {
-    it("shows Postuler when not applied", () => {
-      render(<MatchItem {...makeProps({ isExpanded: true, isApplied: false })} />);
-      expect(screen.getByRole("button", { name: "Postuler" })).toBeInTheDocument();
-    });
-
-    it("shows Candidature envoyée when applied", () => {
-      render(<MatchItem {...makeProps({ isExpanded: true, isApplied: true })} />);
-      expect(screen.getByText("Candidature envoyée ✓")).toBeInTheDocument();
+    it("shows a Consulter l'offre link pointing at the FT offer page", () => {
+      render(<MatchItem {...makeProps({ isExpanded: true })} />);
+      const link = screen.getByRole("link", { name: "Consulter l'offre" });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute("href", expect.stringContaining("FT-001"));
+      expect(link).toHaveAttribute("target", "_blank");
     });
 
     it("calls onReject when Rejeter is clicked", () => {
