@@ -68,6 +68,17 @@ variable "admin_user_ids" {
   description = "Comma-separated Entra External ID user IDs (JWT sub claims) granted in-app admin features in the webapp (e.g. the credits refill button). Empty string means no admins — the feature is simply disabled."
 }
 
+variable "frontend_custom_domain" {
+  type        = string
+  default     = "jobfinder.vincentboutin.dev"
+  description = "Custom domain for the frontend Container App. Not yet bound to an azurerm_container_app_custom_domain resource -- that binding lands in a follow-up PR once DNS propagation is confirmed (see docs/JOURNAL.md, PR #191). Referenced now so CORS_ALLOWED_ORIGINS and that future binding share a single source of truth instead of duplicating the literal."
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.frontend_custom_domain))
+    error_message = "frontend_custom_domain must be a valid DNS hostname (e.g. jobfinder.vincentboutin.dev)."
+  }
+}
+
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000

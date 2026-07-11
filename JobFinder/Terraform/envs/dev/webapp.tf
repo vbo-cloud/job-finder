@@ -90,11 +90,11 @@ module "webapp" {
       name        = "ENTRA_EXTERNAL_CLIENT_SECRET"
       secret_name = "entra-external-client-secret"
     },
-    # Frontend origins allowed to call the API cross-origin.
-    # Add the Container App frontend URL here when the frontend is deployed.
+    # Frontend origins allowed to call the API cross-origin. var.frontend_custom_domain is
+    # the single source of truth shared with the future custom domain binding (PR 2).
     {
       name  = "CORS_ALLOWED_ORIGINS"
-      value = "http://localhost:3000"
+      value = "http://localhost:3000,https://${var.frontend_custom_domain}"
     },
     # Entra user IDs (JWT sub) granted in-app admin features. Opaque GUIDs,
     # not credentials — authorization still requires a valid signed JWT for

@@ -1,12 +1,14 @@
-name: Build Agent Images
+name: Build Application Images
 
-# Builds and pushes Docker images for all agents (matching, cleanup, offer-fetching) to ACR.
-# Triggered on changes to JobFinder/python/ to keep images in sync with code.
+# Builds and pushes Docker images for all agents (matching, cleanup, offer-fetching) and the
+# frontend to ACR. Triggered on changes to JobFinder/python/ or JobFinder/frontend/ to keep
+# images in sync with code.
 on:
   push:
     branches: [dev]
     paths:
       - 'JobFinder/python/**'
+      - 'JobFinder/frontend/**'
   workflow_dispatch:
 
 permissions:
@@ -140,6 +142,25 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/match-analysis:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/match-analysis:cache,mode=max
 
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: JobFinder/frontend
+          file: JobFinder/frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/frontend:latest
+            ${{ env.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_ENTRA_CLIENT_ID=${{ vars.NEXT_PUBLIC_ENTRA_CLIENT_ID }}
+            NEXT_PUBLIC_ENTRA_AUTHORITY=${{ vars.NEXT_PUBLIC_ENTRA_AUTHORITY }}
+            NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY=${{ vars.NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY }}
+            NEXT_PUBLIC_ENTRA_API_SCOPE=${{ vars.NEXT_PUBLIC_ENTRA_API_SCOPE }}
+            NEXT_PUBLIC_REDIRECT_URI=${{ vars.NEXT_PUBLIC_REDIRECT_URI }}
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/frontend:cache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/frontend:cache,mode=max
+
       - name: Build summary
         run: |
           echo "### Images pushed" >> $GITHUB_STEP_SUMMARY
@@ -149,8 +170,9 @@ jobs:
           echo "- \`$ACR_LOGIN_SERVER/agents/webapp:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/cv-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/match-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`$ACR_LOGIN_SERVER/frontend:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
-      - name: Update Container App Job images
+      - name: Update Container App and Container App Job images
         run: |
           az containerapp job update \
             --name job-jf-dev-frc-matching \
@@ -182,3 +204,8 @@ jobs:
             --resource-group rg-jf-dev-frc-app \
             --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/match-analysis:${{ github.sha }}
+          az containerapp update \
+            --name app-jf-dev-frc-frontend \
+            --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --image $ACR_LOGIN_SERVER/frontend:${{ github.sha }}
