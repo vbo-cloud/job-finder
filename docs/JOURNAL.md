@@ -5299,3 +5299,58 @@ affirmation invérifiable sur le fonctionnement interne du provider).
   passent par une PR dédiée d'abord). Marquée `[urgent]` plutôt que `[optional]` parce que le risque
   concret (CNAME OVH périmé silencieusement) existe dès le prochain déploiement, pas seulement en
   théorie.
+
+---
+
+## PR #197 — fix(infra): stabiliser l'output `fqdn` du module container_app
+
+**Date :** 2026-07-11
+**Branche :** `fix/container-app-fqdn-stability` → `dev`
+
+### Contexte
+
+Le PR #196 avait versé au backlog (`[urgent]`) l'anomalie de `modules/container_app/outputs.tf` :
+l'output `fqdn` était calculé depuis `azurerm_container_app.this.latest_revision_fqdn`, avec un
+commentaire affirmant à tort que cette valeur était « stable in Single revision mode » — réfuté par
+un `terraform plan` réel du PR #196 où un drift totalement indépendant (retrait de
+`workload_profile_name`) avait à lui seul fait bumper le suffixe de révision (`--0000002` →
+`--0000003`).
+
+Cette anomalie est devenue concrètement bloquante entre les deux PR : le CNAME configuré
+manuellement chez OVH pour `jobfinder.vincentboutin.dev` pointait sur une copie figée d'une valeur
+passée de `frontend_url`, devenue obsolète suite à un déploiement — le site est devenu inaccessible,
+confirmé directement par l'utilisateur (« je peux pas accéder à mon app »).
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/modules/container_app/outputs.tf`** — l'output `fqdn` utilise désormais
+  `azurerm_container_app.this.ingress[0].fqdn` au lieu de `azurerm_container_app.this.latest_revision_fqdn`.
+- **`docs/BACKLOG.md`** — l'entrée `[urgent]` correspondante marquée `[RÉSOLU — PR #197]`.
+
+**Vérification :** `terraform fmt -check` et `terraform validate` OK. Confirmé via
+`terraform providers schema -json` (azurerm 4.72.0) que `ingress.fqdn` est bien un attribut
+app-level, non lié à une révision — sa description de schéma dit simplement « The FQDN of the
+ingress », alors que celle de `latest_revision_fqdn` dit explicitement « Latest Revision ». Un
+`terraform plan -var alert_email=...` réel (lecture seule, local) confirme un impact strictement
+limité aux valeurs d'output (`frontend_url` et `webapp_url` perdent leur suffixe de révision) : zéro
+action de niveau ressource — un output est une projection en lecture seule, il ne peut par
+construction déclencher aucun changement de ressource. Blast radius vérifié également en dehors du
+plan : `CORS_ALLOWED_ORIGINS` (`webapp.tf`) utilise un domaine littéral en dur, pas
+`module.webapp.fqdn`/`module.frontend.fqdn` — les seuls consommateurs réels de ces outputs de module
+sont les passthroughs `webapp_url`/`frontend_url` d'`envs/dev/outputs.tf`. `reviewer-infra` a revu
+ce diff exact et retourné APPROUVÉ.
+
+### Décisions techniques
+
+- **`ingress[0].fqdn` plutôt que `latest_revision_fqdn`** : confirmé par le schéma du provider que
+  c'est l'attribut réellement app-level (constant tant que la configuration d'ingress elle-même ne
+  change pas), alors que `latest_revision_fqdn` inclut le suffixe de révision courant et change à
+  chaque nouvelle révision — y compris pour des changements sans rapport avec le contenu applicatif,
+  comme observé dans le PR #196.
+- **PR dédiée au module, avant la correction applicative qui en dépend** : ce fix ne touche que
+  `modules/container_app/outputs.tf`, rien dans `envs/`. Conforme au git flow de CLAUDE.md — un
+  changement de `modules/` qui accompagne une feature applicative passe par sa propre PR d'abord.
+  Ici en particulier : le rattachement du certificat/domaine personnalisé du frontend (PR #195/#196)
+  dépend indirectement de la stabilité de `frontend_url` pour la configuration DNS externe (CNAME
+  OVH) — cette correction de module doit donc être mergée et son effet vérifié avant toute future PR
+  qui retoucherait ce binding.
