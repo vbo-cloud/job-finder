@@ -5001,3 +5001,35 @@ l'image obtenue puis `curl http://localhost:3000/` → HTTP 200. Conteneur et im
   étape de vérification de ce PR — impossible de valider que l'image se build et démarre
   correctement sans corriger d'abord ce point. Déployer une Container App dont l'image ne build
   même pas n'a aucun sens ; le fix reste donc dans le périmètre.
+
+---
+
+## PR #192 — fix(claude): parité entre le reviewer CI et les subagents reviewer-*
+
+**Date :** 2026-07-11
+**Branche :** `feature/reviewer-ci-context-parity` → `dev`
+
+### Contexte
+
+Vincent a remarqué que le reviewer CI (`.github/workflows/reviewerAgent.yml`) est systématiquement plus pointilleux que les subagents `reviewer-backend`/`reviewer-frontend`/`reviewer-infra` déclenchés localement par Claude Code, alors que les deux sont censés appliquer les mêmes conventions. Investigation en deux temps.
+
+### Ce qui a été fait
+
+**1. Écart de critères et de seuil de blocage entre les subagents (`.claude/agents/reviewer-*.md`)**
+
+- Les trois subagents ne bloquaient que sur une règle explicitement phrasée « jamais/toujours » ; tout le reste (docstring manquante, fonction >40 lignes, règle « obligatoire » non phrasée en absolu…) était systématiquement déclassé en remarque non-bloquante. Le prompt CI, lui, bloque par défaut sur toute violation d'une convention de CLAUDE.md sauf mention contraire explicite. Reformulé le critère de blocage dans les trois fichiers pour adopter le même défaut.
+- `reviewer-backend` n'avait aucun équivalent à la section « Senior Python review (beyond conventions) » du prompt CI. 4 des 5 règles bloquantes de cette section étaient déjà couvertes par le skill `conventions-python` (context managers, env vars au niveau module, `raise` nu, pas d'`except Exception` nu) — seul le pattern N+1 (bloquant) et trois remarques (batch vs boucle unitaire, portée de transaction, `load_dotenv()` manquant) manquaient réellement. Ajoutés à `reviewer-backend.md`.
+- Confirmé sur l'historique réel (PR #188) : le CI avait flaggé deux fois un pattern N+1 dans `_embed_pending_offers` qu'un `reviewer-backend` local n'aurait pas pu détecter faute de cette règle.
+
+**2. Le reviewer CI ne recevait jamais les fichiers de skills (`.github/workflows/reviewerAgent.yml`, `.github/reviewer-agent/system-prompt.md`)**
+
+- Écart plus sérieux : `reviewerAgent.yml` n'a jamais envoyé au reviewer CI que le contenu de `CLAUDE.md`. Or depuis la migration des conventions vers `.claude/skills/` (commit `b2e8e94`), `CLAUDE.md` ne fait plus que pointer vers les skills pour Terraform/Python/SQL/Frontend — le détail (nommage Azure, docstrings, format `structlog`, conventions Alembic/SQLAlchemy, conventions frontend) vit uniquement dans `.claude/skills/*/SKILL.md`. Le reviewer CI était donc structurellement aveugle à ces quatre domaines entiers depuis cette migration, alors que `CLAUDE.md` gardait en clair les sections Sécurité/Coût/Lifecycle/Blocking criteria — ce qui explique pourquoi le CI restait fiable sur ces points précis tout en ratant le reste.
+- `reviewerAgent.yml` récupère désormais la liste des fichiers modifiés de la PR (`gh api pulls/$PR_NUMBER/files`) et charge uniquement les `SKILL.md` pertinents selon l'extension/le chemin des fichiers touchés (`.tf` → `conventions-terraform`, `JobFinder/python/migrations/` ou `models.py` → `conventions-sql`, `JobFinder/python/` → `conventions-python`, `JobFinder/frontend/` → `conventions-frontend`), pour ne pas gonfler le prompt inutilement sur les PR qui ne touchent qu'une seule catégorie.
+- `system-prompt.md` mis à jour pour refléter que les skills font maintenant partie du contexte fourni, et sa section « Senior Python review » réduite au seul item réellement absent du skill (N+1) — les quatre autres dupliquaient désormais ce que `conventions-python` couvre directement.
+
+**Vérification :** YAML validé (`yaml.safe_load`), bloc Python du heredoc extrait et validé (`py_compile`). Pas de vérification end-to-end possible depuis cet environnement (nécessite un run du workflow sur une vraie PR avec `CLAUDE_API_KEY`/`REVIEWER_GITHUB_TOKEN`) — à surveiller sur la prochaine PR touchant du Terraform/Python/SQL/frontend.
+
+### Décisions techniques
+
+- **Chargement des skills filtré par fichiers touchés, pas systématique** : charger les 4 skills sur chaque PR aurait été plus simple mais aurait gonflé inutilement le prompt (et le coût) des PR qui ne touchent qu'une seule catégorie — la plupart des PR de ce projet respectent déjà la règle « jamais mélanger plateforme et appli » de CLAUDE.md, donc une PR ne touche généralement qu'une ou deux catégories.
+- **`conventions-sql` déclenché aussi par `models.py`, pas seulement par les migrations** : `shared/models.py` porte les conventions SQLAlchemy (clés UUID, nommage des contraintes) même hors contexte de migration Alembic.

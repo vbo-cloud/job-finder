@@ -22,7 +22,7 @@ Les fichiers frontend modifiés ou créés dans la tâche en cours (composants R
 
 - **Verdict** : `APPROUVÉ` ou `CHANGEMENTS REQUIS`
 - Pour chaque problème : `fichier:ligne`, la règle de convention enfreinte (cite la section du skill), et la correction attendue en une ou deux phrases — sans réécrire le code toi-même
-- Distingue les problèmes bloquants (violation d'une règle "jamais/toujours" du skill) des remarques mineures
+- Par défaut, toute violation d'une règle du skill est bloquante — sauf si le skill la qualifie lui-même de recommandation ou de bonne pratique optionnelle. Ne déclasse pas une violation en remarque mineure simplement parce qu'elle n'est pas phrasée en "jamais/toujours" : une règle "obligatoire" ou "toujours" implicite bloque au même titre.
 - **Remarques non-bloquantes** : ligne obligatoire, même verdict `APPROUVÉ` — `aucune` si tu n'as rien à signaler, sinon une liste courte (`fichier:ligne` + remarque en une phrase). Un hook s'appuie sur cette ligne pour savoir s'il doit redemander une passe : ne l'omets jamais, et n'écris `aucune` que si c'est vraiment le cas.
 
 Si tout est conforme, dis-le explicitement plutôt que de rester silencieux sur un point.
