@@ -5094,3 +5094,27 @@ projet). `reviewer-infra` a revu ce diff exact et retourné APPROUVÉ, zéro rem
   déjà présent dans les conventions du projet) — écrire ces ressources sans vérifier le schéma réel de
   la version 4.72.0 installée risquait un échec silencieux ou tardif (`validate` OK mais `plan`/`apply`
   en échec faute d'attribut reconnu).
+
+---
+
+## PR #193 — refactor(frontend): remplacer le bouton Postuler (stub non persisté) par un lien Consulter l'offre
+
+**Date :** 2026-07-11
+**Branche :** `feature/offer-consult-link` → `dev`
+
+### Contexte
+
+Sur la page de correspondances, le bouton « Postuler » d'une carte d'offre dépliée ne faisait que basculer un état local (`applied`) — un stub jamais persisté côté backend, marqué d'un commentaire `// TODO: persist applied state to backend`. Demande utilisateur : renommer ce bouton en « Consulter l'offre » et le faire pointer vers la page d'offre France Travail, plutôt que d'implémenter la persistance du stub.
+
+### Ce qui a été fait
+
+- **`MatchItem.tsx`** : le bouton devient un lien `<a>` vers `${FT_OFFER_URL}/${offer.ft_id}` (ouvert dans un nouvel onglet), le même motif d'URL déjà utilisé par le lien du titre de l'offre. Libellé « Consulter l'offre ».
+- **`MatchItem.tsx`** : `isApplied` et `onApply` retirés de l'interface `MatchItemData` — un grep sur l'ensemble du dépôt a confirmé qu'aucun autre consommateur ne lisait cet état, uniquement utilisé pour désactiver/relabelliser ce bouton.
+- **`CorrespondancesPanel.tsx`** : état `applied`/`setApplied` et le commentaire obsolète qui s'y référait supprimés — plus rien ne les alimentait une fois `onApply` retiré de `MatchItemData`.
+- **Tests (`MatchItem.test.tsx`, `MatchList.test.tsx`)** : fixtures et assertions alignées sur le nouveau lien (`getByRole("link", { name: "Consulter l'offre" })`, vérification de `href` contenant le `ft_id` et de `target="_blank"`) ; références à `isApplied`/`onApply` retirées des builders de props.
+
+**Vérification :** Jest, `tsc --noEmit` et ESLint propres (exécutés avant la revue de doc). Grep du dépôt entier sur `isApplied|onApply|applied|Postuler` : aucune occurrence restante.
+
+### Décisions techniques
+
+- **Suppression complète de `isApplied`/`onApply` plutôt que dépréciation progressive** : ce n'était pas un état métier réel — jamais persisté côté backend, sans autre lecteur dans le code — donc le garder « au cas où » aurait juste laissé du code mort à côté du nouveau lien.
