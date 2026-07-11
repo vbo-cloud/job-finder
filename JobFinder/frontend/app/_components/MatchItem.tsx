@@ -9,7 +9,6 @@ export interface MatchItemData {
   match: MatchOut;
   isNew: boolean;
   isSaved: boolean;
-  isApplied: boolean;
   isExpanded: boolean;
   /** True between the "Analyser cette offre" click and the polling resolution. */
   analysisPending: boolean;
@@ -17,7 +16,6 @@ export interface MatchItemData {
   searchQuery?: string;
   onSelect: () => void;
   onSave: () => void;
-  onApply: () => void;
   onReject: () => void;
   onAnalyze: () => void;
 }
@@ -95,8 +93,8 @@ function logoBadge(company: string): { mono: string; bg: string; fg: string } {
 }
 
 export default function MatchItem({
-  match, isNew, isSaved, isApplied, isExpanded, analysisPending, searchQuery,
-  onSelect, onSave, onApply, onReject, onAnalyze,
+  match, isNew, isSaved, isExpanded, analysisPending, searchQuery,
+  onSelect, onSave, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
   const pct = Math.round(match.score * 100);
@@ -277,18 +275,15 @@ export default function MatchItem({
               </p>
             )}
             <div className="flex gap-2 mt-[18px] flex-wrap">
-              <button
-                onClick={onApply}
-                disabled={isApplied}
-                className={cn(
-                  "flex-1 min-w-[130px] px-4 py-3 rounded-[10px] font-semibold text-[13.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm",
-                  isApplied
-                    ? "border border-match bg-match-skill text-match-skill cursor-default"
-                    : "bg-solid-confirm text-on-solid hover:bg-solid-confirm-hover cursor-pointer",
-                )}
+              <a
+                href={`${FT_OFFER_URL}/${offer.ft_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 min-w-[130px] px-4 py-3 rounded-[10px] font-semibold text-[13.5px] text-center transition-colors bg-solid-confirm text-on-solid hover:bg-solid-confirm-hover cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-confirm"
               >
-                {isApplied ? "Candidature envoyée ✓" : "Postuler"}
-              </button>
+                Consulter l&apos;offre
+              </a>
               <button
                 onClick={onSave}
                 className={cn(

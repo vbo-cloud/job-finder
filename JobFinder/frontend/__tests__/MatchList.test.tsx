@@ -29,12 +29,10 @@ function makeItem(id: string, score = 0.8): MatchItemData {
     match: makeMatch(id, score),
     isNew: true,
     isSaved: false,
-    isApplied: false,
     isExpanded: false,
     analysisPending: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
-    onApply: jest.fn(),
     onReject: jest.fn(),
     onAnalyze: jest.fn(),
   };
