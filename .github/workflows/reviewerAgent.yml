@@ -64,6 +64,9 @@ jobs:
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" \
             -H "Accept: application/vnd.github.diff" > /tmp/pr.diff
 
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[].filename' > /tmp/changed_files.txt
+
       # Retrieve plan logs for all 4 environments to give Claude full context.
       - name: Get Terraform Plan logs
         env:
@@ -130,6 +133,31 @@ jobs:
               with open("CLAUDE.md") as f:
                   claude_md = f.read()
 
+              # CLAUDE.md only points to the skill files for Terraform/Python/SQL/Frontend
+              # conventions (the detail lives in .claude/skills/*/SKILL.md, not in CLAUDE.md
+              # itself) — load the ones relevant to the files this PR actually touches so the
+              # reviewer sees the same conventions Claude Code applies locally.
+              with open("/tmp/changed_files.txt") as f:
+                  changed_files = [line.strip() for line in f if line.strip()]
+
+              skill_triggers = {
+                  "conventions-terraform": lambda p: p.endswith(".tf"),
+                  "conventions-sql": lambda p: "JobFinder/python/migrations/" in p or p.endswith("models.py"),
+                  "conventions-python": lambda p: p.startswith("JobFinder/python/"),
+                  "conventions-frontend": lambda p: p.startswith("JobFinder/frontend/"),
+              }
+              needed_skills = [
+                  name for name, matches in skill_triggers.items()
+                  if any(matches(p) for p in changed_files)
+              ]
+
+              skills_section = ""
+              for skill in needed_skills:
+                  skill_path = f".claude/skills/{skill}/SKILL.md"
+                  if os.path.exists(skill_path):
+                      with open(skill_path) as f:
+                          skills_section += f"### Skill: {skill}\n{f.read()}\n\n"
+
               with open("/tmp/pr_meta.json") as f:
                   pr_meta = json.load(f)
 
@@ -157,6 +185,7 @@ jobs:
                   f"## PR #{pr_number}: {pr_meta['title']}\n\n"
                   f"### Description\n{pr_meta['body'] or '_No description provided._'}\n\n"
                   f"### Project conventions (CLAUDE.md)\n{claude_md}\n\n"
+                  f"### Detailed conventions (skills relevant to files changed in this PR)\n{skills_section or '_No skill matched the changed files._'}\n\n"
                   f"### Repository structure (git ls-files)\n{file_list}\n\n"
                   f"### Diff\n```diff\n{diff}\n```\n\n"
                   + logs_section
