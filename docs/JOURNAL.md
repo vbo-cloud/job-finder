@@ -5097,7 +5097,7 @@ projet). `reviewer-infra` a revu ce diff exact et retourné APPROUVÉ, zéro rem
 
 ---
 
-## PR #193 — refactor(frontend): remplacer le bouton Postuler (stub non persisté) par un lien Consulter l'offre
+## PR #194 — refactor(frontend): remplacer le bouton Postuler (stub non persisté) par un lien Consulter l'offre
 
 **Date :** 2026-07-11
 **Branche :** `feature/offer-consult-link` → `dev`
