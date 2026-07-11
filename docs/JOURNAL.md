@@ -5118,3 +5118,88 @@ Sur la page de correspondances, le bouton « Postuler » d'une carte d'offre dé
 ### Décisions techniques
 
 - **Suppression complète de `isApplied`/`onApply` plutôt que dépréciation progressive** : ce n'était pas un état métier réel — jamais persisté côté backend, sans autre lecteur dans le code — donc le garder « au cas où » aurait juste laissé du code mort à côté du nouveau lien.
+
+---
+
+## PR #195 — fix(infra): résoudre le deadlock d'ordre de création domaine/certificat du frontend
+
+**Date :** 2026-07-11
+**Branche :** `fix/frontend-custom-domain-two-phase` → `dev`
+
+### Contexte
+
+Le `terraform apply` du PR #193 (mergé) a échoué en CI avec une vraie erreur d'API Azure :
+
+```
+Error: creating Managed Certificate ...: unexpected status 400 (400 Bad Request) with error:
+RequireCustomHostnameInEnvironment: Creating managed certificate requires hostname
+'jobfinder.vincentboutin.dev' added as a custom hostname to a container app or route
+in environment 'cae-jf-dev-frc'
+```
+
+Cause racine : Azure exige que le hostname soit déjà enregistré comme domaine personnalisé sur la
+Container App avant de pouvoir créer un certificat managé pour ce hostname. Or le code du PR #193
+faisait référencer par `azurerm_container_app_custom_domain.frontend` l'`.id` du certificat managé
+(`container_app_environment_certificate_id`), ce qui poussait Terraform à créer le certificat
+*avant* le domaine personnalisé — l'inverse de ce qu'Azure impose. Un vrai interblocage d'ordre de
+création à l'intérieur d'un seul apply, indépendant de la propagation DNS déjà gérée par le PR #193.
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/envs/dev/frontend.tf`** — passage à une création en deux phases :
+  - `azurerm_container_app_custom_domain.frontend` : retrait de
+    `container_app_environment_certificate_id`, `certificate_binding_type` mis explicitement à
+    `"Disabled"`. Phase 1 : le hostname est enregistré comme domaine personnalisé sans référencer
+    aucun certificat, donc plus aucune raison au niveau attribut pour Terraform de créer le
+    certificat en premier.
+  - `azurerm_container_app_environment_managed_certificate.frontend` : ajout de
+    `depends_on = [azurerm_container_app_custom_domain.frontend]` — une arête de dépendance
+    explicite (pas une référence d'attribut) qui force la création du domaine personnalisé avant
+    celle du certificat, ce qui correspond à la précondition réelle imposée par Azure.
+  - Phase 2 n'est **pas** dans ce commit : un commit de suivi, seulement une fois cet apply phase 1
+    passé en CI, réintroduira `certificate_binding_type = "SniEnabled"` et
+    `container_app_environment_certificate_id = azurerm_container_app_environment_managed_certificate.frontend.id`
+    sur `azurerm_container_app_custom_domain.frontend`.
+  - Commentaire WHY ajouté au-dessus des deux ressources expliquant l'interblocage et les deux
+    phases, et un second expliquant pourquoi `azurerm_container_app_custom_domain` n'a pas de bloc
+    `tags` (attribut absent du schéma du provider pour ce type de ressource — même catégorie
+    d'exception que `azurerm_subnet`, voir `conventions-terraform`).
+- **`JobFinder/Terraform/envs/dev/outputs.tf`** : description de l'output `frontend_custom_domain`
+  corrigée — elle disait encore « pas encore rattaché », alors que le rattachement est en cours
+  (phase 1 appliquée, phase 2 à venir).
+
+**Vérification :** `terraform fmt -check` et `terraform validate` sur `envs/dev` — OK en local.
+`terraform plan` n'a **pas** pu être exécuté localement cette fois — la variable `alert_email` est
+requise et le `.tfvars` local est gitignored par convention du projet, donc pas de valeurs
+disponibles en local pour la lancer. L'absence de diff Terraform inattendu repose donc sur le
+raisonnement fait à partir du schéma du provider et du graphe de dépendances (attribut retiré côté
+domaine, `depends_on` ajouté côté certificat), pas sur un `plan` réel — sera confirmé par
+`terraformPlan.yml` en CI à l'ouverture de la PR. Aucun `terraform apply` local (CI-only, convention
+du projet). `reviewer-infra` a revu ce diff exact et retourné APPROUVÉ, avec deux remarques non
+bloquantes (description d'output obsolète, commentaire `tags` manquant) — toutes deux déjà corrigées
+avant ce passage doc-writer.
+
+### Décisions techniques
+
+- **`depends_on` plutôt qu'une référence d'attribut pour forcer l'ordre** : les deux ressources n'ont,
+  en phase 1, plus aucun attribut en commun (le domaine ne référence plus le certificat), donc
+  Terraform n'a par défaut aucune information pour les ordonner. `depends_on` est le seul mécanisme
+  disponible pour exprimer une contrainte d'ordre purement opérationnelle (imposée par l'API Azure,
+  pas par un flux de données Terraform) sans réintroduire la référence d'attribut qui a causé le
+  problème initial.
+- **`certificate_binding_type = "Disabled"` explicite plutôt qu'omis** : `Disabled` est déjà la
+  valeur par défaut de cet attribut dans le schéma du provider, donc l'omettre aurait un effet
+  identique — mais l'écrire explicitement documente l'intention (« phase 1, volontairement sans
+  certificat ») pour quiconque relit ce fichier avant que le commit de phase 2 n'arrive, plutôt que
+  de laisser deviner si l'absence de l'attribut est un oubli ou un choix.
+- **Phase 2 reportée à un commit séparé, après succès de la phase 1 en CI** : appliquer les deux
+  phases dans le même commit reproduirait exactement le bug du PR #193 dans le state initial (aucune
+  ressource existante, donc l'ordre de création dépendrait à nouveau des références d'attribut plutôt
+  que d'un `depends_on` déjà résolu par un apply antérieur). Séparer les deux commits garantit que la
+  phase 2 s'applique comme une mise à jour sur place d'un domaine personnalisé déjà existant, pas
+  comme une création concurrente au certificat.
+- **Pas de `ForceNew` sur les attributs concernés par la phase 2** : vérifié via
+  `terraform providers schema -json` contre azurerm 4.72.0 — `certificate_binding_type` et
+  `container_app_environment_certificate_id` sur `azurerm_container_app_custom_domain` ne sont pas
+  `ForceNew`, donc le commit de phase 2 sera un `update` en place, pas un `destroy`/`create` du
+  domaine personnalisé.
