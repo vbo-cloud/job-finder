@@ -855,3 +855,31 @@ Solution cible : deux stages — `builder` (installe toutes les dépendances, ex
 bundle serveur autonome sans dépendre de `node_modules` complet. Pattern standard pour les images
 Next.js en production. Fichier concerné : `JobFinder/frontend/Dockerfile`
 (et `JobFinder/frontend/next.config.mjs` pour `output: "standalone"`).
+
+### [urgent] `modules/container_app` — output `fqdn` instable, change à chaque nouvelle révision
+`modules/container_app/outputs.tf:6-10` calcule `fqdn` depuis
+`azurerm_container_app.this.latest_revision_fqdn`, avec un commentaire affirmant que c'est
+« stable in Single revision mode ». Faux, prouvé par un `terraform plan` réel (feature/frontend-
+custom-domain-phase2, 2026-07-11) : la valeur change (`--0000002` → `--0000003`) sur un simple
+`update in-place` déclenché par un tout autre drift, sans rapport avec le contenu applicatif.
+Le provider azurerm expose pourtant un attribut réellement stable et non lié à la révision :
+`azurerm_container_app.this.ingress[0].fqdn` — non utilisé aujourd'hui par le module.
+
+**Impact concret** : `envs/dev/outputs.tf` expose `frontend_url` (= `module.frontend.fqdn`) comme
+la valeur à utiliser pour le CNAME `jobfinder.vincentboutin.dev` chez OVH (voir commentaire
+`envs/dev/frontend.tf`). Si cette valeur dérive à chaque nouvelle révision — donc potentiellement
+à chaque déploiement d'image via `az containerapp update` en CI, pas seulement lors d'un `terraform
+apply` — le CNAME configuré manuellement chez OVH peut devenir silencieusement obsolète, cassant
+la résolution du domaine personnalisé et la validation du certificat managé (`domain_control_
+validation = "CNAME"`) sans qu'aucune alerte ne se déclenche. Même risque, moindre conséquence,
+sur `webapp_url`.
+
+**Solution cible** : changer `modules/container_app/outputs.tf` pour utiliser
+`azurerm_container_app.this.ingress[0].fqdn` au lieu de `latest_revision_fqdn`, et corriger le
+commentaire du module en conséquence. C'est un changement de module (`modules/`), qui doit passer
+par sa propre PR dédiée avant toute PR applicative qui en dépend, selon le git flow de CLAUDE.md.
+**Avant cette correction** : revérifier manuellement que le CNAME actuellement configuré chez OVH
+pour `jobfinder.vincentboutin.dev` correspond toujours à la valeur réelle de `frontend_url` après
+chaque apply touchant le Container App frontend.
+**Fichiers :** `JobFinder/Terraform/modules/container_app/outputs.tf`,
+`JobFinder/Terraform/envs/dev/outputs.tf` (commentaires à revoir une fois la source stabilisée).
