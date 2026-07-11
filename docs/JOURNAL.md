@@ -5203,3 +5203,99 @@ avant ce passage doc-writer.
   `container_app_environment_certificate_id` sur `azurerm_container_app_custom_domain` ne sont pas
   `ForceNew`, donc le commit de phase 2 sera un `update` en place, pas un `destroy`/`create` du
   domaine personnalisé.
+
+---
+
+## PR #196 — feat(infra): rattacher le certificat managé au domaine personnalisé (phase 2 du PR #195)
+
+**Date :** 2026-07-11
+**Branche :** `feature/frontend-custom-domain-phase2` → `dev`
+
+### Contexte
+
+Le PR #195 (mergé, appliqué avec succès en CI) a résolu l'interblocage d'ordre de création
+domaine/certificat en le découpant en deux phases : phase 1 enregistre le domaine personnalisé
+sans référence de certificat (`certificate_binding_type = "Disabled"`), avec un `depends_on`
+forçant le certificat managé à se créer après. Confirmé après coup via `az containerapp env
+certificate list` / `az containerapp hostname list` (lecture seule) : certificat
+`ProvisioningState: Succeeded`, hostname enregistré avec `BindingType: Disabled`. Cette PR est la
+phase 2, annoncée mais volontairement reportée par le PR #195 : rattacher effectivement le
+certificat au domaine.
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/envs/dev/frontend.tf`** — `azurerm_container_app_custom_domain.frontend` :
+  `certificate_binding_type` passé de `"Disabled"` à `"SniEnabled"`. Deux tentatives incorrectes
+  avant la version finale, chacune interceptée par `reviewer-infra` avant tout `terraform apply`
+  réel :
+  - **1ère tentative** : `container_app_environment_certificate_id =
+    azurerm_container_app_environment_managed_certificate.frontend.id`. Attribut incorrect — il
+    attend un certificat *bring-your-own* uploadé (`azurerm_container_app_environment_certificate`,
+    chemin ARM `.../certificates/...`), pas un certificat managé (chemin ARM
+    `.../managedCertificates/...`). C'est précisément l'attribut que le PR #195 annonçait vouloir
+    réintroduire en phase 2 — le raisonnement de ce PR précédent reposait donc lui-même sur le
+    mauvais attribut. Erreur détectée par un `terraform plan` réel (échec dur de parsing d'ID ARM),
+    pas par simple lecture du schéma.
+  - Cette tentative nécessitait aussi de retirer le `depends_on =
+    [azurerm_container_app_custom_domain.frontend]` posé en phase 1 sur le certificat managé —
+    le garder tout en ajoutant cette référence d'attribut aurait créé un vrai cycle de dépendance
+    (le domaine dépend du certificat via l'attribut, le certificat dépend du domaine via
+    `depends_on`).
+  - **Version finale correcte** : aucune référence de certificat sur le domaine personnalisé —
+    seulement `certificate_binding_type = "SniEnabled"`.
+    `container_app_environment_managed_certificate_id` (le champ qui référencerait un certificat
+    managé) est en lecture seule (Computed) côté schéma provider — Azure le résout lui-même en
+    faisant correspondre le `subject_name` du certificat managé à ce hostname. Confirmé par un
+    `terraform plan` réel : plan propre, et `azurerm_container_app_environment_managed_certificate.frontend`
+    affiche zéro changement planifié (le certificat `Succeeded` existant n'est pas touché).
+  - Commentaires WHY au-dessus de la ressource mis à jour en conséquence (pourquoi aucune référence
+    de certificat n'est nécessaire, pourquoi `container_app_environment_certificate_id` serait le
+    mauvais choix).
+- **`docs/BACKLOG.md`** — entrée `[urgent]` ajoutée : `modules/container_app/outputs.tf` calcule
+  l'output `fqdn` depuis `azurerm_container_app.this.latest_revision_fqdn`, avec un commentaire du
+  module affirmant que c'est « stable in Single revision mode ». Le `terraform plan` réel de cette
+  PR a prouvé le contraire — la valeur a changé (`--0000002` → `--0000003`) sur un `update in-place`
+  déclenché par un drift totalement indépendant (retrait de `workload_profile_name`, pré-existant).
+  Impact concret : le CNAME configuré manuellement chez OVH pour `jobfinder.vincentboutin.dev`
+  pointe sur une copie figée d'une valeur passée de `frontend_url`, qui peut donc devenir
+  silencieusement obsolète à tout déploiement futur. Correction cible documentée
+  (`ingress[0].fqdn` au lieu de `latest_revision_fqdn`), explicitement hors scope de cette PR — un
+  changement de `modules/` doit passer par sa propre PR dédiée avant toute PR applicative qui en
+  dépend, selon le git flow de CLAUDE.md.
+
+**Vérification :** `terraform fmt -check` et `terraform validate` OK sur `envs/dev`. Cette fois,
+`terraform plan` a pu être exécuté réellement en local (lecture seule, avec un `-var
+alert_email=...` de contournement puisque le `.tfvars` local est gitignored) — plan propre,
+confirmé qu'aucune ressource non liée n'est recréée par effet de cascade :
+`module.frontend.azurerm_container_app.this` et `module.webapp.azurerm_container_app.this`
+n'affichent que le drift pré-existant sans rapport (`workload_profile_name`), pas de replacement
+déclenché par ce changement. `reviewer-infra` a revu la diff finale (3ème version, correcte) de
+`frontend.tf` et retourné APPROUVÉ, avec une remarque non bloquante déjà corrigée avant ce passage
+doc-writer (le commentaire affirmait à tort ce que le schéma statique du provider peut démontrer
+sur `ForceNew` — reformulé pour ne décrire que le comportement observé du plan réel, pas une
+affirmation invérifiable sur le fonctionnement interne du provider).
+
+### Décisions techniques
+
+- **Aucune référence de certificat sur le domaine personnalisé, plutôt que réintroduire l'attribut
+  annoncé par le PR #195** : le PR #195 avait anticipé que la phase 2 réintroduirait
+  `container_app_environment_certificate_id` pointant sur le certificat managé — un attribut qui,
+  vérifié cette fois par un `terraform plan` réel et non par simple lecture du schéma, se révèle
+  être le mauvais champ (bring-your-own vs managé). Le rattachement réel se fait uniquement via
+  `certificate_binding_type = "SniEnabled"` ; Azure résout la correspondance de certificat de façon
+  interne, sans qu'aucun attribut Terraform explicite ne soit nécessaire ou possible côté domaine.
+- **`-/+ destroy and then create replacement` accepté malgré la prédiction contraire du PR #195** :
+  le PR #195 concluait, sur la seule base de `terraform providers schema -json` (aucun attribut
+  marqué `ForceNew`), que la phase 2 serait une mise à jour en place. Le `terraform plan` réel de
+  cette PR contredit cette prédiction : la transition `"Disabled"` → `"SniEnabled"` déclenche un
+  remplacement du domaine personnalisé, un comportement provider-side non visible dans le schéma
+  statique. Accepté tel quel pour dev — pas de SLA, miroir prod reporté à v1.0.0 selon CLAUDE.md —
+  et la fenêtre de dissociation du domaine pendant l'apply est brève et isolée à cette seule
+  ressource (pas de cascade vers les Container Apps frontend/webapp, confirmé par le plan).
+- **Anomalie `fqdn` instable versée au backlog plutôt que corrigée dans cette PR** : la correction
+  touche `modules/container_app/`, un module partagé, alors que cette PR ne touche que
+  `envs/dev/frontend.tf`. Mélanger une correction de module dans une PR applicative violerait la
+  règle du git flow de CLAUDE.md (les changements de `modules/` accompagnant une feature applicative
+  passent par une PR dédiée d'abord). Marquée `[urgent]` plutôt que `[optional]` parce que le risque
+  concret (CNAME OVH périmé silencieusement) existe dès le prochain déploiement, pas seulement en
+  théorie.
