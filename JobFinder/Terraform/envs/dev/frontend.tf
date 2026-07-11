@@ -29,3 +29,35 @@ module "frontend" {
   project           = var.project
   owner             = var.owner
 }
+
+# ==============================================================================
+# Frontend — Custom domain binding
+# ==============================================================================
+# Requires the TXT (asuid.<subdomain>, value = the container_app_environment_
+# custom_domain_verification_id output) and CNAME (<subdomain> -> frontend_url
+# output) records to already be live at the DNS registrar (OVH, managed outside
+# this repo) before this applies successfully -- domain_control_validation =
+# "CNAME" means Azure issues the managed certificate by checking that the CNAME
+# already resolves to this Container App, so DNS propagation must complete first.
+# If this apply fails on a fresh domain, it's almost always DNS not propagated
+# yet -- confirm with `nslookup`/`dig` and re-run rather than changing this code.
+
+resource "azurerm_container_app_environment_managed_certificate" "frontend" {
+  name                         = "cert-${var.project}-${var.env}-${var.location_short}-frontend"
+  container_app_environment_id = module.container_app_environment.id
+  subject_name                 = var.frontend_custom_domain
+  domain_control_validation    = "CNAME"
+
+  tags = {
+    environment = var.env
+    project     = var.project
+    owner       = var.owner
+  }
+}
+
+resource "azurerm_container_app_custom_domain" "frontend" {
+  name                                     = var.frontend_custom_domain
+  container_app_id                         = module.frontend.id
+  container_app_environment_certificate_id = azurerm_container_app_environment_managed_certificate.frontend.id
+  certificate_binding_type                 = "SniEnabled"
+}
