@@ -13,6 +13,16 @@ output "webapp_url" {
   value       = module.webapp.fqdn
 }
 
+output "frontend_url" {
+  description = "Public URL of the Next.js frontend Container App (default *.azurecontainerapps.io FQDN, before custom domain binding)."
+  value       = module.frontend.fqdn
+}
+
+output "container_app_environment_custom_domain_verification_id" {
+  description = "Verification ID to publish as the asuid.<subdomain> TXT record at the DNS registrar before binding a custom domain to the frontend Container App."
+  value       = module.container_app_environment.custom_domain_verification_id
+}
+
 output "jumpbox_private_ip" {
   description = "Private IP of the jumpbox VM (connect via Azure Bastion)."
   value       = module.jumpbox.private_ip
