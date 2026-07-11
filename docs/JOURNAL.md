@@ -5033,3 +5033,64 @@ Vincent a remarqué que le reviewer CI (`.github/workflows/reviewerAgent.yml`) e
 
 - **Chargement des skills filtré par fichiers touchés, pas systématique** : charger les 4 skills sur chaque PR aurait été plus simple mais aurait gonflé inutilement le prompt (et le coût) des PR qui ne touchent qu'une seule catégorie — la plupart des PR de ce projet respectent déjà la règle « jamais mélanger plateforme et appli » de CLAUDE.md, donc une PR ne touche généralement qu'une ou deux catégories.
 - **`conventions-sql` déclenché aussi par `models.py`, pas seulement par les migrations** : `shared/models.py` porte les conventions SQLAlchemy (clés UUID, nommage des contraintes) même hors contexte de migration Alembic.
+
+---
+
+## PR #193 — feat(infra): rattacher le domaine personnalisé et le certificat managé au frontend
+
+**Date :** 2026-07-11
+**Branche :** `feature/frontend-custom-domain` → `dev`
+
+### Contexte
+
+Second des deux PR du déploiement du frontend Next.js sur `jobfinder.vincentboutin.dev`. Le PR #191
+(déjà mergé) a déployé le frontend comme Container App sur son FQDN par défaut
+`*.azurecontainerapps.io`, et exposé deux outputs Terraform (`frontend_url`,
+`container_app_environment_custom_domain_verification_id`) nécessaires à Vincent pour créer les
+enregistrements DNS chez OVH. Entre les deux PR, Vincent a créé ces enregistrements : un `CNAME` sur
+`jobfinder.vincentboutin.dev` pointant vers le FQDN par défaut de la Container App, et un `TXT` sur
+`asuid.jobfinder.vincentboutin.dev` portant l'ID de vérification de l'environnement. Les deux ont été
+confirmés propagés (`Resolve-DnsName` sur les deux types d'enregistrement, valeurs identiques) avant
+l'écriture des changements Terraform de ce PR.
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/envs/dev/frontend.tf`** : ajout de deux ressources après le bloc
+  `module "frontend"` existant.
+  1. `azurerm_container_app_environment_managed_certificate.frontend` — certificat TLS managé
+     gratuit pour `var.frontend_custom_domain` (`subject_name`), `domain_control_validation =
+     "CNAME"` (Azure valide en vérifiant que le CNAME déjà créé chez OVH résout vers l'app, plutôt
+     que par le challenge `HTTP` par défaut) — nécessite donc que le CNAME/TXT décrits ci-dessus
+     soient déjà propagés avant l'apply. Tags environment/project/owner.
+  2. `azurerm_container_app_custom_domain.frontend` — rattache `var.frontend_custom_domain` à
+     `module.frontend.id`, référence le certificat managé via
+     `container_app_environment_certificate_id`, `certificate_binding_type = "SniEnabled"`.
+  - Les deux types de ressource et chaque nom d'attribut ont été vérifiés contre le schéma réel du
+    provider azurerm 4.72.0 installé (`terraform providers schema -json`) plutôt que devinés depuis
+    les données d'entraînement — la syntaxe de ces ressources a changé selon les versions du
+    provider azurerm, piège déjà documenté par le projet.
+- Le commentaire WHY déjà présent en tête de section (prérequis DNS, pourquoi `CNAME` et non `HTTP`)
+  a été relu contre le diff final : exact, non redondant avec le code — laissé inchangé.
+
+**Vérification :** `terraform fmt -check` et `terraform validate` sur `envs/dev` — OK en local.
+`terraform plan` non exécuté localement (nécessite le backend Azure réel) — s'exécutera en CI via
+`terraformPlan.yml` à l'ouverture du PR. Aucun `terraform apply` local (CI-only, convention du
+projet). `reviewer-infra` a revu ce diff exact et retourné APPROUVÉ, zéro remarque non-bloquante.
+
+### Décisions techniques
+
+- **`domain_control_validation = "CNAME"` plutôt que le défaut `HTTP`** : le CNAME
+  `jobfinder.vincentboutin.dev` → FQDN de la Container App existe déjà et est propagé (prérequis de
+  ce PR) — Azure peut donc valider la propriété du domaine en constatant que ce CNAME résout déjà
+  vers l'app, sans challenge HTTP additionnel à orchestrer séparément.
+- **`container_app_environment_certificate_id` malgré un certificat « managed »** : c'est le nom
+  d'attribut documenté par le schéma du provider azurerm pour rattacher un certificat *managé* (créé
+  et renouvelé par Azure) à un `azurerm_container_app_custom_domain`.
+  `container_app_environment_managed_certificate_id` existe bien comme nom mais désigne un attribut
+  calculé (read-only), pas un argument qu'on peut fournir en entrée — confusion facile vu la
+  proximité des deux noms, d'où l'intérêt de vérifier le schéma plutôt que de deviner.
+- **Vérification par schéma provider plutôt que confiance dans la syntaxe connue** : la syntaxe
+  Terraform de ces deux types de ressource a changé entre versions successives d'azurerm (avertissement
+  déjà présent dans les conventions du projet) — écrire ces ressources sans vérifier le schéma réel de
+  la version 4.72.0 installée risquait un échec silencieux ou tardif (`validate` OK mais `plan`/`apply`
+  en échec faute d'attribut reconnu).
