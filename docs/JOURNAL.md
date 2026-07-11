@@ -4954,11 +4954,21 @@ action manuelle de Vincent, hors périmètre de Claude Code.
   `az containerapp update --name app-jf-dev-frc-frontend ...` dans l'étape finale (renommée
   « Update Container App and Container App Job images », puisqu'elle met désormais aussi à
   jour une Container App qui n'est pas un Job).
+- **`JobFinder/frontend/Dockerfile`** : fix `RUN npm ci` → `RUN mkdir -p public && npm ci`.
+  Bug préexistant démasqué en vérifiant localement le build de ce Dockerfile (jamais buildé
+  avant ce PR, `buildAgents.yml` n'incluait pas le frontend) : le postinstall de
+  `pdfjs-dist` (`cp node_modules/pdfjs-dist/build/pdf.worker.min.js public/pdf.worker.min.js`)
+  échouait car `public/` n'existait pas encore dans le contexte de build à ce stade — seuls
+  `package.json`/`package-lock.json` avaient été `COPY`'s. Commentaire ajouté dans le Dockerfile
+  pour expliquer pourquoi le répertoire doit être créé avant `npm ci`.
 
 **Vérification :** `terraform fmt -check` et `terraform validate` sur `envs/dev` — OK en local.
 `terraform plan` non exécuté localement (nécessite le backend Azure réel) — s'exécutera en CI
 via `terraformPlan.yml` à l'ouverture du PR. Aucun `terraform apply` local (CI-only, convention
-du projet).
+du projet). `docker build` du `Dockerfile` frontend exécuté localement avec des build-args
+`NEXT_PUBLIC_*` factices : succès après le fix `mkdir -p public`. `docker run -p 3000:3000` sur
+l'image obtenue puis `curl http://localhost:3000/` → HTTP 200. Conteneur et image supprimés
+(`docker stop`, `docker rmi`) après vérification.
 
 ### Décisions techniques
 
@@ -4974,3 +4984,8 @@ du projet).
   le rattachement du domaine personnalisé (ressource de certificat managé + binding) attend une
   propagation DNS externe hors du contrôle de Claude Code, d'où le second PR
   `feature/frontend-custom-domain`, ouvert seulement après confirmation de Vincent.
+- **Fix du bug `npm ci`/`public/` corrigé dans ce PR plutôt que différé** : bug préexistant, sans
+  lien direct avec l'objectif du PR (déploiement Container App), mais bloquant pour la propre
+  étape de vérification de ce PR — impossible de valider que l'image se build et démarre
+  correctement sans corriger d'abord ce point. Déployer une Container App dont l'image ne build
+  même pas n'a aucun sens ; le fix reste donc dans le périmètre.
