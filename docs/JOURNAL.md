@@ -4879,3 +4879,29 @@ migrations 027/028) et faux positif attendu (`test_bus.py`, nom de queue arbitra
 - **`alembic upgrade head` / `downgrade -1` et le test manuel jumpbox non exécutés dans cette
   session** : pas de connectivité à la base de dev depuis cet environnement — à vérifier sur le
   jumpbox avant merge (indiqué dans la description de la PR).
+
+---
+
+## PR #190 — fix(db): sérialiser `run_migrations()` avec un advisory lock Postgres
+
+**Date :** 2026-07-11
+**Branche :** `fix/alembic-migration-lock` → `dev`
+
+### Contexte
+
+Repéré par Vincent en marge de la vérification jumpbox de la PR #188 (`alembic upgrade head`/`downgrade -1`) : `shared.db.run_migrations()` est appelée au démarrage par sept processus indépendants (`agents/offer_fetching`, `agents/matching`, `agents/match_analysis`, `agents/cv_analysis`, `agents/cleanup`, `agents/offer_distillation`, `agents/webapp`), chacun une instance de Container App Job ou le webapp, sans aucune sérialisation. Si deux instances démarrent dans la même fenêtre (deux triggers timer qui se chevauchent, un redéploiement qui recouvre un job déjà en cours), les deux peuvent lire la même révision Alembic courante avant que l'une des deux ait fini d'écrire la nouvelle — collision réelle possible entre deux `ALTER TABLE` concurrents sur la même table.
+
+### Ce qui a été fait
+
+- **`shared/db.py::run_migrations()`** : l'appel à `command.upgrade(cfg, "head")` est désormais encadré par un verrou consultatif Postgres session-level (`pg_advisory_lock`/`pg_advisory_unlock`, clé fixe `ALEMBIC_MIGRATION_LOCK_ID`), acquis sur une connexion dédiée (`isolation_level="AUTOCOMMIT"`, puisque ce type de verrou n'est pas lié à une transaction). Le deuxième appelant bloque jusqu'à ce que le premier libère le verrou ; à ce moment la migration est déjà appliquée, donc son propre `alembic upgrade head` est un no-op.
+- Trois blocs `try/except` distincts (acquisition du verrou, `command.upgrade()`, libération du verrou en `finally`), chacun avec son propre event `structlog` (`alembic_migration_lock_failed`, `alembic_migrations_failed`, `alembic_migration_unlock_failed`) — pour ne jamais logguer un échec de migration comme un échec de verrou ou inversement.
+- **`tests/test_db.py`** (nouveau) : trois tests — ordre verrou → upgrade → déverrouillage vérifié via un mock parent partagé (`attach_mock`, pour prouver l'ordre réel des appels plutôt que juste leur nombre) ; déverrouillage systématique même si l'upgrade échoue ; upgrade jamais appelée si l'acquisition du verrou échoue.
+
+**Vérification :** `pytest` 247/247 (244 existants + 3 nouveaux). Pas de fichier `.tf` touché.
+
+### Décisions techniques
+
+- **Verrou session-level (`pg_advisory_lock`) plutôt que transactionnel (`pg_advisory_xact_lock`)** : `command.upgrade()` ouvre sa propre connexion (via `migrations/env.py::run_migrations_online()`, qui appelle le même `get_engine()`) — le verrou doit donc survivre indépendamment de la transaction de cette deuxième connexion et être libéré explicitement, pas au commit.
+- **Couplage de pool documenté, pas éliminé** : la connexion qui tient le verrou et celle qu'utilise `command.upgrade()` viennent du même engine singleton (`@lru_cache`) — deux connexions du pool sont donc retenues simultanément le temps de la migration. Sans risque avec la configuration actuelle (`QueuePool` par défaut, `pool_size=5`), mais un commentaire explicite a été ajouté dans le code pour que `pool_size` ne soit jamais réduit à 1 sans revoir ce point.
+- **`get_session()` non touchée** : son `except Exception:` nu (préexistant, même pattern que `shared/bus.py:124`) a été signalé par `reviewer-backend` comme une violation littérale de la convention Python, mais volontairement laissée en l'état — narrowing vers `SQLAlchemyError` casserait le rollback pour toute exception métier non-DB levée par un appelant dans son bloc `with`, une régression réelle et hors périmètre de ce fix.
+- **4 passes de `reviewer-backend`** avant `APPROUVÉ` sans remarque : ordre constante/logger, `except Exception` trop large autour de `command.upgrade()`, double log avec un nom d'event trompeur en cas d'échec de migration (le `try/except SQLAlchemyError` englobait initialement tout le bloc), puis un test qui ne prouvait pas réellement l'ordre d'appel (deux mocks indépendants) — corrigés un à un. Dernière remarque non-bloquante (type hints manquants sur `tests/test_db.py`) également corrigée avant le verdict final.
