@@ -883,3 +883,67 @@ pour `jobfinder.vincentboutin.dev` correspond toujours à la valeur réelle de `
 chaque apply touchant le Container App frontend.
 **Fichiers :** `JobFinder/Terraform/modules/container_app/outputs.tf`,
 `JobFinder/Terraform/envs/dev/outputs.tf` (commentaires à revoir une fois la source stabilisée).
+
+### [urgent] Un `terraform init -upgrade` remplacerait la VM jumpbox — drift confirmé, non lié au frontend
+Découvert lors de `fix/frontend-custom-domain-certificate-azapi` (PR #198) via un `terraform plan`
+réel exécuté en local contre le state distant : un `terraform init -upgrade` qui ferait passer le
+provider `azurerm` de `4.72.0` (version actuellement pincée dans `.terraform.lock.hcl`) à `4.80.0`
+déclenche un remplacement complet (`-/+ destroy and then create replacement`) de `module.jumpbox`.
+Confirmé indépendamment de tout changement applicatif de cette PR : le même comportement apparaît
+sur un checkout `origin/dev` propre et non modifié, testé via un worktree Git jetable dédié.
+
+**Impact concret** : n'importe quelle future PR qui exécuterait `terraform init -upgrade` (ou dont
+le lock file dériverait de `azurerm` `4.72.0` vers une version plus récente, même sans intention
+explicite de toucher au jumpbox) recréerait la VM jumpbox — perte de tout état local non sauvegardé
+dessus, changement d'IP/empreinte, interruption du seul accès de gestion au VNet dev.
+
+**Solution cible** : identifier précisément quel(s) attribut(s) du provider `azurerm` 4.80.0
+déclenchent ce replacement pour `azurerm_linux_virtual_machine`/ressources associées du module
+jumpbox (probablement un changement de defaulting ou un attribut devenu `ForceNew` entre 4.72.0 et
+4.80.0 — à confirmer par `terraform providers schema -json` sur les deux versions), puis soit
+absorber le changement proprement (import/state move si possible), soit documenter explicitement
+pourquoi rester pincé à `4.72.0` plus longtemps. Nécessite son propre `terraform plan` réel avec
+`-var alert_email=...` en contournement du `.tfvars` gitignored, comme fait pour cette PR et les
+PR #195/#196/#197.
+
+**Fichiers :** `JobFinder/Terraform/envs/dev/.terraform.lock.hcl`,
+`JobFinder/Terraform/envs/dev/jumpbox.tf`, `JobFinder/Terraform/modules/jumpbox/` (module non
+exploré en détail — hors scope du PR #198, qui n'a fait que confirmer le drift et revenir en
+arrière sur le lock file).
+
+### `workload_profile_name: "Consumption" → null` — drift visible sur chaque plan des Container Apps
+Repéré dans le `terraform plan` réel de PR #198 (`fix/frontend-custom-domain-certificate-azapi`) :
+`module.frontend.azurerm_container_app.this` et `module.webapp.azurerm_container_app.this` montrent
+tous deux un `update in-place` sur `workload_profile_name` (`"Consumption"` en state réel → `null` en
+config), à chaque plan, sans lien avec cette PR. `workload_profile_name` n'est référencé nulle part
+dans `modules/container_app/` — c'est un attribut jamais géré par le module ; Azure le renseigne
+côté serveur (probablement la valeur par défaut de l'environnement Consumption) et le state l'a
+capturé lors d'un refresh antérieur, alors que la config, qui ne le fixe jamais, force Terraform à
+vouloir le remettre à `null` à chaque apply.
+
+**Impact concret** : bruit dans tous les plans futurs touchant ces deux Container Apps (`frontend`,
+`webapp`), rendant plus difficile de repérer un vrai changement dans la revue d'un `terraform plan`.
+Pas de risque de destruction/remplacement identifié — c'est un `update in-place`, pas un `-/+`.
+
+**Solution cible** : ajouter `lifecycle { ignore_changes = [workload_profile_name] }` dans
+`modules/container_app/main.tf` (ou fixer explicitement `workload_profile_name` si le module veut
+un jour le piloter). C'est un changement de module (`modules/`), qui doit passer par sa propre PR
+dédiée avant toute PR applicative qui en dépend, selon le git flow de CLAUDE.md — pas fait dans
+PR #198 pour cette raison.
+
+**Fichiers :** `JobFinder/Terraform/modules/container_app/main.tf`.
+
+### Version d'API ARM figée en dur dans `azapi_update_resource` (frontend custom domain binding)
+`envs/dev/frontend.tf` (`azapi_update_resource.frontend_custom_domain_binding`, PR #198) référence
+`Microsoft.App/containerApps@2024-03-01` en dur. Pas un problème aujourd'hui (version GA stable,
+confirmée supporter `ingress.customDomains.bindingType`/`certificateId`), mais contrairement à
+`azurerm` cette ressource n'a pas de mécanisme de contrainte de version (`~> `) — une évolution de
+l'API Container Apps qui déprécierait ou changerait la forme de `ingress.customDomains` sur cette
+version précise ne serait détectée qu'à l'apply, sans avertissement `terraform plan`/`validate` au
+préalable.
+
+**Solution cible** : revoir périodiquement (ou lors d'un incident sur ce binding) si une version
+d'API plus récente change la forme attendue de `body`, et envisager un commentaire de revue
+programmée plutôt qu'une automatisation — pas de mécanisme de lock de version côté azapi à ce jour.
+
+**Fichiers :** `JobFinder/Terraform/envs/dev/frontend.tf`.

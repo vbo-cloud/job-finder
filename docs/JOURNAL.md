@@ -5354,3 +5354,83 @@ ce diff exact et retourné APPROUVÉ.
   dépend indirectement de la stabilité de `frontend_url` pour la configuration DNS externe (CNAME
   OVH) — cette correction de module doit donc être mergée et son effet vérifié avant toute future PR
   qui retoucherait ce binding.
+
+---
+
+## PR #198 — fix(infra): bind managed certificate via azapi, azurerm cannot do it
+
+**Date :** 2026-07-11
+**Branche :** `fix/frontend-custom-domain-certificate-azapi` → `dev`
+
+### Contexte
+
+Le PR #196 avait appliqué avec succès, selon Terraform, le rattachement du certificat managé au
+domaine personnalisé du frontend (`certificate_binding_type = "SniEnabled"`). En réalité,
+`jobfinder.vincentboutin.dev` restait inaccessible : `az containerapp hostname list` (lecture
+seule) montrait `bindingType: Disabled` côté état réel Azure, malgré un state Terraform affichant
+`SniEnabled`.
+
+Root cause confirmée cette fois en lisant directement le code Go du provider azurerm (pas
+seulement sa documentation) : l'argument `container_app_environment_certificate_id` de
+`azurerm_container_app_custom_domain` porte un validateur côté client qui n'accepte que les ID ARM
+de certificats *bring-your-own* (`.../certificates/...`) et rejette explicitement les ID de
+certificats managés Azure (`.../managedCertificates/...`). C'est un manque amont confirmé et
+toujours ouvert (hashicorp/terraform-provider-azurerm issues #25788 et #27362) — la documentation
+officielle du provider recommande elle-même comme contournement un `lifecycle { ignore_changes =
+[...] }` combiné à un rattachement manuel hors bande, ce que le workflow CI Terraform-only de ce
+projet ne permet pas.
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/envs/dev/frontend.tf`** :
+  - `azurerm_container_app_custom_domain.frontend` figé au seul état qu'il peut réellement
+    atteindre (`certificate_binding_type = "Disabled"`, aucune référence de certificat) via
+    `lifecycle.ignore_changes` sur `certificate_binding_type` et
+    `container_app_environment_certificate_id` — Terraform arrête ainsi d'essayer, et d'échouer, à
+    réconcilier un état hors de portée de cette ressource.
+  - Nouvelle ressource `azapi_update_resource.frontend_custom_domain_binding` : PATCH direct de
+    `Microsoft.App/containerApps@2024-03-01`, `properties.configuration.ingress.customDomains`,
+    via l'API ARM — le même appel que fait `az containerapp hostname bind` en interne, qui accepte
+    nativement les ID de certificat managé (contrairement au validateur côté client d'azurerm).
+    `depends_on` explicite sur le domaine personnalisé et le certificat managé, nécessaire car
+    aucun des deux n'est référencé par attribut à l'intérieur de `body` (pas d'arête de graphe
+    implicite sinon).
+- **`JobFinder/Terraform/envs/dev/main.tf`** : provider `azapi` (`azure/azapi ~> 2.0`) ajouté à
+  `required_providers`, authentifié via les mêmes variables d'environnement `ARM_*` (OIDC) déjà
+  injectées en CI pour azurerm — aucun changement de workflow CI nécessaire.
+- **`.terraform.lock.hcl`** : entrée `azure/azapi` ajoutée ; `azurerm` volontairement laissé pincé
+  à `4.72.0` (voir Décisions techniques).
+
+**Vérification :** `terraform fmt -check` et `terraform validate` OK sur `envs/dev`. Un
+`terraform plan` réel a été exécuté en local contre le state distant (pas seulement une inspection
+de schéma/documentation) : diff nul sur la ressource `azurerm_container_app_custom_domain`
+existante (aucune tentative de replacement/destroy déclenchée par l'ajout du `lifecycle
+ignore_changes`), et création propre de la nouvelle ressource `azapi_update_resource` sans effet de
+bord sur les autres ressources du module frontend.
+
+### Décisions techniques
+
+- **`azapi_update_resource` en complément d'azurerm plutôt qu'un contournement hors Terraform** :
+  le contournement documenté en amont (`ignore_changes` + rattachement manuel via le portail ou
+  `az containerapp hostname bind`) est incompatible avec le workflow CI Terraform-only de ce
+  projet (`terraformApply.yml` applique sans étape manuelle possible). Le provider `azapi` permet
+  de rester dans Terraform en patchant directement l'API ARM sous-jacente, là où azurerm a un vrai
+  trou de couverture confirmé en amont (issues encore ouvertes), sans introduire d'étape manuelle
+  ni de script externe au pipeline.
+- **Risque résiduel assumé, pas éliminé** : `azapi_update_resource` fait un merge-patch au niveau
+  Terraform (seuls les chemins listés dans `body` sont touchés), mais le comportement de fusion de
+  l'objet `ingress` complet côté API ARM elle-même n'est ni contrôlé ni garanti par le provider
+  Terraform — rien ne prouve qu'un futur apply ne réinitialisera pas silencieusement
+  `target_port`/`external`/`transport`/`traffic`. Un `terraform plan` propre ne peut pas détecter ce
+  risque-là (il porte sur le state Terraform, pas sur un comportement serveur ARM non modélisé).
+  Ce projet a déjà été pris en défaut une fois (PR #196) par une hypothèse non vérifiée sur le
+  comportement de cette même API — la vérification post-apply (`az containerapp ingress show`) reste
+  donc requise après le premier vrai apply de cette ressource, documentée en commentaire dans
+  `frontend.tf` plutôt que dans ce journal seul.
+- **Drift `azurerm` 4.72.0 → 4.80.0 découvert, non corrigé, laissé hors scope** : le même
+  `terraform plan` réel exécuté pour valider cette PR a révélé qu'un `terraform init -upgrade`
+  (qui aurait fait passer azurerm de 4.72.0 à 4.80.0) déclencherait un remplacement complet de la
+  VM jumpbox (`module.jumpbox`) — confirmé même sur un checkout `origin/dev` propre et non modifié,
+  via un worktree Git jetable dédié à ce test. Ce drift est totalement indépendant du sujet de
+  cette PR (certificat/domaine du frontend) ; le lock file a été délibérément laissé inchangé pour
+  azurerm (pincé à 4.72.0), seule l'entrée `azapi` ajoutée. Voir `docs/BACKLOG.md`.
