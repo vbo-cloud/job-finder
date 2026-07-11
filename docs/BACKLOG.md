@@ -45,6 +45,14 @@ job-jf-dev-frc-cv-analysis (queue: cv-analysis)  ← NOUVEAU
 
 ### [M4 — PR 2] Infrastructure frontend — Container App Next.js + CI/CD
 
+> ✅ Container App + CI/CD implémentés par PR #191 (`feature/frontend-web-deployment`) — voir
+> `docs/JOURNAL.md`. Divergence par rapport au plan initial ci-dessous : les `NEXT_PUBLIC_*` sont
+> passées en build-args Docker, pas en `env_vars` runtime du Container App (Next.js les inline au
+> build, pas à l'exécution — voir décision technique dans le journal de PR #191). Le build
+> multi-stage et `images.remotePatterns` restaient hors périmètre de PR #191 et sont détaillés
+> dans la section « Déploiement frontend Container App (PR #191) — suites identifiées en review »
+> plus bas.
+
 **Fichiers :** `envs/dev/frontend.tf`, `modules/container_app/outputs.tf`, `.github/workflows/buildAgents.yml`
 
 - `envs/dev/frontend.tf` : déploiement du Container App frontend via `module.container_app` — image `agents/frontend:latest`, port 3000, scale-to-zero, variables d'environnement :
@@ -53,7 +61,6 @@ job-jf-dev-frc-cv-analysis (queue: cv-analysis)  ← NOUVEAU
   - `NEXT_PUBLIC_ENTRA_CLIENT_ID` : valeur de `data.azurerm_key_vault_secret.entra_client_id`
 - `buildAgents.yml` : ajouter step build/push `JobFinder/frontend` → `agents/frontend:latest` + `az containerapp update` pour le frontend
 - `outputs.tf` : exposer `frontend_url` (FQDN public du Container App frontend)
-- **Dockerfile frontend en build multi-stage** : passer du build mono-stage actuel (PR #88) à `builder` → `runner` (sortie `.next/standalone`, dépendances dev élaguées) pour réduire fortement la taille de l'image. Nécessite `output: "standalone"` dans `next.config.mjs`. La taille d'image ne compte qu'au déploiement Container Apps, d'où le report dans cette PR d'infra.
 - `docs/JOURNAL.md` mis à jour
 - **[M4 — PR 2, au déploiement]** Configurer `images.remotePatterns` dans `next.config.mjs` avec les domaines des images externes utilisées (avatars utilisateur, logos d'entreprises dans les offres, etc.). Actuellement `remotePatterns: []` — toute image distante via `next/image` sera bloquée jusqu'à ce que ce champ soit renseigné.
 
@@ -830,3 +837,21 @@ Python, alors qu'il ne fait que réaffirmer un état déjà à jour. Scinder en 
 conditions `if` sur les chemins modifiés (via `dorny/paths-filter` ou équivalent) rendrait
 l'intention explicite et éviterait cette étape silencieusement redondante. Fichier concerné :
 `.github/workflows/buildAgents.yml`.
+
+### [recommandé] `Dockerfile` frontend en build multi-stage
+Déjà identifié dans le backlog M4 avant l'implémentation (voir plus haut, section [M4 — PR 2])
+mais reporté hors périmètre de PR #191. Le Dockerfile reste mono-stage : `node_modules` et le
+cache npm du toolchain de build (webpack, TypeScript, ESLint, tous les devDependencies) finissent
+dans l'image de production servie par `npm start`, alors que seul le résultat du build
+(`.next/`, `public/`, `node_modules` de production) est nécessaire à l'exécution. Impact double :
+taille d'image significativement plus grosse qu'un build multi-stage équivalent, et surface
+d'attaque élargie (tout le toolchain de build, ses dépendances transitives et versions
+potentiellement vulnérables restent présents et exécutables dans le conteneur de prod).
+
+Solution cible : deux stages — `builder` (installe toutes les dépendances, exécute
+`npm run build`) puis `runner` (repart de `node:20-alpine` propre, ne copie que
+`.next/standalone`, `.next/static` et `public/` depuis le stage `builder`). Nécessite
+`output: "standalone"` dans `next.config.mjs` (absent actuellement) pour que Next.js produise un
+bundle serveur autonome sans dépendre de `node_modules` complet. Pattern standard pour les images
+Next.js en production. Fichier concerné : `JobFinder/frontend/Dockerfile`
+(et `JobFinder/frontend/next.config.mjs` pour `output: "standalone"`).
