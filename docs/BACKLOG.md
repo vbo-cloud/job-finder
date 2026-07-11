@@ -910,3 +910,40 @@ PR #195/#196/#197.
 `JobFinder/Terraform/envs/dev/jumpbox.tf`, `JobFinder/Terraform/modules/jumpbox/` (module non
 exploré en détail — hors scope du PR #198, qui n'a fait que confirmer le drift et revenir en
 arrière sur le lock file).
+
+### `workload_profile_name: "Consumption" → null` — drift visible sur chaque plan des Container Apps
+Repéré dans le `terraform plan` réel de PR #198 (`fix/frontend-custom-domain-certificate-azapi`) :
+`module.frontend.azurerm_container_app.this` et `module.webapp.azurerm_container_app.this` montrent
+tous deux un `update in-place` sur `workload_profile_name` (`"Consumption"` en state réel → `null` en
+config), à chaque plan, sans lien avec cette PR. `workload_profile_name` n'est référencé nulle part
+dans `modules/container_app/` — c'est un attribut jamais géré par le module ; Azure le renseigne
+côté serveur (probablement la valeur par défaut de l'environnement Consumption) et le state l'a
+capturé lors d'un refresh antérieur, alors que la config, qui ne le fixe jamais, force Terraform à
+vouloir le remettre à `null` à chaque apply.
+
+**Impact concret** : bruit dans tous les plans futurs touchant ces deux Container Apps (`frontend`,
+`webapp`), rendant plus difficile de repérer un vrai changement dans la revue d'un `terraform plan`.
+Pas de risque de destruction/remplacement identifié — c'est un `update in-place`, pas un `-/+`.
+
+**Solution cible** : ajouter `lifecycle { ignore_changes = [workload_profile_name] }` dans
+`modules/container_app/main.tf` (ou fixer explicitement `workload_profile_name` si le module veut
+un jour le piloter). C'est un changement de module (`modules/`), qui doit passer par sa propre PR
+dédiée avant toute PR applicative qui en dépend, selon le git flow de CLAUDE.md — pas fait dans
+PR #198 pour cette raison.
+
+**Fichiers :** `JobFinder/Terraform/modules/container_app/main.tf`.
+
+### Version d'API ARM figée en dur dans `azapi_update_resource` (frontend custom domain binding)
+`envs/dev/frontend.tf` (`azapi_update_resource.frontend_custom_domain_binding`, PR #198) référence
+`Microsoft.App/containerApps@2024-03-01` en dur. Pas un problème aujourd'hui (version GA stable,
+confirmée supporter `ingress.customDomains.bindingType`/`certificateId`), mais contrairement à
+`azurerm` cette ressource n'a pas de mécanisme de contrainte de version (`~> `) — une évolution de
+l'API Container Apps qui déprécierait ou changerait la forme de `ingress.customDomains` sur cette
+version précise ne serait détectée qu'à l'apply, sans avertissement `terraform plan`/`validate` au
+préalable.
+
+**Solution cible** : revoir périodiquement (ou lors d'un incident sur ce binding) si une version
+d'API plus récente change la forme attendue de `body`, et envisager un commentaire de revue
+programmée plutôt qu'une automatisation — pas de mécanisme de lock de version côté azapi à ce jour.
+
+**Fichiers :** `JobFinder/Terraform/envs/dev/frontend.tf`.
