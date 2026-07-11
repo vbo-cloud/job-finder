@@ -797,3 +797,22 @@ mais lent à l'échelle (un backfill de plusieurs milliers d'offres, ex. reset c
 embeddings). Acceptable à la cardinalité actuelle (fetch quotidien de quelques centaines d'offres).
 À remplacer par une écriture en masse (`UPDATE ... FROM (VALUES ...)` ou
 `bulk_update_mappings`) avant tout run de backfill à grande échelle.
+
+---
+
+## Déploiement frontend Container App (feature/frontend-web-deployment, PR #191) — suites identifiées en review
+
+### [optional] Dédier une identité managée au frontend plutôt que réutiliser celle des Container App Jobs
+`envs/dev/frontend.tf` câble `identity_ids`/`registry_identity` sur `data.azurerm_user_assigned_identity.caj`
+(`id-jf-dev-frc-caj`), la même UAMI que les Container App Jobs et le webapp. Ça fonctionne
+aujourd'hui car la seule permission pertinente pour le frontend est le pull ACR, partagée par
+tous les conteneurs — mais le frontend n'appelle directement aucun service Azure (contrairement
+au webapp ou aux jobs), donc il hérite implicitement de toute permission future accordée à cette
+UAMI sans en avoir besoin. Un couplage silencieux : si `id-jf-dev-frc-caj` gagne un rôle
+supplémentaire pour un besoin backend, le frontend l'obtient aussi sans qu'aucune ligne de code
+ne le mentionne explicitement.
+
+**Solution cible :** provisionner une UAMI dédiée au frontend (pull ACR uniquement), ou a minima
+documenter explicitement le partage intentionnel si une identité dédiée est jugée disproportionnée
+pour un portfolio project — un commentaire WHY a été ajouté dans `frontend.tf` en attendant.
+**Fichier :** `envs/dev/frontend.tf` (et un nouveau module identité si une UAMI dédiée est retenue).

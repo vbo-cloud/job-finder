@@ -17,10 +17,15 @@ module "frontend" {
   memory              = "1Gi"
   min_replicas        = 0
   max_replicas        = 1
-  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server     = module.container_registry.login_server
-  registry_identity   = data.azurerm_user_assigned_identity.caj.id
-  environment         = var.env
-  project             = var.project
-  owner               = var.owner
+  # Reuses the Container App Jobs' shared identity purely for ACR pull (its only
+  # permission that's relevant here) rather than provisioning a dedicated identity.
+  # The frontend never calls Azure services directly, so it implicitly inherits
+  # whatever permissions id-jf-dev-frc-caj gains in the future even though it only
+  # needs this one. See BACKLOG.md ("dédier une identité au frontend").
+  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server   = module.container_registry.login_server
+  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  environment       = var.env
+  project           = var.project
+  owner             = var.owner
 }
