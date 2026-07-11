@@ -856,7 +856,7 @@ bundle serveur autonome sans dépendre de `node_modules` complet. Pattern standa
 Next.js en production. Fichier concerné : `JobFinder/frontend/Dockerfile`
 (et `JobFinder/frontend/next.config.mjs` pour `output: "standalone"`).
 
-### [urgent] `modules/container_app` — output `fqdn` instable, change à chaque nouvelle révision
+### [RÉSOLU — PR #197] `modules/container_app` — output `fqdn` instable, change à chaque nouvelle révision
 `modules/container_app/outputs.tf:6-10` calcule `fqdn` depuis
 `azurerm_container_app.this.latest_revision_fqdn`, avec un commentaire affirmant que c'est
 « stable in Single revision mode ». Faux, prouvé par un `terraform plan` réel (feature/frontend-
