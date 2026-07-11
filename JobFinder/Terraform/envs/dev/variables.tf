@@ -71,7 +71,7 @@ variable "admin_user_ids" {
 variable "frontend_custom_domain" {
   type        = string
   default     = "jobfinder.vincentboutin.dev"
-  description = "Custom domain for the frontend Container App. Not yet bound to a azurerm_container_app_custom_domain resource (pending DNS propagation, see BACKLOG.md) -- referenced now so CORS_ALLOWED_ORIGINS and the future custom domain binding share a single source of truth instead of duplicating the literal."
+  description = "Custom domain for the frontend Container App. Not yet bound to an azurerm_container_app_custom_domain resource -- that binding lands in a follow-up PR once DNS propagation is confirmed (see docs/JOURNAL.md, PR #191). Referenced now so CORS_ALLOWED_ORIGINS and that future binding share a single source of truth instead of duplicating the literal."
 
   validation {
     condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.frontend_custom_domain))

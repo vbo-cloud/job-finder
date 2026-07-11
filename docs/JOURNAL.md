@@ -4943,8 +4943,15 @@ action manuelle de Vincent, hors périmètre de Claude Code.
   après l'apply de ce PR pour que Vincent puisse créer les enregistrements TXT/CNAME chez OVH
   avant le PR de suivi.
 - **`envs/dev/webapp.tf`** : `CORS_ALLOWED_ORIGINS` étendu de `"http://localhost:3000"` à
-  `"http://localhost:3000,https://jobfinder.vincentboutin.dev"`. Suppression du commentaire
+  `"http://localhost:3000,https://${var.frontend_custom_domain}"`. Suppression du commentaire
   devenu obsolète qui pointait vers cette tâche précise.
+- **`envs/dev/variables.tf`** : ajout de `variable "frontend_custom_domain"` (type string,
+  default `"jobfinder.vincentboutin.dev"`, validation regex format hostname DNS) — remplace le
+  littéral précédemment codé en dur dans `CORS_ALLOWED_ORIGINS`. Nouvel
+  `output "frontend_custom_domain"` sur `envs/dev/outputs.tf` (echo de la variable), aux côtés de
+  `frontend_url` et `container_app_environment_custom_domain_verification_id` — les trois
+  ensemble donnent à Vincent tout ce qu'il faut pour construire les enregistrements TXT/CNAME
+  chez OVH via un seul `terraform output`.
 - **`.github/workflows/buildAgents.yml`** : renommé de « Build Agent Images » à « Build
   Application Images » (n'est plus agent-only). Ajout de `JobFinder/frontend/**` au
   déclencheur de chemins, d'une étape `docker/build-push-action@v6` buildant
@@ -4972,11 +4979,16 @@ l'image obtenue puis `curl http://localhost:3000/` → HTTP 200. Conteneur et im
 
 ### Décisions techniques
 
-- **`CORS_ALLOWED_ORIGINS` en littéral codé en dur, pas en référence au module `frontend`** :
-  `https://jobfinder.vincentboutin.dev` n'existe pas encore comme domaine personnalisé lié à ce
-  stade — `module.frontend.fqdn` renverrait le FQDN par défaut `*.azurecontainerapps.io`, pas le
-  domaine cible. Le littéral sera remplacé par une vraie référence une fois le domaine
-  personnalisé rattaché dans le PR de suivi.
+- **`frontend_custom_domain` en variable plutôt qu'en littéral dupliqué** : `CORS_ALLOWED_ORIGINS`
+  ne peut de toute façon pas référencer `module.frontend.fqdn` — ce dernier renverrait le FQDN par
+  défaut `*.azurecontainerapps.io` tant que le domaine personnalisé n'est pas rattaché (PR de
+  suivi), pas le domaine cible. Plutôt que coder le domaine en dur ici et le retaper dans le PR 2
+  pour la ressource `azurerm_container_app_custom_domain`, il est déclaré une seule fois comme
+  variable (`envs/dev/variables.tf`) : source de vérité unique partagée entre l'usage CORS de ce
+  PR et le rattachement du domaine dans le PR 2, qui référencera `var.frontend_custom_domain` au
+  lieu de retaper le littéral. La valeur par défaut de la variable reste le domaine cible réel
+  (`jobfinder.vincentboutin.dev`) — seul le mécanisme change (variable au lieu de littéral), le
+  comportement au moment de l'apply est identique.
 - **`NEXT_PUBLIC_*` en build-args, jamais en secrets GitHub** : ces valeurs finissent inlinées en
   clair dans le bundle JS servi au navigateur — les traiter comme des secrets donnerait une
   fausse impression de confidentialité sans bénéfice réel.
