@@ -4905,3 +4905,72 @@ Repéré par Vincent en marge de la vérification jumpbox de la PR #188 (`alembi
 - **Couplage de pool documenté, pas éliminé** : la connexion qui tient le verrou et celle qu'utilise `command.upgrade()` viennent du même engine singleton (`@lru_cache`) — deux connexions du pool sont donc retenues simultanément le temps de la migration. Sans risque avec la configuration actuelle (`QueuePool` par défaut, `pool_size=5`), mais un commentaire explicite a été ajouté dans le code pour que `pool_size` ne soit jamais réduit à 1 sans revoir ce point.
 - **`get_session()` non touchée** : son `except Exception:` nu (préexistant, même pattern que `shared/bus.py:124`) a été signalé par `reviewer-backend` comme une violation littérale de la convention Python, mais volontairement laissée en l'état — narrowing vers `SQLAlchemyError` casserait le rollback pour toute exception métier non-DB levée par un appelant dans son bloc `with`, une régression réelle et hors périmètre de ce fix.
 - **4 passes de `reviewer-backend`** avant `APPROUVÉ` sans remarque : ordre constante/logger, `except Exception` trop large autour de `command.upgrade()`, double log avec un nom d'event trompeur en cas d'échec de migration (le `try/except SQLAlchemyError` englobait initialement tout le bloc), puis un test qui ne prouvait pas réellement l'ordre d'appel (deux mocks indépendants) — corrigés un à un. Dernière remarque non-bloquante (type hints manquants sur `tests/test_db.py`) également corrigée avant le verdict final.
+
+---
+
+## PR #191 — feat(infra): déployer le frontend Next.js comme Container App
+
+**Date :** 2026-07-11
+**Branche :** `feature/frontend-web-deployment` → `dev`
+
+### Contexte
+
+Premier des deux PR issus du prompt de handoff écrit par Claude Cowork le 2026-07-10
+(`docs/prompts/prompt-frontend-web-deployment.md`) pour déployer le frontend Next.js
+(`JobFinder/frontend/`) sur `jobfinder.vincentboutin.dev`, jusqu'ici jamais buildé ni
+déployé en dehors du poste de dev. Le rattachement du domaine personnalisé lui-même est
+volontairement hors périmètre de ce PR : il dépend d'une propagation DNS chez OVH
+(enregistrements TXT/CNAME) que seul Vincent peut initier, et suivra dans un second PR
+(`feature/frontend-custom-domain`) une fois cette propagation confirmée. La mise à jour
+du redirect URI sur l'app registration Entra External ID (CIAM) est du même ressort —
+action manuelle de Vincent, hors périmètre de Claude Code.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/Dockerfile`** : ajout de 6 `ARG`/`ENV` (`NEXT_PUBLIC_ENTRA_CLIENT_ID`,
+  `NEXT_PUBLIC_ENTRA_AUTHORITY`, `NEXT_PUBLIC_ENTRA_KNOWN_AUTHORITY`,
+  `NEXT_PUBLIC_ENTRA_API_SCOPE`, `NEXT_PUBLIC_REDIRECT_URI`, `NEXT_PUBLIC_API_URL`), entre
+  `COPY . .` et `RUN npm run build` — Next.js inline ces variables dans le bundle JS au
+  moment du build, pas à l'exécution, donc des `env_vars` sur la Container App n'auraient
+  aucun effet.
+- **`JobFinder/Terraform/envs/dev/frontend.tf`** (nouveau) : `module "frontend"` réutilisant
+  `modules/container_app` (même patron que `module "webapp"` dans `webapp.tf`), même
+  environnement `cae-jf-dev-frc`, `target_port = 3000`, `min_replicas = 0`, sans secrets ni
+  `env_vars` — tout est déjà figé dans l'image au build. Nouvel output
+  `custom_domain_verification_id` sur `modules/container_app_environment/outputs.tf`, et deux
+  nouveaux outputs sur `envs/dev/outputs.tf` (`frontend_url`,
+  `container_app_environment_custom_domain_verification_id`) — à lire via `terraform output`
+  après l'apply de ce PR pour que Vincent puisse créer les enregistrements TXT/CNAME chez OVH
+  avant le PR de suivi.
+- **`envs/dev/webapp.tf`** : `CORS_ALLOWED_ORIGINS` étendu de `"http://localhost:3000"` à
+  `"http://localhost:3000,https://jobfinder.vincentboutin.dev"`. Suppression du commentaire
+  devenu obsolète qui pointait vers cette tâche précise.
+- **`.github/workflows/buildAgents.yml`** : renommé de « Build Agent Images » à « Build
+  Application Images » (n'est plus agent-only). Ajout de `JobFinder/frontend/**` au
+  déclencheur de chemins, d'une étape `docker/build-push-action@v6` buildant
+  `JobFinder/frontend/Dockerfile` avec les 6 build-args `NEXT_PUBLIC_*` sourcés depuis des
+  variables de repo GitHub (`vars.*`, pas des secrets — mêmes précédent que
+  `ENTRA_EXTERNAL_TENANT_ID`/`CLIENT_ID` côté backend), et d'un
+  `az containerapp update --name app-jf-dev-frc-frontend ...` dans l'étape finale (renommée
+  « Update Container App and Container App Job images », puisqu'elle met désormais aussi à
+  jour une Container App qui n'est pas un Job).
+
+**Vérification :** `terraform fmt -check` et `terraform validate` sur `envs/dev` — OK en local.
+`terraform plan` non exécuté localement (nécessite le backend Azure réel) — s'exécutera en CI
+via `terraformPlan.yml` à l'ouverture du PR. Aucun `terraform apply` local (CI-only, convention
+du projet).
+
+### Décisions techniques
+
+- **`CORS_ALLOWED_ORIGINS` en littéral codé en dur, pas en référence au module `frontend`** :
+  `https://jobfinder.vincentboutin.dev` n'existe pas encore comme domaine personnalisé lié à ce
+  stade — `module.frontend.fqdn` renverrait le FQDN par défaut `*.azurecontainerapps.io`, pas le
+  domaine cible. Le littéral sera remplacé par une vraie référence une fois le domaine
+  personnalisé rattaché dans le PR de suivi.
+- **`NEXT_PUBLIC_*` en build-args, jamais en secrets GitHub** : ces valeurs finissent inlinées en
+  clair dans le bundle JS servi au navigateur — les traiter comme des secrets donnerait une
+  fausse impression de confidentialité sans bénéfice réel.
+- **Découpage en deux PR** : ce PR déploie l'infrastructure et l'image avec le FQDN par défaut ;
+  le rattachement du domaine personnalisé (ressource de certificat managé + binding) attend une
+  propagation DNS externe hors du contrôle de Claude Code, d'où le second PR
+  `feature/frontend-custom-domain`, ouvert seulement après confirmation de Vincent.
