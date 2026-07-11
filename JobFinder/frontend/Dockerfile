@@ -4,9 +4,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies from the lockfile for reproducible builds.
+# Install dependencies from the lockfile for reproducible builds. public/ must exist
+# before `npm ci` runs: its postinstall script copies the pdf.js worker into it, and
+# at this point in the build only the manifest files below have been copied in.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN mkdir -p public && npm ci
 
 # Build the Next.js app. NEXT_PUBLIC_* vars are inlined at build time and must
 # be provided as build args / env when building the production image.
