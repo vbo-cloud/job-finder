@@ -1,3 +1,8 @@
+---
+name: conventions-terraform
+description: Conventions Terraform obligatoires du projet Job Finder — nommage Azure (rg-jf-dev-frc, vnet-jf-lz-dev-frc...), structure des modules, tags, règles de lifecycle et de protection (prevent_destroy, protect="true") sur les ressources critiques (Key Vault, AKS, VNet, PostgreSQL, Service Bus, Azure OpenAI, ACR...), checklist sécurité et coût. Utilise ce skill avant d'écrire ou modifier tout fichier .tf, de créer une resource group / VNet / subnet / module Terraform, de nommer une ressource Azure, ou de reviewer une PR touchant lz-dev/, dev/, lz-prod/, prod/, ou modules/ — même si l'utilisateur ne dit pas explicitement "convention" ou "Terraform".
+---
+
 # Terraform Conventions
 
 ## Naming
@@ -25,8 +30,8 @@ Use the following format to separate logical groups of resources within a file:
 
 ## Rules
 
-- Always write reusable modules
-- Comment non-obvious architecture decisions
+- Always write reusable modules. Raison : le mirror prod (v1.0.0) réutilisera ces modules tels quels — du code non modulaire signifie tout réécrire à ce moment-là.
+- Comment non-obvious architecture decisions. Raison : projet solo — les commentaires remplacent les échanges d'équipe qui expliqueraient sinon ces choix à un futur lecteur (humain ou Claude Code).
 - Every resource must have tags: environment, project, owner
 - Every `variable` and `output` block in a module must have a `description`. No exceptions.
 - Add `validation` blocks to module variables that have obvious constraints (accepted values, value ranges, expected formats). Do not validate unconstrained fields like `name` or `location` — those are validated by Azure at apply time.
@@ -36,7 +41,7 @@ Use the following format to separate logical groups of resources within a file:
   Before writing any reference to another resource, check whether a module
   already manages it and use its output.
 - Every provider used in an environment — directly or via a module — must be declared explicitly in the `required_providers` block of the root environment (`envs/*/main.tf`). Modules must not be the sole place where a provider is declared. This ensures all provider dependencies are visible at the environment level and versions are controlled centrally.
-- Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
+- Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main. Raison : évite les state locaux divergents du state distant et garde un historique d'applies traçable et reproductible en CI.
 - `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
 - Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
 - During Milestone 1, only implement changes in `envs/dev/`. Do not mirror to `envs/prod/` until dev is stable and testable (end of M1). A single prod mirror + apply will be done at v1.0.0, with prod-specific adjustments (SKUs, retention, geo-redundancy).
@@ -89,3 +94,37 @@ Reusable modules live in `JobFinder/Terraform/modules/`:
 ### State Backend
 
 Remote state in Azure Storage (`stjftfstatefrc` storage account, `tfstate` container). Each environment has its own state file: `dev.tfstate`, `lz-dev.tfstate`, `lz-prod.tfstate`, `prod.tfstate`.
+
+## Lifecycle rules on critical resources
+
+All of the following resource types must include `prevent_destroy = true` **and** the tag `protect = "true"`:
+- `azurerm_key_vault`
+- `azurerm_kubernetes_cluster`
+- `azurerm_virtual_network`
+- `azurerm_subnet`
+- `azurerm_resource_group` — `prevent_destroy = true` only (no `protect` tag — see note below)
+- `azurerm_postgresql_flexible_server`
+- `azurerm_servicebus_namespace`
+- `azurerm_cognitive_account` (Azure OpenAI)
+- `azurerm_container_registry`
+- `azurerm_container_app_environment`
+- `azurerm_application_insights`
+- `azurerm_log_analytics_workspace`
+- `azurerm_policy_definition` / `azurerm_subscription_policy_assignment`
+
+Note: `azurerm_subnet` does not support tags in the azurerm provider — protection is enforced via `prevent_destroy = true` only.
+
+Note: `azurerm_resource_group` does not carry the `protect = "true"` tag — a CanNotDelete auto-lock applied to a Resource Group would block Terraform operations on its child resources. Protection is enforced by `prevent_destroy = true` alone.
+
+The `protect = "true"` tag triggers the auto-lock policy (deployIfNotExists) defined in `lz_dev/policies.tf`, which automatically applies a `CanNotDelete` management lock on the resource.
+
+## Security & cost review checklist
+
+- No public IP unless explicitly justified in the PR description
+- Storage accounts must not be publicly accessible
+- Key Vault must have `purge_protection_enabled = true`
+- NSG rules must not be open to `0.0.0.0/0`
+- No passwords, secrets, or credentials hardcoded or in plain text
+- Flag VM SKUs above `Standard_D4s_v3` in dev environments
+- Flag any resource generating significant recurring cost; suggest cheaper alternatives when relevant
+- Prod mirror is deferred to v1.0.0 — do not mirror dev changes to prod until then

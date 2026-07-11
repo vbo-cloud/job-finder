@@ -33,7 +33,7 @@ Az-104 certification obtained.
 
 ## Terraform Conventions
 
-→ See `docs/conventions-terraform.md`. Read this file before writing or editing any Terraform code.
+→ Enforced via the `conventions-terraform` skill (`.claude/skills/conventions-terraform/`). Consult it before writing or editing any Terraform code.
 
 ## CI/CD
 
@@ -108,21 +108,45 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub variable
 - Never use merge to catch up with the base branch, always rebase
 - Never force push without `--force-with-lease`
 
+### Enforcement via hooks
+
+The rules above that are mechanically checkable are enforced by a `PreToolUse` hook on
+the Bash tool (`.claude/settings.json` → `.claude/hooks/pre_bash_guard.py`), not just
+documented here. It blocks, for either Claude instance:
+- Direct `git push` to `main`/`dev`
+- Force-push without `--force-with-lease`
+- `git merge` used to catch up a branch (the `--ff-only` local sync in the workflow above stays allowed)
+- Local `terraform apply`/`terraform destroy` (CI-only, see Terraform Conventions)
+- Mutating Azure CLI commands (`az ... create/update/delete/set/remove/assign/deploy/restore/purge/...`) — read-only verbs (`show`, `list`, `get`...) stay allowed
+- Mutating Azure PowerShell cmdlets (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
+- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits, if the `doc-writer` subagent hasn't run since the last edit, or if any touched category (frontend/backend/infra) doesn't have an `APPROUVÉ` verdict from its reviewer subagent since the last edit in that category (see Reviewer subagents below)
+
+This same hook applies identically inside `claude-code-action` CI runs (see `.github/CLAUDE_ACTION.md`), since the action runs the real Claude Code engine against the checked-out repo and reads the same `.claude/settings.json`. The Azure CLI/PowerShell verb list is a backstop, not exhaustive — it covers common mutating verb families, not every possible destructive command; `reviewer-infra`'s own judgment and the CI-only apply pipeline remain the primary controls.
+
+A `PostToolUse` hook (`.claude/hooks/post_edit_format.py`) best-effort runs `terraform fmt`
+after editing a `.tf` file and `eslint --fix` after editing a frontend file, to preempt
+CI formatting failures. It never blocks — PostToolUse can't undo an edit that already happened.
+
+Known limitation: hooks can't technically distinguish a Claude Cowork session from a
+Claude Code session (no reliable signal exposed to hook scripts for that), so the
+Cowork/Code role boundary described above is still enforced by instruction only, not
+by a hook.
+
 ## Python Conventions
 
-→ See `docs/conventions-python.md`. Read this file before writing or editing any Python code.
+→ Enforced via the `conventions-python` skill (`.claude/skills/conventions-python/`). Consult it before writing or editing any Python code.
 
 ---
 
 ## SQL / Alembic Conventions
 
-→ See `docs/conventions-sql.md`. Read this file before writing or editing any SQLAlchemy models or Alembic migrations.
+→ Enforced via the `conventions-sql` skill (`.claude/skills/conventions-sql/`). Consult it before writing or editing any SQLAlchemy models or Alembic migrations.
 
 ---
 
 ## Frontend / Next.js Conventions
 
-→ See `docs/conventions-frontend.md`. Read this file before writing or editing any Next.js / React / TypeScript frontend code.
+→ Enforced via the `conventions-frontend` skill (`.claude/skills/conventions-frontend/`). Consult it before writing or editing any Next.js / React / TypeScript frontend code.
 
 ---
 
@@ -174,3 +198,84 @@ A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
+
+### Exploration subagent
+
+`explorer` (`.claude/agents/explorer.md`) is meant to run *before* implementation
+starts on a non-trivial feature: delegate the codebase reading (which files are
+relevant, what pattern an existing similar case already uses, what real
+conventions are in play beyond what a skill documents in general) to it,
+instead of filling the main session's context with dozens of `Read`/`Grep`
+calls that won't be needed once a plan is in place. It's read-only
+(`Read, Grep, Glob`) and returns a short, structured summary — relevant files,
+the existing pattern to reuse, conventions worth respecting — never a detailed
+implementation plan and never a code fix.
+
+Unlike the reviewer subagents and `doc-writer`, there's no hook enforcing that
+`explorer` gets called — "is this feature big enough to warrant delegating
+exploration" isn't something a hook can reliably judge, so this stays a
+judgment call driven by the subagent's own description, same as the general
+built-in `Explore` agent type this one specializes for the project.
+
+### Documentation subagent
+
+`doc-writer` (`.claude/agents/doc-writer.md`) checks that docstrings, WHY-comments,
+and the `docs/JOURNAL.md` entry for the current PR are accurate and complete —
+and, unlike the reviewer subagents below, has `Edit`/`Write` and fixes what it
+finds directly instead of only reporting it. It's meant to run before the
+reviewers, around the time a PR is opened.
+
+**Enforcement:** see Reviewer subagents below — both are gated together on the
+same `gh pr create` check.
+
+### Reviewer subagents
+
+Three read-only reviewer subagents live in `.claude/agents/`, one per layer:
+- **`reviewer-frontend`** — `.ts`/`.tsx`/`.jsx`/`.js` under `JobFinder/frontend/`, checked against the `conventions-frontend` skill. Tools: `Read, Grep, Glob` only — no Edit/Write/Bash, so it is structurally unable to modify anything.
+- **`reviewer-backend`** — `.py` under `JobFinder/python/` (excluding migrations), checked against `conventions-python`. Same read-only tool set.
+- **`reviewer-infra`** — `.tf`, Alembic migrations, PowerShell/Azure CLI scripts, checked against `conventions-terraform` and `conventions-sql`. Tools: `Read, Grep, Glob, Bash` — Bash is scoped by instruction to read-only commands (`terraform plan`, `terraform validate`, `terraform fmt -check`, `tflint`); it must never run `terraform apply` or a mutating `az`/`New-Az*`/`Set-Az*`/`Remove-Az*` command. The `pre_bash_guard.py` hook independently blocks `terraform apply` regardless of caller, but that's a backstop, not the primary control.
+
+Every reviewer's job is to report findings (verdict + `file:line` + violated rule), never to fix them itself.
+
+**Enforcement:** folded into the same `pre_bash_guard.py` `PreToolUse` hook that
+already gates `gh pr create` on `docs/JOURNAL.md` and clean commit history (this
+used to be a separate `Stop` hook blocking the session from ending at all;
+moved here so it gates PR creation specifically — see the note in
+`pre_bash_guard.py`'s `gh pr create` section for why). Before `gh pr create` is
+allowed to run, the hook inspects the session transcript and, per category
+touched since the branch diverged, requires that the matching reviewer subagent
+was called *after* the last edit in that category, and that its report reads as
+`APPROUVÉ` (contains `CHANGEMENTS REQUIS`, or an unidentifiable verdict, both
+block — ambiguous is treated as not-approved on purpose). `doc-writer` is
+checked the same way in the same pass (called since the last edit at all,
+no verdict concept since it isn't an approve/reject reviewer).
+
+Known limitation: this is a keyword match on the reviewer's own report text, not
+semantic understanding of whether the underlying issues were actually fixed —
+it can't tell a genuine fix from a reviewer that was talked into changing its
+verdict. It also fails open (allows `gh pr create`) if the transcript itself
+can't be parsed (unreadable file, unexpected schema), so a structural mismatch
+never leaves the agent stuck — but an ambiguous or negative verdict on a
+successfully-parsed report is deliberately NOT treated as one of those
+failures, and blocks. Treat it as a safety net on top of the instruction to
+call reviewers and act on their feedback, not as a substitute for it.
+
+There is no cycle limit / give-up counter for an actual `CHANGEMENTS REQUIS`
+verdict (or an unidentifiable one) — that always blocks `gh pr create` until
+resolved, unlike the old Stop hook: if a reviewer never approves, Claude can
+simply choose not to open the PR and report the disagreement to the user
+instead, so there's no risk of the session itself getting stuck the way there
+was when this same logic gated ending a response.
+
+**Non-blocking remarks, capped at 3 attempts.** Every reviewer report must
+include a `Remarques non-bloquantes :` line even on an `APPROUVÉ` verdict —
+`aucune`, or a short list (see `.claude/agents/reviewer-*.md`). If that line
+is non-empty (or missing entirely — treated the same as an unclear verdict,
+conservatively), `gh pr create` is blocked too, asking Claude to address them
+and re-run the reviewer, up to `MAX_WARNING_ATTEMPTS = 3` consecutive attempts
+per agent (a small counter persisted next to the transcript). Past that, the
+hook stops enforcing that specific agent's warnings and lets `gh pr create`
+through — this *is* a cycle limit, deliberately, unlike the blocking-verdict
+case above: minor remarks are worth a few nudges but not an unbounded loop.
+The counter resets to zero for an agent as soon as it explicitly reports
+`aucune`, or stops being touched.

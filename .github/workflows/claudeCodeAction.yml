@@ -1,0 +1,56 @@
+name: Claude Code Action
+
+# Manual-only: this workflow NEVER runs claude-code-action automatically off a
+# review verdict, a file extension, or anything else -- the only trigger is a
+# human explicitly writing "@claude" in a PR/issue comment, a PR review
+# comment, or a PR review body. This applies uniformly to every file domain
+# (frontend, backend, infra) -- there is no automatic distinction between them
+# here, and no "one iteration" limit, since nothing ever runs without an
+# explicit human ask.
+#
+# Infra safety does not depend on this workflow refusing to touch infra files
+# -- it comes from .claude/hooks/pre_bash_guard.py (blocks terraform
+# apply/destroy and mutating az/PowerShell commands regardless of who invoked
+# the session) and .claude/hooks/require_reviewer.py (forces the matching
+# reviewer-* subagent before the session can end), both inherited from
+# .claude/settings.json exactly as for a local Claude Code session. See
+# .github/CLAUDE_ACTION.md for the full reasoning and open verification items.
+#
+# IMPORTANT: issue_comment / pull_request_review / pull_request_review_comment
+# workflows always run using the copy of THIS FILE on the default branch
+# (main), never the PR branch's copy -- same caveat already documented in
+# reviewerAgent.yml. Changes here only take effect for comments posted after
+# this file is merged to main.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude:
+    # Pre-filter at the job level so a comment/review without "@claude" never
+    # spins up a runner at all -- claude-code-action's own tag-mode detection
+    # would no-op on it anyway, but this saves Actions minutes. The
+    # "!= claude[bot]" checks stop the bot from ever reacting to its own
+    # replies.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]') ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && github.event.review.user.login != 'claude[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
+          settings: .claude/settings.json
+          claude_args: "--allowedTools Bash,Task,Edit,Write,Read,Grep,Glob"
