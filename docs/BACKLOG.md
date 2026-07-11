@@ -812,7 +812,8 @@ UAMI sans en avoir besoin. Un couplage silencieux : si `id-jf-dev-frc-caj` gagne
 supplémentaire pour un besoin backend, le frontend l'obtient aussi sans qu'aucune ligne de code
 ne le mentionne explicitement.
 
-**Solution cible :** provisionner une UAMI dédiée au frontend (pull ACR uniquement), ou a minima
+Solution cible : provisionner une UAMI dédiée au frontend (pull ACR uniquement), ou a minima
 documenter explicitement le partage intentionnel si une identité dédiée est jugée disproportionnée
-pour un portfolio project — un commentaire WHY a été ajouté dans `frontend.tf` en attendant.
-**Fichier :** `envs/dev/frontend.tf` (et un nouveau module identité si une UAMI dédiée est retenue).
+pour un portfolio project — un commentaire WHY a été ajouté dans `frontend.tf` en attendant. À
+faire si `id-jf-dev-frc-caj` gagne un jour un rôle que le frontend n'a aucune raison de porter.
+Fichier concerné : `envs/dev/frontend.tf` (et un nouveau module identité si une UAMI dédiée est retenue).
