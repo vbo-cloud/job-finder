@@ -24,7 +24,7 @@ output "container_app_environment_custom_domain_verification_id" {
 }
 
 output "frontend_custom_domain" {
-  description = "Target custom domain for the frontend Container App (not yet bound -- lands in a follow-up PR, see docs/JOURNAL.md PR #191). Read alongside frontend_url and container_app_environment_custom_domain_verification_id to build the TXT/CNAME records at the DNS registrar."
+  description = "Custom domain bound to the frontend Container App (see azurerm_container_app_custom_domain.frontend in frontend.tf). Read alongside frontend_url and container_app_environment_custom_domain_verification_id to build the TXT/CNAME records at the DNS registrar."
   value       = var.frontend_custom_domain
 }
 

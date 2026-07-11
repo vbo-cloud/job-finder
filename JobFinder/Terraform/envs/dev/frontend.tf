@@ -41,6 +41,29 @@ module "frontend" {
 # already resolves to this Container App, so DNS propagation must complete first.
 # If this apply fails on a fresh domain, it's almost always DNS not propagated
 # yet -- confirm with `nslookup`/`dig` and re-run rather than changing this code.
+#
+# Two-phase resource creation, distinct from the DNS propagation wait above:
+# Azure rejects creating the managed certificate unless the hostname is
+# *already* registered as a custom domain on the app (API error
+# RequireCustomHostnameInEnvironment), but a custom domain that references a
+# not-yet-existing certificate would make Terraform create the certificate
+# first (dependency ordering) -- the two requirements contradict each other
+# within a single apply. Phase 1 (this state): custom domain registered with
+# no certificate (binding "Disabled"), which lets the certificate resource
+# below succeed. Phase 2 (follow-up commit, after phase 1 has applied
+# successfully): add certificate_binding_type = "SniEnabled" and
+# container_app_environment_certificate_id back onto the custom domain -- an
+# in-place update at that point, not a create, so the ordering conflict
+# doesn't recur.
+
+# No tags block: azurerm_container_app_custom_domain has no tags attribute in
+# the provider schema (a binding/config resource, not independently taggable
+# in ARM -- same category of exception as azurerm_subnet, see conventions-terraform).
+resource "azurerm_container_app_custom_domain" "frontend" {
+  name                     = var.frontend_custom_domain
+  container_app_id         = module.frontend.id
+  certificate_binding_type = "Disabled"
+}
 
 resource "azurerm_container_app_environment_managed_certificate" "frontend" {
   name                         = "cert-${var.project}-${var.env}-${var.location_short}-frontend"
@@ -53,11 +76,6 @@ resource "azurerm_container_app_environment_managed_certificate" "frontend" {
     project     = var.project
     owner       = var.owner
   }
-}
 
-resource "azurerm_container_app_custom_domain" "frontend" {
-  name                                     = var.frontend_custom_domain
-  container_app_id                         = module.frontend.id
-  container_app_environment_certificate_id = azurerm_container_app_environment_managed_certificate.frontend.id
-  certificate_binding_type                 = "SniEnabled"
+  depends_on = [azurerm_container_app_custom_domain.frontend]
 }
