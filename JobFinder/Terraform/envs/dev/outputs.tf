@@ -23,6 +23,11 @@ output "container_app_environment_custom_domain_verification_id" {
   value       = module.container_app_environment.custom_domain_verification_id
 }
 
+output "frontend_custom_domain" {
+  description = "Target custom domain for the frontend Container App (not yet bound -- see BACKLOG.md). Read alongside frontend_url and container_app_environment_custom_domain_verification_id to build the TXT/CNAME records at the DNS registrar."
+  value       = var.frontend_custom_domain
+}
+
 output "jumpbox_private_ip" {
   description = "Private IP of the jumpbox VM (connect via Azure Bastion)."
   value       = module.jumpbox.private_ip
