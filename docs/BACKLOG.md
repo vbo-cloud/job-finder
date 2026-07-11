@@ -817,3 +817,16 @@ documenter explicitement le partage intentionnel si une identité dédiée est j
 pour un portfolio project — un commentaire WHY a été ajouté dans `frontend.tf` en attendant. À
 faire si `id-jf-dev-frc-caj` gagne un jour un rôle que le frontend n'a aucune raison de porter.
 Fichier concerné : `envs/dev/frontend.tf` (et un nouveau module identité si une UAMI dédiée est retenue).
+
+### [optional] `buildAgents.yml` — un seul job pour tous les services, sans filtrage par chemin au-delà du déclencheur
+Le job unique `build-and-push` construit et redéploie systématiquement toutes les images
+(agents Python + frontend), quel que soit le sous-chemin qui a déclenché le push. Un push qui ne
+touche que `JobFinder/python/**` reconstruit bien les images agents, mais exécute aussi le
+`az containerapp update` final sur `app-jf-dev-frc-frontend` avec le tag `:latest` — sans
+rebuild ni republish de ce tag pour ce run. Sans conséquence aujourd'hui (la commande est
+idempotente et `:latest` pointe déjà vers la bonne image, puisque le frontend n'a pas changé),
+mais source de confusion latente : le step semble mettre à jour le frontend à chaque run
+Python, alors qu'il ne fait que réaffirmer un état déjà à jour. Scinder en jobs séparés avec des
+conditions `if` sur les chemins modifiés (via `dorny/paths-filter` ou équivalent) rendrait
+l'intention explicite et éviterait cette étape silencieusement redondante. Fichier concerné :
+`.github/workflows/buildAgents.yml`.
