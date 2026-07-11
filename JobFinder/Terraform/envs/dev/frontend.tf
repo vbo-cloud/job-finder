@@ -50,31 +50,45 @@ module "frontend" {
 # contradicted each other within a single apply. Phase 1 (PR #195) registered
 # the custom domain with certificate_binding_type = "Disabled" and no
 # certificate reference, plus an explicit depends_on forcing the certificate
-# to be created after; that applied successfully. This final state below
-# (phase 2) flips the binding to "SniEnabled" on the already-existing custom
-# domain. `terraform plan` shows this change as `-/+ destroy and then create
-# replacement`, not an in-place update, on this specific value transition --
-# expect the custom domain resource to be recreated, and a brief window where
-# jobfinder.vincentboutin.dev is unbound from the app during the apply.
-# Acceptable for dev (no SLA, prod mirror deferred to v1.0.0 per CLAUDE.md).
-
+# to be created after; that applied successfully.
+#
+# PR #196 then attempted a phase 2 that flipped this resource's
+# certificate_binding_type to "SniEnabled" directly, on the (wrong) assumption
+# that Azure auto-resolves a managed certificate by matching subject_name once
+# SniEnabled is requested. It doesn't: `terraform apply` reported success, but
+# `az containerapp hostname list` showed the live binding stuck at "Disabled"
+# -- the custom domain was live but served no certificate. Root cause,
+# confirmed against the azurerm provider source and two open upstream issues
+# (github.com/hashicorp/terraform-provider-azurerm issues #25788 and #27362):
+# azurerm_container_app_custom_domain's container_app_environment_certificate_id
+# argument only validates bring-your-own certificate IDs (ARM path
+# .../certificates/...) and hard-rejects managed certificate IDs
+# (.../managedCertificates/...). There is no argument on this resource that
+# can reference a managed certificate -- the upstream-documented workaround is
+# `lifecycle { ignore_changes = [certificate_binding_type,
+# container_app_environment_certificate_id] }` plus binding the certificate
+# out-of-band (portal or `az containerapp hostname bind`), which is exactly
+# the kind of manual step this project's Terraform-only workflow avoids.
+#
+# The ignore_changes below keeps this resource pinned at the Disabled/no-cert
+# shape it can actually manage (so Terraform stops trying, and failing, to
+# reconcile a state it can't reach) while azapi_update_resource below does the
+# one thing azurerm can't: PATCH the container app's ingress.customDomains
+# directly via the ARM API, which -- unlike the azurerm provider's client-side
+# validator -- accepts a managed certificate ID natively (it's what
+# `az containerapp hostname bind` itself calls under the hood).
+#
 # No tags block: azurerm_container_app_custom_domain has no tags attribute in
 # the provider schema (a binding/config resource, not independently taggable
 # in ARM -- same category of exception as azurerm_subnet, see conventions-terraform).
-#
-# No container_app_environment_certificate_id here: that argument expects a
-# bring-your-own azurerm_container_app_environment_certificate (uploaded cert,
-# ARM path .../certificates/...), not a managed certificate (.../managedCertificates/...
-# -- confirmed via the provider schema, using the wrong one fails terraform plan
-# with a hard ARM ID parsing error). The field that *would* reference a managed
-# certificate, container_app_environment_managed_certificate_id, is Computed-only
-# -- Azure resolves it itself by matching subject_name to this hostname once
-# certificate_binding_type = "SniEnabled" and a matching managed certificate
-# already exists (it does, see the resource below, already Succeeded).
 resource "azurerm_container_app_custom_domain" "frontend" {
   name                     = var.frontend_custom_domain
   container_app_id         = module.frontend.id
-  certificate_binding_type = "SniEnabled"
+  certificate_binding_type = "Disabled"
+
+  lifecycle {
+    ignore_changes = [certificate_binding_type, container_app_environment_certificate_id]
+  }
 }
 
 resource "azurerm_container_app_environment_managed_certificate" "frontend" {
@@ -88,4 +102,53 @@ resource "azurerm_container_app_environment_managed_certificate" "frontend" {
     project     = var.project
     owner       = var.owner
   }
+}
+
+# Binds the managed certificate above to the custom domain via a direct ARM
+# PATCH, bypassing azurerm_container_app_custom_domain's inability to accept a
+# managed certificate ID (see the comment block above). This is a merge-patch
+# (azapi_update_resource only touches the paths listed in `body`) *at the
+# Terraform level* -- the ARM resource provider's own merge behavior for the
+# `ingress` object is not something the Terraform provider controls or
+# guarantees, so after the first real apply, confirm via
+# `az containerapp ingress show -n app-jf-dev-frc-frontend -g rg-jf-dev-frc-app`
+# that target_port/external/transport/traffic weren't reset -- this project
+# has already been burned once (PR #196) by an unverified assumption about
+# this same API's behavior.
+#
+# depends_on is required on both: neither the custom domain hostname
+# registration nor the certificate is referenced by attribute inside `body`
+# (customDomains.name is a plain string, not
+# `azurerm_container_app_custom_domain.frontend.name`), so without it
+# Terraform has no graph edge forcing this to run after them.
+#
+# Removing this resource from config only stops Terraform from managing the
+# binding -- azapi_update_resource has no revert/destroy body, so `terraform
+# destroy` (or dropping this block) leaves the SNI binding live on the
+# container app. To actually unbind, patch bindingType back to "Disabled"
+# explicitly first.
+resource "azapi_update_resource" "frontend_custom_domain_binding" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = module.frontend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          customDomains = [
+            {
+              name          = var.frontend_custom_domain
+              bindingType   = "SniEnabled"
+              certificateId = azurerm_container_app_environment_managed_certificate.frontend.id
+            }
+          ]
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    azurerm_container_app_custom_domain.frontend,
+    azurerm_container_app_environment_managed_certificate.frontend,
+  ]
 }
