@@ -14,8 +14,8 @@ assert 0 < INTENT_EMBEDDING_WEIGHT < 1, (
     f"INTENT_EMBEDDING_WEIGHT must be strictly between 0 and 1, got {INTENT_EMBEDDING_WEIGHT}"
 )
 # Nombre de matchs analysés automatiquement par CV à chaque run de matching (top N par score
-# courant, cf. ADR-018). Fixé à 1 en bêta — inclus dans le palier gratuit, ne consomme aucun crédit.
-MATCH_ANALYSIS_AUTO_TOP_N = int(os.getenv("MATCH_ANALYSIS_AUTO_TOP_N", "1"))
+# courant, cf. ADR-018). Fixé à 20 en bêta — inclus dans le palier gratuit, ne consomme aucun crédit.
+MATCH_ANALYSIS_AUTO_TOP_N = int(os.getenv("MATCH_ANALYSIS_AUTO_TOP_N", "20"))
 # 2 jours : une offre non revue lors des derniers fetches est considérée clôturée.
 # L'agent fetch tourne 2×/jour ; 2 jours = 4 cycles de grâce avant suppression.
 # Configurable via CLEANUP_COLLECTED_AGE_DAYS.
