@@ -7,6 +7,8 @@ import AnalysisPointsList from "./AnalysisPointsList";
 interface Props {
   analysis: MatchAnalysisOut | null;
   analysisPending: boolean;
+  /** Immediate request-level failure (e.g. credits exhausted) — distinct from analysis.status "error". */
+  analysisError: string | null;
   onAnalyze: () => void;
   offerSkills: string[];
 }
@@ -31,7 +33,7 @@ function SummarySection({ title, text }: { title: string; text: string | null })
 }
 
 /** "Review de l'agent" column of an expanded MatchItem — pair analysis states + offer skills. */
-export default function MatchAnalysisPanel({ analysis, analysisPending, onAnalyze, offerSkills }: Props) {
+export default function MatchAnalysisPanel({ analysis, analysisPending, analysisError, onAnalyze, offerSkills }: Props) {
   const inProgress = analysisPending || analysis?.status === "processing";
 
   return (
@@ -42,9 +44,19 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, onAnalyz
       <p className={cn(SECTION_TITLE_CLASS, "mb-3.5")}>Review de l&apos;agent</p>
 
       {inProgress ? (
-        <button disabled className={ANALYZE_BUTTON_CLASS}>
-          Analyse en cours…
-        </button>
+        <div className="flex flex-col items-center gap-3 py-2">
+          <svg
+            aria-hidden="true"
+            className="h-6 w-6 animate-spin text-muted"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-[13.5px] font-semibold text-strong">Analyse en cours</span>
+        </div>
       ) : analysis?.status === "done" ? (
         <div className="flex flex-col gap-4">
           {analysis.synthese && (
@@ -103,16 +115,17 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, onAnalyz
           )}
         </div>
       ) : analysis?.status === "error" ? (
-        <div className="flex flex-col gap-3 items-start">
+        <div className="flex flex-col gap-3 items-center text-center">
           <p className="text-[13px] text-destructive leading-relaxed">
             L&apos;analyse a échoué — vous pouvez la relancer.
           </p>
           <button onClick={onAnalyze} className={ANALYZE_BUTTON_CLASS}>
             Analyser cette offre (consomme 1 crédit)
           </button>
+          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
         </div>
       ) : (
-        <div className="flex flex-col gap-3 items-start">
+        <div className="flex flex-col gap-3 items-center text-center">
           <p className="text-[13px] text-body leading-relaxed">
             Obtenez une analyse détaillée de votre CV face à cette offre : compétences
             correspondantes, points forts et pistes d&apos;amélioration.
@@ -120,6 +133,7 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, onAnalyz
           <button onClick={onAnalyze} className={ANALYZE_BUTTON_CLASS}>
             Analyser cette offre avec l&apos;IA
           </button>
+          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
         </div>
       )}
 

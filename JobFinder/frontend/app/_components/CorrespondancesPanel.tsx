@@ -140,6 +140,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   function toggleExpand(id: string) {
     const opening = selectedId !== id;
     setSelectedId(opening ? id : null);
+    setAnalysisError(null);
     if (opening && !seenIds.has(id)) {
       setSeenIds((prev) => {
         const next = new Set(prev);
@@ -207,6 +208,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       isSaved:    saved.has(m.offer.id),
       isExpanded: selectedId === m.offer.id,
       analysisPending: analysisPending.has(m.offer.id),
+      analysisError: selectedId === m.offer.id ? analysisError : null,
       searchQuery,
       onSelect:   () => toggleExpand(m.offer.id),
       onSave:     () => toggleSaved(m.offer.id),
@@ -310,9 +312,6 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           <p className="text-sm text-muted text-center mt-12">Tous les filtres sont désactivés — activez au moins un filtre.</p>
         ) : (
           <>
-            {analysisError && (
-              <p className="text-xs text-destructive mb-3 text-center">{analysisError}</p>
-            )}
             {!loading && <PaginationBar {...pagination} className="mb-4" />}
             <MatchList
               items={displayedItems}

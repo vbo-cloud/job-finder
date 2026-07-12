@@ -56,6 +56,7 @@ function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
     isSaved: false,
     isExpanded: false,
     analysisPending: false,
+    analysisError: null,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onReject: jest.fn(),
@@ -239,20 +240,37 @@ describe("MatchItem", () => {
       expect(onAnalyze).toHaveBeenCalledTimes(1);
     });
 
-    it("shows a disabled in-progress button while analysisPending", () => {
+    it("replaces the analyze button with a loading indicator while analysisPending", () => {
       render(<MatchItem {...makeProps({ isExpanded: true, analysisPending: true })} />);
-      const btn = screen.getByRole("button", { name: "Analyse en cours…" });
-      expect(btn).toBeDisabled();
+      expect(screen.getAllByText("Analyse en cours")).toHaveLength(1);
+      expect(
+        screen.queryByRole("button", { name: "Analyser cette offre avec l'IA" })
+      ).not.toBeInTheDocument();
     });
 
-    it("shows a disabled in-progress button when the analysis is processing", () => {
+    it("replaces the analyze button with a loading indicator when the analysis is processing", () => {
       render(
         <MatchItem {...makeProps({
           isExpanded: true,
           match: makeMatch(0.85, {}, makeAnalysis({ status: "processing" })),
         })} />
       );
-      expect(screen.getByRole("button", { name: "Analyse en cours…" })).toBeDisabled();
+      expect(screen.getAllByText("Analyse en cours")).toHaveLength(1);
+    });
+
+    it("shows the collapsed teaser as 'Analyse IA en cours' while analysisPending", () => {
+      render(<MatchItem {...makeProps({ analysisPending: true })} />);
+      expect(screen.getByText("Analyse IA en cours")).toBeInTheDocument();
+    });
+
+    it("shows the credit-exhausted error under the button", () => {
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          analysisError: "Crédits d'analyse épuisés",
+        })} />
+      );
+      expect(screen.getByText("Crédits d'analyse épuisés")).toBeInTheDocument();
     });
 
     it("renders synthese, points forts and points d'amélioration when done", () => {
