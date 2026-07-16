@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import CorrespondancesPanel from "@/app/_components/CorrespondancesPanel";
 import apiClient from "@/lib/api/client";
 import { onCreditsConsumed, onCreditsReleased, onCreditsReserved } from "@/lib/creditsBus";
@@ -65,6 +65,24 @@ function makeMatches(count: number): MatchOut[] {
       },
     }),
   );
+}
+
+function makeAnalysis(overrides: Partial<import("@/lib/api/types").MatchAnalysisOut> = {}) {
+  return {
+    status: "pending" as const,
+    matched_skills: [],
+    points_forts: [],
+    points_amelioration: [],
+    synthese: null,
+    verdict: null,
+    company_summary: null,
+    mission_summary: null,
+    why_good_fit_for_user: null,
+    why_good_candidate: null,
+    score_explanation: null,
+    questions_entretien_potentielles: [],
+    ...overrides,
+  };
 }
 
 beforeAll(() => {
@@ -441,5 +459,52 @@ describe("CorrespondancesPanel — manual analysis request", () => {
 
     unsubConsumed();
     unsubReleased();
+  });
+});
+
+describe("CorrespondancesPanel — analysis enqueued server-side (status pending)", () => {
+  // Covers matches whose analysis row already exists with status "pending" when
+  // `matches` first loads — e.g. the backend's auto top-N on match creation, or a
+  // manual request whose message hasn't been dequeued yet. Before this fix, only
+  // status "processing" counted as in-progress: a "pending" row showed no spinner
+  // at all and the analyze button stayed clickable, so a user who clicked it burned
+  // a second credit on an already-queued analysis.
+  it("shows the in-progress state and no analyze button, without any click", () => {
+    renderPanel([makeMatch({ analysis: makeAnalysis({ status: "pending" }) })]);
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i })); // expand
+
+    expect(screen.getAllByText("Analyse en cours").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: "Analyser cette offre avec l'IA" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("polls and picks up completion for a pending analysis the user never clicked", async () => {
+    jest.useFakeTimers();
+    const pendingMatch = makeMatch({ analysis: makeAnalysis({ status: "pending" }) });
+    const doneMatch = { ...pendingMatch, analysis: makeAnalysis({ status: "done", synthese: "Terminé." }) };
+    (apiClient.get as jest.Mock).mockResolvedValue({ data: { matches: [doneMatch] } });
+
+    renderPanel([pendingMatch]);
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i })); // expand
+
+    expect(screen.getAllByText("Analyse en cours").length).toBeGreaterThan(0);
+
+    // ANALYSIS_POLL_INTERVAL_MS in CorrespondancesPanel.tsx — the seeding effect
+    // (matches -> analysisPending) must have run before this fires, or there is
+    // nothing to poll for and this assertion would hang.
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV_ID}`);
+    // waitFor's own internal polling relies on real timers, which are faked
+    // here — the state update has already landed inside the act() above, so
+    // assert directly instead.
+    expect(screen.getAllByText("Terminé.").length).toBeGreaterThan(0);
+
+    jest.useRealTimers();
   });
 });

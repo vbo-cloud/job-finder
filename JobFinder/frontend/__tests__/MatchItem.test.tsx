@@ -294,6 +294,23 @@ describe("MatchItem", () => {
       expect(screen.getAllByText("Analyse en cours")).toHaveLength(1);
     });
 
+    it("replaces the analyze button with a loading indicator when the analysis is pending", () => {
+      // status "pending" covers a match_analyses row that exists (auto top-N
+      // on match creation, or a manual request not yet dequeued) but hasn't
+      // started processing yet — must read as in-progress, not "not analyzed",
+      // or the user re-clicks and burns a second credit on an already-queued row.
+      render(
+        <MatchItem {...makeProps({
+          isExpanded: true,
+          match: makeMatch(0.85, {}, makeAnalysis({ status: "pending" })),
+        })} />
+      );
+      expect(screen.getAllByText("Analyse en cours")).toHaveLength(1);
+      expect(
+        screen.queryByRole("button", { name: "Analyser cette offre avec l'IA" })
+      ).not.toBeInTheDocument();
+    });
+
     it("shows the collapsed teaser as 'Analyse IA en cours' while analysisPending", () => {
       render(<MatchItem {...makeProps({ analysisPending: true })} />);
       expect(screen.getByText("Analyse IA en cours")).toBeInTheDocument();
