@@ -44,7 +44,7 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
       <p className={cn(SECTION_TITLE_CLASS, "mb-3.5")}>Review de l&apos;agent</p>
 
       {inProgress ? (
-        <div className="flex flex-col items-center gap-3 py-2">
+        <div className="flex flex-col items-center gap-3 py-2" role="status">
           <svg
             aria-hidden="true"
             className="h-6 w-6 animate-spin text-muted"
@@ -119,6 +119,10 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
           <p className="text-[13px] text-destructive leading-relaxed">
             L&apos;analyse a échoué — vous pouvez la relancer.
           </p>
+          {/* analysisError here is a request-level failure on the retry itself
+              (e.g. credits ran out before the user relaunched), not the
+              agent-side failure the message above refers to — the two can
+              legitimately show together. */}
           {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
           <button onClick={onAnalyze} className={ANALYZE_BUTTON_CLASS}>
             Analyser cette offre (consomme 1 crédit)
