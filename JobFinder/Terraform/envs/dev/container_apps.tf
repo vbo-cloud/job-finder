@@ -28,7 +28,7 @@ module "container_app_environment" {
 # ==============================================================================
 # Agent 1 — Matching (queue: start-matching)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
-# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 Europe/Paris local time — see module below)
 # Agent 4 — CV Analysis (queue: cv-analysis)
 # Agent 5 — Match Analysis (queue: match-analysis)
 
@@ -182,11 +182,17 @@ module "job_cleanup" {
   ]
 }
 
-# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Agent 3 — Offer Fetching (timer: meant to run at 12:00 and 20:00 Europe/Paris local time)
 # Replaces offerFetch.yml GitHub Actions workflow.
 # Embeds pending offers directly (shared/embedder.py) after upsert — no distillation
 # step, hence the openai-api-key secret and AZURE_OPENAI_* env vars below (see
 # docs/prompts/prompt-remove-offer-distillation.md).
+# Azure Container Apps' schedule trigger only supports UTC cron expressions, with no
+# timezone/DST support — so this fires at every UTC hour that could map to 12:00/20:00
+# Europe/Paris under either CET (UTC+1: 11,19 UTC) or CEST (UTC+2: 10,18 UTC). The agent's
+# own _is_scheduled_local_hour() (agents/offer_fetching/main.py) no-ops the two firings that
+# don't match the current DST state, so the job runs exactly twice a day, always in sync with
+# French local time, with no manual Terraform change needed at each DST transition.
 module "job_offer_fetching" {
   source = "../../modules/container_app_job"
 
@@ -195,7 +201,7 @@ module "job_offer_fetching" {
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   environment_id             = module.container_app_environment.id
   trigger_type               = "timer"
-  cron_expression            = "0 12,20 * * *"
+  cron_expression            = "0 10,11,18,19 * * *"
   replica_timeout_in_seconds = 3600
   image                      = "${module.container_registry.login_server}/agents/offer-fetching:latest"
   identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
