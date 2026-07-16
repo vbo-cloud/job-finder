@@ -5527,3 +5527,77 @@ avant.
 préexistante, non introduite par ce commit) : `CorrespondancesPanel.tsx` (~357 lignes) mélange
 plusieurs responsabilités — bon candidat à l'extraction de `requestAnalysis`/du polling dans un
 hook dédié dans un futur refactor, non actionnable maintenant.
+
+## PR (à venir) — feat: planification DST-safe du fetch d'offres + copy bibliothèque sur la cadence
+
+**Date :** 2026-07-16
+**Branche :** `feature/library-refresh-schedule-copy` → `dev`
+**Numéro de PR :** pas encore ouverte au moment de cette entrée — à corriger une fois la PR créée.
+
+### Contexte
+
+Deux sujets indépendants, demandés directement par l'utilisateur, atterris sur cette branche.
+
+Le premier : s'assurer que le Container App Job de fetch d'offres tourne bien à 12h et 20h heure
+française (Europe/Paris), pas UTC. Le `cron_expression` Terraform existant (`"0 12,20 * * *"`)
+déclenchait en réalité à 12h/20h UTC — confirmé qu'Azure Container Apps ne supporte aucun
+paramètre timezone/DST sur son trigger planifié (ni sur `azurerm_container_app_job`, ni sur l'API
+ARM sous-jacente).
+
+Le second, sans lien avec le premier : changement de texte sur la vue bibliothèque, pour informer
+les utilisateurs de la cadence de rafraîchissement fixée par le premier sujet.
+
+### Ce qui a été fait
+
+- **`JobFinder/Terraform/envs/dev/container_apps.tf`** : `cron_expression` de
+  `job_offer_fetching` passe à `"0 10,11,18,19 * * *"` — couvre toutes les heures UTC pouvant
+  correspondre à 12h/20h heure de Paris, sous CET (UTC+1 : 11h, 19h) comme sous CEST (UTC+2 :
+  10h, 18h). Commentaires mis à jour (résumé « Agent 3 » en tête de fichier et bloc au-dessus du
+  module) pour expliquer la contrainte UTC-only et le couplage avec le garde-fou côté Python
+  ci-dessous.
+- **`JobFinder/python/agents/offer_fetching/main.py`** : nouvelles constantes `PARIS_TZ`
+  (`zoneinfo.ZoneInfo("Europe/Paris")`) et `SCHEDULED_LOCAL_HOURS = (12, 20)`, nouvelle fonction
+  `_is_scheduled_local_hour(now_utc: datetime) -> bool` qui convertit `now_utc` en heure locale
+  parisienne et vérifie l'heure. `main()` calcule désormais `now_utc` en tout début d'exécution et
+  retourne sans exécuter `run_migrations()` (après un `logger.info("offer_fetch_skipped_outside_local_window", ...)`)
+  si le garde-fou renvoie `False`. Docstring de module mise à jour en conséquence.
+- **`JobFinder/python/agents/cleanup/main.py`** : une ligne de docstring corrigée (« 12:00 and
+  20:00 UTC » → « 12:00 and 20:00 Europe/Paris local time »), pur wording — ce fichier référence la
+  cadence de fetch pour justifier sa propre logique de période de grâce, aucun changement de
+  logique.
+- **`JobFinder/python/requirements.txt`** : ajout de `tzdata`, avec un commentaire expliquant que
+  `zoneinfo` (stdlib) a besoin de la base IANA pour résoudre `"Europe/Paris"`, absente de l'image
+  `python:3.12-slim` utilisée par ces agents — confirmée absente en local et sur l'image de
+  déploiement, ce qui aurait levé `ZoneInfoNotFoundError` à l'import en production sans ce paquet.
+- **`JobFinder/python/tests/test_offer_fetching.py`** : nouvelles `TestIsScheduledLocalHour`
+  (paramétrée sur une date en juillet/CEST et une date en janvier/CET, couvrant les 4 heures UTC
+  déclenchées côté Terraform) et `TestMainSchedulingGuard` (vérifie que `main()` s'arrête avant
+  `run_migrations()`/`_get_active_rome_codes()` quand le garde-fou renvoie `False`, et poursuit
+  quand il renvoie `True`).
+- **`JobFinder/frontend/app/_components/LibrarySection.tsx`** : le sous-titre sous le titre
+  « Bibliothèque » passe de « Sélectionnez un CV pour visualiser ses correspondances. » à
+  « De nouvelles offres sont recherchées chaque jour à 12h et 20h pour chacun de vos CVs. » —
+  informe les utilisateurs de la cadence de rafraîchissement fixée ci-dessus, remplace une ligne
+  purement instructionnelle.
+
+### Décisions techniques
+
+- **Déclenchement Terraform 4×/jour, exécution effective 2×/jour** : en l'absence de support
+  timezone/DST côté Azure Container Apps, le seul moyen d'obtenir un comportement correct toute
+  l'année sans intervention manuelle à chaque changement d'heure est de déclencher le job à toutes
+  les heures UTC candidates et de laisser le code Python trancher dynamiquement laquelle
+  correspond réellement à l'heure française courante. Alternative rejetée : ajuster
+  `cron_expression` deux fois par an au changement d'heure — écartée pour ne pas dépendre d'une
+  intervention manuelle récurrente.
+
+**Vérification :** Les trois reviewers sont passés : `reviewer-infra` sur `container_apps.tf`
+(APPROUVÉ, une remarque non-bloquante : le passage de 2×/jour à 4×/jour de déclenchement
+augmente marginalement le coût de cold-start, à surveiller, non corrigé), `reviewer-backend` sur
+les 4 fichiers Python (APPROUVÉ, une remarque non-bloquante : les nouvelles méthodes de test
+n'ont pas d'annotation de retour `-> None`, mais c'est un motif préexistant sur la majorité de la
+suite de tests, pas une régression), `reviewer-frontend` sur `LibrarySection.tsx` (APPROUVÉ, une
+remarque cosmétique non-bloquante sur « 12h »/« 20h » vs espace insécable selon la typographie
+française formelle — non traitée, aucune convention établie dans le code sur ce point). Suite
+Python complète verte (248/248, `python -m pytest`), `terraform fmt -check`/`terraform validate`
+propres sur `envs/dev`. Côté frontend : `tsc --noEmit` propre, ESLint propre, suite Jest complète
+verte (124 tests).
