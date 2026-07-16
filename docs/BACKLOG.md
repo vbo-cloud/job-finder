@@ -947,3 +947,19 @@ d'API plus récente change la forme attendue de `body`, et envisager un commenta
 programmée plutôt qu'une automatisation — pas de mécanisme de lock de version côté azapi à ce jour.
 
 **Fichiers :** `JobFinder/Terraform/envs/dev/frontend.tf`.
+
+---
+
+## Retour visuel du bouton d'analyse + crédits optimistes (feature/offer-analysis-ux-improvements, PR #199) — suites identifiées en review
+
+### [optional] Extraire `requestAnalysis`/le polling d'analyse de `CorrespondancesPanel.tsx` en hook dédié
+`CorrespondancesPanel.tsx` a atteint ~357 lignes et mélange plusieurs préoccupations (filtrage/
+recherche, pagination offres, pagination sauvegardées, réconciliation `seenIds` — déjà notée
+ci-dessus pour PR #157 — et maintenant la réservation optimiste de crédit + le polling de
+`match_analyses`), au-delà du seuil d'une responsabilité par composant du skill
+`conventions-frontend`. `requestAnalysis` et le polling associé (déclenchement, réservation/
+libération optimiste du crédit, cycle `pending`/`done`/`error`) formeraient un hook autonome et
+testable indépendamment (ex. `useMatchAnalysisRequest(cvId, onCreditChange)`), dans la continuité
+du hook de réconciliation `seenIds` déjà identifié comme candidat pour ce même fichier.
+
+**Fichiers :** `JobFinder/frontend/app/_components/CorrespondancesPanel.tsx`.
