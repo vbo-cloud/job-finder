@@ -5600,3 +5600,95 @@ française formelle — non traitée, aucune convention établie dans le code su
 Python complète verte (248/248, `python -m pytest`), `terraform fmt -check`/`terraform validate`
 propres sur `envs/dev`. Côté frontend : `tsc --noEmit` propre, ESLint propre, suite Jest complète
 verte (124 tests).
+
+---
+
+## PR #201 — refactor: remplacer les badges de compétences France Travail par une extraction IA cachée
+
+**Date :** 2026-07-12
+**Branche :** `feature/badges-competences-ia` → `dev`
+
+### Contexte
+
+Les badges de compétences affichés sur chaque offre venaient de `Offer.skills`, le champ brut
+`libelle` de l'API France Travail — le plus souvent vide ou hors-sujet par rapport au poste réel.
+Spec détaillée dans `docs/prompts/prompt-badges-competences-ia.md` : remplacer cet affichage par
+une extraction IA des compétences techniques essentielles, mise en cache une fois par offre plutôt
+que recalculée à chaque analyse, puis comparée au CV de chaque candidat par l'agent `match_analysis`
+existant (pas de nouvel agent).
+
+### Ce qui a été fait
+
+**Migration 029 + `shared/models.py` :** nouvelle colonne `Offer.key_skills` (`ARRAY(String)`,
+nullable). `NULL` = pas encore extrait, `[]` = extrait sans compétence essentielle identifiée —
+distinction volontaire pour ne jamais confondre « en attente » et « rien à afficher ».
+
+**`agents/offer_fetching/main.py` :** `_upsert_offers` étend l'invalidation existante basée sur
+`ft_updated_at` — la condition `offer_changed` (déjà utilisée pour remettre `embedding` à `NULL`
+quand France Travail modifie une offre déjà stockée) est désormais partagée par `key_skills`, via
+un second `case()` sur la même condition plutôt qu'un mécanisme parallèle.
+
+**`agents/match_analysis/main.py` (rework significatif) :** deux variantes du bloc « compétences
+clés » du prompt système, sélectionnées par `_build_system_prompt` selon que `Offer.key_skills` est
+déjà en cache ou non — `KEY_SKILLS_INSTRUCTIONS_EXTRACT` (le modèle invente jusqu'à
+`MAX_KEY_SKILLS = 10` noms à partir du titre/de la description) ou
+`KEY_SKILLS_INSTRUCTIONS_MATCH_ONLY` (le modèle réutilise une liste déjà figée, fournie dans le
+message utilisateur, sans la modifier). Le champ `matched_skills` a disparu du schéma JSON attendu
+du modèle — il est désormais dérivé en code par `_parse_key_skills` à partir des entrées
+`key_skills` marquées `matched: true`, avec rejet défensif des noms hors liste sur la branche
+« match-only » (traité comme une hallucination, loggé, jamais persisté). `_analyze_match` et
+`_parse_analysis_payload` retournent maintenant un tuple `(analysis_fields, new_offer_key_skills)` ;
+`new_offer_key_skills` n'est non-`None` que sur la branche extraction, et
+`_persist_offer_key_skills` l'écrit une seule fois sur l'offre, gardé par `Offer.key_skills.is_(None)`
+pour rester sûr même si deux analyses de la même offre partent en parallèle (répliques concurrentes
+du Container App Job). `_get_match_context` remonte désormais `offer_id` et `offer_key_skills` (au
+lieu de `offer_skills`, qui n'est plus lu par cet agent).
+
+**Backend — API webapp :** `OfferOut.key_skills: list[str] | None = None` (`agents/webapp/schemas.py`).
+
+**Frontend :** `types.ts` reflète `key_skills: string[] | null`. `MatchItem.tsx` : le bloc de badges
+bruts France Travail et la ligne de prose « Compétences requises » sont retirés ; le bloc de badges
+IA itère désormais `offer.key_skills` (aucun plafond côté frontend — déjà borné à 10 côté serveur),
+vert si le nom figure dans `match.analysis.matched_skills`, gris sinon. `MatchAnalysisPanel.tsx` :
+bloc de badges dupliqué (`offerSkills`) et prop associée retirés entièrement.
+
+**Tests :** `test_match_analysis.py` largement réécrit (les deux branches de `_parse_key_skills`,
+clamp à `MAX_KEY_SKILLS`, rejet des noms hors liste cachée, items malformés ignorés,
+`_persist_offer_key_skills` gardé par `is_(None)`, choix du prompt selon `offer_key_skills`).
+`test_offer_fetching.py` : nouveau test vérifiant que `embedding` et `key_skills` partagent la même
+condition SQL `ft_updated_at` plutôt qu'un mécanisme dupliqué. Côté frontend, `MatchItem.test.tsx`
+couvre l'absence de plafond sur `offer.key_skills`, l'absence de badge quand `key_skills` est `null`
+(offre jamais analysée) et quand aucune analyse n'existe encore malgré un cache déjà rempli ;
+`CVDetailSection.test.tsx`, `CorrespondancesPanel.test.tsx` et `MatchList.test.tsx` ont chacun reçu
+le champ `key_skills: null` dans leurs fixtures d'offre.
+
+### Décisions techniques
+
+- **`Offer.skills` (champ brut France Travail) et sa colonne DB conservés tels quels** : seuls son
+  affichage et son usage dans le prompt de `match_analysis` sont retirés, conformément à la spec —
+  pas de suppression de colonne, pas de migration de nettoyage.
+- **Extraction bornée aux 4000 premiers caractères de la description** (`OFFER_TEXT_MAX_CHARS`,
+  plafond préexistant, inchangé) : une compétence mentionnée seulement au-delà de cette limite est
+  invisible pour le modèle et ne peut jamais être extraite — ce n'était qu'un compromis de qualité
+  de synthèse avant l'existence de `key_skills`, c'est désormais une contrainte dure sur ce que
+  l'extraction peut voir. Un commentaire a été ajouté sur la constante dans `main.py` pour rendre ce
+  risque explicite plutôt que de le laisser implicite dans le code.
+- **Pas de recalcul rétroactif des analyses existantes** : `MatchAnalysis` n'est jamais recalculée
+  pour une paire CV↔offre déjà analysée (règle métier préexistante, inchangée). Conséquence pour
+  cette PR : une offre dont `key_skills` se peuple via l'analyse d'un premier CV garde, pour les
+  analyses plus anciennes de cette même offre, un `matched_skills` calculé sous l'ancien schéma
+  libre — ces analyses peuvent afficher moins de badges verts qu'une analyse fraîche, jusqu'à ce que
+  l'utilisateur en redéclenche une. Ce n'est pas un bug, c'est la conséquence assumée de la règle
+  « jamais de recalcul automatique » déjà en place.
+
+**Vérification :** suite Python complète verte (45/45, `pytest tests/test_match_analysis.py
+tests/test_offer_fetching.py`), suite Jest complète verte (64/64 sur les fichiers touchés),
+`tsc --noEmit` propre côté frontend. `reviewer-infra` sur la migration 029 (APPROUVÉ, aucune
+remarque), `reviewer-frontend` sur `MatchItem.tsx`/`MatchAnalysisPanel.tsx`/`types.ts` (APPROUVÉ,
+une remarque non-bloquante sur la comparaison par égalité de chaîne entre `offer.key_skills` et
+`match.analysis.matched_skills` — déjà couverte défensivement par le rejet des noms hors liste dans
+`_parse_key_skills`, aucune action requise), `reviewer-backend` sur les 4 fichiers Python — un
+premier passage a retourné CHANGEMENTS REQUIS (`_build_upsert_statement` sans annotation de type de
+retour, seule fonction introduite par cette PR à en manquer), corrigé et re-vérifié APPROUVÉ. Le
+numéro de PR de cette entrée a également été corrigé de #200 à #201 après vérification via
+`gh pr list` — #200 était déjà pris par une autre branche mergée entretemps.
