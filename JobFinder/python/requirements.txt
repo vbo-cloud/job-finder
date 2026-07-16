@@ -13,3 +13,6 @@ pypdfium2
 python-dotenv
 requests
 structlog
+# zoneinfo (stdlib) needs the IANA tz database to resolve "Europe/Paris" — missing on
+# python:3.12-slim, which these agents deploy from (agents/offer_fetching/main.py).
+tzdata

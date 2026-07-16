@@ -1,7 +1,7 @@
 """Tests for agents/offer_fetching/main.py.
 
 Covers: _parse_experience_min_years, _upsert_offers (values wiring),
-_embed_pending_offers, _dispatch_start_matching.
+_embed_pending_offers, _dispatch_start_matching, _is_scheduled_local_hour.
 
 The module is loaded via importlib under the unique name 'offer_fetching_main'
 to avoid sys.modules collision with the other agents' main.py. The
@@ -11,6 +11,7 @@ offer_fetching directory is added to sys.path first so the module's plain
 import importlib.util
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -31,6 +32,7 @@ _parse_experience_min_years = _mod._parse_experience_min_years
 _upsert_offers = _mod._upsert_offers
 _embed_pending_offers = _mod._embed_pending_offers
 _dispatch_start_matching = _mod._dispatch_start_matching
+_is_scheduled_local_hour = _mod._is_scheduled_local_hour
 
 
 def _session_cm(session: MagicMock):
@@ -182,3 +184,74 @@ class TestDispatchStartMatching:
         mocker.patch.object(_mod, "send_message", side_effect=_mod.ServiceBusError("boom"))
 
         _dispatch_start_matching("2026-07-10", [], 0, 1)
+
+
+# ---------------------------------------------------------------------------
+# _is_scheduled_local_hour
+# ---------------------------------------------------------------------------
+
+
+class TestIsScheduledLocalHour:
+    @pytest.mark.parametrize(
+        ("utc_hour", "expected"),
+        [
+            (10, True),   # CEST (UTC+2): 10:00 UTC -> 12:00 Europe/Paris
+            (18, True),   # CEST (UTC+2): 18:00 UTC -> 20:00 Europe/Paris
+            (11, False),  # CEST: would be 13:00 local -- the CET-only firing
+            (19, False),  # CEST: would be 21:00 local -- the CET-only firing
+        ],
+    )
+    def test_matches_cest_offset_in_july(self, utc_hour: int, expected: bool):
+        # 2026-07-16 falls under CEST (Europe/Paris observes DST from late March to
+        # late October) -- UTC+2.
+        now_utc = datetime(2026, 7, 16, utc_hour, 0, tzinfo=timezone.utc)
+        assert _is_scheduled_local_hour(now_utc) is expected
+
+    @pytest.mark.parametrize(
+        ("utc_hour", "expected"),
+        [
+            (11, True),   # CET (UTC+1): 11:00 UTC -> 12:00 Europe/Paris
+            (19, True),   # CET (UTC+1): 19:00 UTC -> 20:00 Europe/Paris
+            (10, False),  # CET: would be 11:00 local -- the CEST-only firing
+            (18, False),  # CET: would be 19:00 local -- the CEST-only firing
+        ],
+    )
+    def test_matches_cet_offset_in_january(self, utc_hour: int, expected: bool):
+        # 2026-01-16 falls outside the DST window -- UTC+1.
+        now_utc = datetime(2026, 1, 16, utc_hour, 0, tzinfo=timezone.utc)
+        assert _is_scheduled_local_hour(now_utc) is expected
+
+    def test_rejects_an_hour_outside_any_terraform_trigger(self):
+        now_utc = datetime(2026, 7, 16, 3, 0, tzinfo=timezone.utc)
+        assert _is_scheduled_local_hour(now_utc) is False
+
+
+# ---------------------------------------------------------------------------
+# main() — scheduling guard
+# ---------------------------------------------------------------------------
+
+
+class TestMainSchedulingGuard:
+    def test_skips_entirely_outside_scheduled_local_hour(self, mocker):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=False)
+        mock_run_migrations = mocker.patch.object(_mod, "run_migrations")
+        mock_get_rome_codes = mocker.patch.object(_mod, "_get_active_rome_codes")
+
+        _mod.main()
+
+        mock_run_migrations.assert_not_called()
+        mock_get_rome_codes.assert_not_called()
+
+    def test_proceeds_when_within_scheduled_local_hour(self, mocker):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=True)
+        mock_run_migrations = mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "_get_active_rome_codes", return_value=[])
+        mocker.patch.object(_mod, "get_access_token", return_value="token")
+        mock_embed = mocker.patch.object(_mod, "_embed_pending_offers", return_value=0)
+
+        _mod.main()
+
+        mock_run_migrations.assert_called_once()
+        mock_embed.assert_called_once()

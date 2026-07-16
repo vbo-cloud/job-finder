@@ -1,8 +1,14 @@
 """Offer fetching agent — fetch, upsert, and embed job offers from France Travail.
 
-Runs as a Container App Job on a timer trigger (12:00 and 20:00 UTC). Fetch +
-upsert, then embed directly: offers with a NULL embedding (new offers, or
-existing ones invalidated by a more recent ft_updated_at) are embedded on
+Runs as a Container App Job on a timer trigger, meant to actually execute at
+12:00 and 20:00 Europe/Paris local time. Azure Container Apps' schedule trigger
+only supports a UTC cron_expression with no timezone/DST awareness, so
+Terraform fires this job at every UTC hour that could map to a target local
+hour under either CET or CEST (see container_apps.tf) and main() no-ops the
+firings that don't match the current DST state — see _is_scheduled_local_hour.
+
+Fetch + upsert, then embed directly: offers with a NULL embedding (new offers,
+or existing ones invalidated by a more recent ft_updated_at) are embedded on
 their raw title+description text via shared.embedder.embed(), one batched
 call for the whole pending set (embed() already batches internally by 100 —
 no LLM distillation call per offer, so this stays fast even for thousands of
@@ -22,6 +28,7 @@ Expected environment variables:
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import structlog
 from azure.servicebus.exceptions import ServiceBusError
@@ -40,6 +47,10 @@ from shared.telemetry import configure_telemetry
 
 FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
 START_MATCHING_QUEUE = "start-matching"
+PARIS_TZ = ZoneInfo("Europe/Paris")
+# Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
+# for job_offer_fetching — see _is_scheduled_local_hour.
+SCHEDULED_LOCAL_HOURS = (12, 20)
 
 # Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
 # "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
@@ -305,9 +316,38 @@ def _dispatch_start_matching(run_date: str, rome_codes: list[str], new_offers_co
         logger.error("offer_fetching_start_matching_failed", run_date=run_date, exc_info=True)
 
 
+def _is_scheduled_local_hour(now_utc: datetime) -> bool:
+    """Check whether now_utc falls on one of this job's intended Europe/Paris run hours.
+
+    Azure Container Apps' schedule trigger only supports a UTC cron_expression, with
+    no timezone or DST awareness. Terraform's cron_expression for job_offer_fetching
+    therefore fires at every UTC hour that could map to SCHEDULED_LOCAL_HOURS under
+    either CET (UTC+1) or CEST (UTC+2) — this guard picks out the two firings that are
+    actually correct for the current DST state, so main() can no-op the other two.
+    That keeps the schedule correct across DST transitions without a manual Terraform
+    change twice a year.
+
+    Args:
+        now_utc: Current time, timezone-aware in UTC.
+
+    Returns:
+        True if now_utc's Europe/Paris local hour is one of SCHEDULED_LOCAL_HOURS.
+    """
+    return now_utc.astimezone(PARIS_TZ).hour in SCHEDULED_LOCAL_HOURS
+
+
 def main() -> None:
-    """Run the offer-fetch job: fetch, upsert, embed pending offers, and trigger matching."""
+    """Run the offer-fetch job: fetch, upsert, embed pending offers, and trigger matching.
+
+    No-ops outside SCHEDULED_LOCAL_HOURS in Europe/Paris local time — see
+    _is_scheduled_local_hour.
+    """
     configure_telemetry("offer-fetching")
+
+    now_utc = datetime.now(timezone.utc)
+    if not _is_scheduled_local_hour(now_utc):
+        logger.info("offer_fetch_skipped_outside_local_window", utc_hour=now_utc.hour)
+        return
 
     try:
         run_migrations()
