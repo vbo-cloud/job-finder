@@ -33,7 +33,8 @@ function SummarySection({ title, text }: { title: string; text: string | null })
 
 /** "Review de l'agent" column of an expanded MatchItem — pair analysis states. */
 export default function MatchAnalysisPanel({ analysis, analysisPending, analysisError, onAnalyze }: Props) {
-  const inProgress = analysisPending || analysis?.status === "processing";
+  const inProgress =
+    analysisPending || analysis?.status === "processing" || analysis?.status === "pending";
 
   return (
     <div className="rounded-xl border border-faint bg-chip p-[18px]">

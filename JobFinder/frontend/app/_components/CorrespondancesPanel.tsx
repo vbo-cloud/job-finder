@@ -62,6 +62,29 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [analysisOverrides, setAnalysisOverrides] = useState(new Map<string, MatchAnalysisOut>());
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
+  // Seed the polling set with any offer whose analysis is already pending or
+  // processing when `matches` (re)loads — covers analyses enqueued server-side
+  // (auto top-N on match creation) that the user never clicked here. Without
+  // this, those rows only ever show up as "not analyzed" (no spinner, no
+  // polling) until something else happens to refetch `matches`.
+  useEffect(() => {
+    const inFlight = matches
+      .filter((m) => m.analysis?.status === "pending" || m.analysis?.status === "processing")
+      .map((m) => m.offer.id);
+    if (inFlight.length === 0) return;
+    setAnalysisPending((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of inFlight) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [matches]);
+
   useEffect(() => {
     if (analysisPending.size === 0) return;
     const timer = setInterval(() => {

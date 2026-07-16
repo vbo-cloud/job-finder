@@ -100,7 +100,8 @@ export default function MatchItem({
   onSelect, onSave, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
-  const inProgress = analysisPending || match.analysis?.status === "processing";
+  const inProgress =
+    analysisPending || match.analysis?.status === "processing" || match.analysis?.status === "pending";
   const pct = Math.round(match.score * 100);
   const { color, barBg, golden } = scoreTheme(pct);
   const { city, dept } = parseLocation(offer.location);
