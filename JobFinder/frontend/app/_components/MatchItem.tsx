@@ -202,23 +202,19 @@ export default function MatchItem({
 
           <p className="text-[12.5px] text-secondary">{meta}</p>
 
-          {(match.analysis?.matched_skills.length ?? 0) > 0 && (
+          {offer.key_skills && offer.key_skills.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {match.analysis!.matched_skills.slice(0, 3).map((s) => (
-                <span key={s} className="inline-flex items-center gap-[5px] text-[11.5px] font-semibold px-[9px] py-1 rounded-[6px] bg-match-skill text-match-skill">
-                  <span className="font-bold">✓</span>{s}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {offer.skills.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {offer.skills.slice(0, 5).map((s) => (
-                <span key={s} className="text-[11.5px] font-medium px-[9px] py-1 rounded-[6px] bg-overlay text-muted">
-                  {s}
-                </span>
-              ))}
+              {offer.key_skills.map((s) =>
+                match.analysis?.matched_skills.includes(s) ? (
+                  <span key={s} className="inline-flex items-center gap-[5px] text-[11.5px] font-semibold px-[9px] py-1 rounded-[6px] bg-match-skill text-match-skill">
+                    <span className="font-bold">✓</span>{s}
+                  </span>
+                ) : (
+                  <span key={s} className="text-[11.5px] font-medium px-[9px] py-1 rounded-[6px] bg-overlay text-muted">
+                    {s}
+                  </span>
+                )
+              )}
             </div>
           )}
 
@@ -271,12 +267,6 @@ export default function MatchItem({
                 <span className="text-success flex-none pt-px">•</span>
                 <span>Poste en {offer.contract_type}, basé à {city}{dept ? ` (${dept})` : ""}.</span>
               </div>
-              {offer.skills.length > 0 && (
-                <div className="flex gap-[9px]">
-                  <span className="text-success flex-none pt-px">•</span>
-                  <span>Compétences requises : {offer.skills.slice(0, 3).join(", ")}.</span>
-                </div>
-              )}
             </div>
             {offer.description && (
               <p className="mt-4 text-[12.5px] text-body leading-relaxed whitespace-pre-line">
@@ -319,7 +309,6 @@ export default function MatchItem({
             analysisPending={analysisPending}
             analysisError={analysisError}
             onAnalyze={onAnalyze}
-            offerSkills={offer.skills}
           />
         </div>
       )}
