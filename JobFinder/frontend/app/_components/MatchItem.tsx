@@ -100,7 +100,13 @@ export default function MatchItem({
   onSelect, onSave, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
-  const inProgress = analysisPending || match.analysis?.status === "processing";
+  // "pending" means a match_analyses row exists but no worker has claimed it yet
+  // (auto top-N on match creation, or a manual request not yet dequeued) — it must
+  // read as in-progress just like "processing", or the spinner never shows and the
+  // analyze button stays clickable, letting the user burn a second credit re-triggering
+  // an analysis that's already queued.
+  const inProgress =
+    analysisPending || match.analysis?.status === "processing" || match.analysis?.status === "pending";
   const pct = Math.round(match.score * 100);
   const { color, barBg, golden } = scoreTheme(pct);
   const { city, dept } = parseLocation(offer.location);

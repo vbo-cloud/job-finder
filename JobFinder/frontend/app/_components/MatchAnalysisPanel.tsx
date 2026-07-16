@@ -33,7 +33,12 @@ function SummarySection({ title, text }: { title: string; text: string | null })
 
 /** "Review de l'agent" column of an expanded MatchItem — pair analysis states. */
 export default function MatchAnalysisPanel({ analysis, analysisPending, analysisError, onAnalyze }: Props) {
-  const inProgress = analysisPending || analysis?.status === "processing";
+  // "pending" (queued, not yet claimed by a worker) must count as in-progress here
+  // too, same as MatchItem's compact teaser — otherwise this panel would render the
+  // "Analyser cette offre" button for a row that's already been enqueued (e.g. via
+  // the server-side auto top-N on match creation), letting the user re-trigger it.
+  const inProgress =
+    analysisPending || analysis?.status === "processing" || analysis?.status === "pending";
 
   return (
     <div className="rounded-xl border border-faint bg-chip p-[18px]">
