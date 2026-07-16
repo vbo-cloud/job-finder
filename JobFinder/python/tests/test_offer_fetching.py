@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 _OFFER_FETCHING_DIR = Path(__file__).parent.parent / "agents" / "offer_fetching"
 if str(_OFFER_FETCHING_DIR) not in sys.path:
@@ -114,6 +115,42 @@ class TestUpsertOffersValues:
         assert values[0]["experience_min_years"] == 5
         assert values[0]["skills"] == ["Cloud computing"]
         mock_session.commit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _upsert_offers — offer-change invalidation (embedding + key_skills)
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertOffersInvalidation:
+    def test_embedding_and_key_skills_share_the_same_ft_updated_at_case(self, mocker):
+        # pg_insert is intentionally NOT mocked here (unlike TestUpsertOffersValues)
+        # so the real on_conflict_do_update statement gets built and can be
+        # compiled to SQL — the only way to assert that key_skills rides the
+        # existing ft_updated_at invalidation instead of a parallel mechanism.
+        mock_session = MagicMock()
+        mock_session.execute.return_value = []
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _upsert_offers(
+            [
+                {
+                    "id": "FT-1",
+                    "intitule": "Ingénieur Cloud",
+                    "description": "Déploiement Azure.",
+                    "dateActualisation": "2026-07-10T00:00:00+00:00",
+                }
+            ],
+            "M1805",
+        )
+
+        stmt = mock_session.execute.call_args.args[0]
+        compiled = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "key_skills" in compiled
+        assert "embedding" in compiled
+        # Both columns are driven by their own CASE, each referencing
+        # ft_updated_at — same mechanism, not a duplicated one.
+        assert compiled.count("ft_updated_at") >= 3
 
 
 # ---------------------------------------------------------------------------
