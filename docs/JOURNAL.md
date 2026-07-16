@@ -5693,3 +5693,57 @@ premier passage a retourné CHANGEMENTS REQUIS (`_build_upsert_statement` sans a
 retour, seule fonction introduite par cette PR à en manquer), corrigé et re-vérifié APPROUVÉ. Le
 numéro de PR de cette entrée a également été corrigé de #200 à #201 après vérification via
 `gh pr list` — #200 était déjà pris par une autre branche mergée entretemps.
+
+---
+
+## PR #202 — fix(frontend): traiter le statut "pending" d'une analyse comme en cours
+
+**Date :** 2026-07-17
+**Branche :** `fix/analysis-pending-status-indicator` → `dev`
+
+### Contexte
+
+Bug remonté après le merge du PR #201. Une offre auto-enfilée pour analyse côté serveur
+(auto top-N à la création des matchs) reçoit une ligne `match_analyses` au statut `pending`
+avant qu'un worker ne la prenne en charge et bascule son statut à `processing`. Le frontend
+ne traitait que `processing` comme « en cours » : ces lignes `pending` n'affichaient donc
+aucun spinner et le bouton « Analyser » restait cliquable, ce qui permettait à l'utilisateur
+de relancer une analyse déjà en file et de brûler un second crédit pour rien.
+
+### Ce qui a été fait
+
+**`MatchItem.tsx` et `MatchAnalysisPanel.tsx` :** le calcul local `inProgress` de chacun des
+deux composants inclut désormais `match.analysis?.status === "pending"` en plus de
+`"processing"` (et de `analysisPending`, l'état optimiste côté client). Un commentaire WHY a
+été ajouté à chaque site pour que le contrat reste explicite si quelqu'un retouche cette
+condition plus tard — le bug initial venait précisément de l'hypothèse implicite que
+`processing` seul suffisait.
+
+**`CorrespondancesPanel.tsx` :** nouvel effet qui amorce `analysisPending` (le Set client
+d'offres suivies par le polling de résultat) avec toute offre déjà `pending` ou `processing`
+dès le chargement de `matches`. Avant ce fix, `analysisPending` n'était alimenté que par un
+clic utilisateur sur « Analyser » (`requestAnalysis`) — corriger uniquement l'affichage
+`inProgress` dans `MatchItem`/`MatchAnalysisPanel` n'aurait donc pas suffi : une offre
+auto-enfilée aurait bien montré le spinner au premier rendu (déduit directement de
+`match.analysis.status`), mais rien n'aurait jamais interrogé le serveur pour la faire
+basculer à `done` — elle serait restée bloquée « en cours » jusqu'à ce que le parent
+refetch `matches` pour une autre raison. C'est ce nouvel effet qui referme la boucle.
+
+**Tests :** `MatchItem.test.tsx` — nouveau cas couvrant le statut `pending` (spinner affiché,
+bouton « Analyser » absent), avec le contrat métier explicité en commentaire dans le test
+lui-même. `CorrespondancesPanel.test.tsx` — nouvelle section dédiée couvrant une offre dont
+l'analyse est déjà `pending` au premier chargement de `matches` sans aucun clic utilisateur :
+affichage immédiat de l'état « en cours », et complétion correcte via le polling existant une
+fois l'analyse passée à `done`.
+
+### Décisions techniques
+
+- **Pas de changement de type ni de schéma** : `MatchAnalysisOut.status` incluait déjà
+  `"pending"` dans `lib/api/types.ts` avant cette PR — seule la logique de dérivation
+  `inProgress` dans les deux composants d'affichage était incomplète.
+
+**Vérification :** suite Jest complète verte (130/130, l'ensemble de
+`JobFinder/frontend/__tests__/`, y compris les deux nouveaux cas de régression sur le statut
+`pending`), `tsc --noEmit` propre. `reviewer-frontend` sur les trois fichiers modifiés —
+APPROUVÉ, aucune remarque. Numéro de PR `#202` confirmé via `gh pr list` avant l'ouverture de
+la PR (prochain numéro disponible après #201).
