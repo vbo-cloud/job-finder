@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from azure.servicebus.exceptions import ServiceBusError
 from sqlalchemy import case, literal_column, select, text, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.postgresql import Insert, insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from ft_client import fetch_offers, get_access_token
@@ -160,7 +160,7 @@ def _build_offer_values(raw: dict, rome_code: str, now: datetime) -> dict:
     }
 
 
-def _build_upsert_statement(values: list[dict]):
+def _build_upsert_statement(values: list[dict]) -> Insert:
     """Build the on-conflict-do-update statement for a batch of offer values.
 
     embedding and key_skills both ride the same ft_updated_at-based CASE: reset
