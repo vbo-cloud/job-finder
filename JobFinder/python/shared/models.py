@@ -37,6 +37,10 @@ class Offer(Base):
     experience_min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # Technologies essentielles extraites par le LLM (match_analysis), une fois par offre.
+    # NULL = pas encore extrait ; [] = extrait, aucune technologie essentielle identifiée.
+    # Remis à NULL quand France Travail modifie l'offre (voir offer_fetching._upsert_offers).
+    key_skills: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
