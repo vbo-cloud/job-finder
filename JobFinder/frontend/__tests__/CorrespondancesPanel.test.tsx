@@ -34,6 +34,7 @@ function makeMatch(overrides: Partial<MatchOut> = {}): MatchOut {
       salary: null,
       rome_code: null,
       skills: [],
+      key_skills: null,
       expires_at: null,
     },
     ...overrides,

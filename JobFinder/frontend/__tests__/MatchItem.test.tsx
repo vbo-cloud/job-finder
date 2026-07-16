@@ -23,6 +23,7 @@ function makeMatch(
       salary: null,
       rome_code: "M1805",
       skills: [],
+      key_skills: null,
       expires_at: null,
       ...offerOverrides,
     },
@@ -207,21 +208,56 @@ describe("MatchItem", () => {
     });
   });
 
-  describe("matched skills badges (compact view)", () => {
-    it("shows up to 3 matched_skills badges when an analysis is done", () => {
+  describe("key skills badges (compact view)", () => {
+    it("shows every offer.key_skills badge, with no frontend cap", () => {
       render(
-        <MatchItem {...makeProps({ match: makeMatch(0.85, {}, makeAnalysis()) })} />
+        <MatchItem {...makeProps({
+          match: makeMatch(0.85, {
+            key_skills: ["Python", "Docker", "Azure", "Terraform", "Kubernetes"],
+          }, makeAnalysis()),
+        })} />
       );
       expect(screen.getByText("Python")).toBeInTheDocument();
       expect(screen.getByText("Docker")).toBeInTheDocument();
       expect(screen.getByText("Azure")).toBeInTheDocument();
-      // 4th skill is cut by the slice(0, 3)
-      expect(screen.queryByText("Terraform")).not.toBeInTheDocument();
+      expect(screen.getByText("Terraform")).toBeInTheDocument();
+      expect(screen.getByText("Kubernetes")).toBeInTheDocument();
     });
 
-    it("shows no badge when there is no analysis", () => {
-      render(<MatchItem {...makeProps()} />);
+    it("colors a key skill green when it is in matched_skills, grey otherwise", () => {
+      render(
+        <MatchItem {...makeProps({
+          match: makeMatch(0.85, { key_skills: ["Python", "Kubernetes"] }, makeAnalysis({
+            matched_skills: ["Python"],
+          })),
+        })} />
+      );
+      expect(screen.getByText("Python")).toHaveClass("bg-match-skill", "text-match-skill");
+      expect(screen.getByText("Kubernetes")).toHaveClass("bg-overlay", "text-muted");
+    });
+
+    it("shows no badge when offer.key_skills is null (never analyzed)", () => {
+      render(<MatchItem {...makeProps({ match: makeMatch(0.85, { key_skills: null }) })} />);
       expect(screen.queryByText("Python")).not.toBeInTheDocument();
+    });
+
+    it("shows no badge when there is no analysis, even with key_skills cached", () => {
+      render(<MatchItem {...makeProps({ match: makeMatch(0.85, { key_skills: ["Python"] }) })} />);
+      // no matched_skills to color against, but the badge still renders grey — the
+      // point of this test is that the compact view never crashes without an analysis
+      expect(screen.getByText("Python")).toHaveClass("bg-overlay");
+    });
+
+    it("never renders a raw France Travail skills badge", () => {
+      render(
+        <MatchItem {...makeProps({
+          match: makeMatch(0.85, {
+            skills: ["Legacy FT skill"],
+            key_skills: ["Python"],
+          }, makeAnalysis({ matched_skills: [] })),
+        })} />
+      );
+      expect(screen.queryByText("Legacy FT skill")).not.toBeInTheDocument();
     });
   });
 

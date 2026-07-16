@@ -50,6 +50,10 @@ export interface OfferOut {
   salary: string | null;
   rome_code: string | null;
   skills: string[];
+  /** Essential technologies extracted by the match_analysis LLM, cached once per
+   * offer. null = not yet extracted (no analysis has run on this offer yet);
+   * [] = extracted, no essential technology identified. */
+  key_skills: string[] | null;
   expires_at: string | null;
 }
 

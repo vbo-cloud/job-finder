@@ -48,6 +48,7 @@ function makeMatch(id: string): MatchOut {
       salary: null,
       rome_code: null,
       skills: [],
+      key_skills: null,
       expires_at: null,
     },
   };

@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from azure.servicebus.exceptions import ServiceBusError
 from sqlalchemy import case, literal_column, select, text, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.postgresql import Insert, insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from ft_client import fetch_offers, get_access_token
@@ -124,13 +124,93 @@ def _get_active_rome_codes() -> list[str]:
     return codes
 
 
+def _build_offer_values(raw: dict, rome_code: str, now: datetime) -> dict:
+    """Map one raw France Travail offer dict onto the offers table's insert columns.
+
+    Args:
+        raw: Raw offer dict from the France Travail API.
+        rome_code: The ROME code this offer was fetched for.
+        now: Timestamp to record as collected_at for this batch.
+
+    Returns:
+        dict of column name -> value, ready for a bulk insert.
+    """
+    raw_ft_updated_at = raw.get("dateActualisation")
+    ft_updated_at = datetime.fromisoformat(raw_ft_updated_at) if raw_ft_updated_at else None
+    libelle = raw.get("lieuTravail", {}).get("libelle", "Non renseigné")
+    return {
+        "id": uuid.uuid4(),
+        "ft_id": raw["id"],
+        "title": raw["intitule"],
+        "company": raw.get("entreprise", {}).get("nom", "Non renseigné"),
+        "location": libelle,
+        "commune": raw.get("lieuTravail", {}).get("commune"),
+        "department": parse_department_from_location(libelle),
+        "region": parse_region_from_location(libelle),
+        "latitude": raw.get("lieuTravail", {}).get("latitude"),
+        "longitude": raw.get("lieuTravail", {}).get("longitude"),
+        "contract_type": raw.get("typeContratLibelle", "Non renseigné"),
+        "salary": raw.get("salaire", {}).get("libelle"),
+        "experience_min_years": _parse_experience_min_years(raw.get("experienceLibelle")),
+        "description": raw.get("description", ""),
+        "skills": [c["libelle"] for c in raw.get("competences", [])],
+        "rome_code": rome_code,
+        "collected_at": now,
+        "ft_updated_at": ft_updated_at,
+    }
+
+
+def _build_upsert_statement(values: list[dict]) -> Insert:
+    """Build the on-conflict-do-update statement for a batch of offer values.
+
+    embedding and key_skills both ride the same ft_updated_at-based CASE: reset
+    to NULL only when the incoming offer is strictly newer than what's stored
+    (or the stored value is NULL, which covers migrated rows) — this avoids
+    invalidating either for unchanged offers. key_skills is a cache populated
+    later by match_analysis; NULL is what makes it re-extract instead of
+    matching against a stale list.
+
+    Args:
+        values: Column dicts as returned by _build_offer_values.
+
+    Returns:
+        The upsert statement, with a RETURNING clause flagging inserted rows.
+    """
+    insert_stmt = pg_insert(Offer).values(values)
+    offer_changed = insert_stmt.excluded.ft_updated_at.isnot(None) & (
+        Offer.ft_updated_at.is_(None)
+        | (insert_stmt.excluded.ft_updated_at > Offer.ft_updated_at)
+    )
+    return insert_stmt.on_conflict_do_update(
+        constraint="uq_offers_ft_id",
+        set_={
+            "title": insert_stmt.excluded.title,
+            "company": insert_stmt.excluded.company,
+            "location": insert_stmt.excluded.location,
+            "commune": insert_stmt.excluded.commune,
+            "department": insert_stmt.excluded.department,
+            "region": insert_stmt.excluded.region,
+            "latitude": insert_stmt.excluded.latitude,
+            "longitude": insert_stmt.excluded.longitude,
+            "contract_type": insert_stmt.excluded.contract_type,
+            "salary": insert_stmt.excluded.salary,
+            "experience_min_years": insert_stmt.excluded.experience_min_years,
+            "description": insert_stmt.excluded.description,
+            "skills": insert_stmt.excluded.skills,
+            "rome_code": insert_stmt.excluded.rome_code,
+            "collected_at": insert_stmt.excluded.collected_at,
+            "ft_updated_at": insert_stmt.excluded.ft_updated_at,
+            "embedding": case((offer_changed, None), else_=Offer.embedding),
+            "key_skills": case((offer_changed, None), else_=Offer.key_skills),
+        },
+    ).returning((literal_column("xmax") == 0).label("inserted"))
+
+
 def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     """Upsert raw API offers into the offers table.
 
-    On conflict (ft_id), updates all mutable fields except created_at.
-    The embedding is reset to NULL only when the incoming ft_updated_at is
-    more recent than the stored value (or when the stored value is NULL, which
-    covers migrated rows). This avoids invalidating embeddings for unchanged offers.
+    On conflict (ft_id), updates all mutable fields except created_at — see
+    _build_upsert_statement for the embedding/key_skills invalidation rule.
 
     Args:
         raw_offers: Raw offer dicts from the France Travail API.
@@ -155,71 +235,11 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     raw_offers = unique_offers
 
     now = datetime.now(timezone.utc)
-    values = []
-    for raw in raw_offers:
-        raw_ft_updated_at = raw.get("dateActualisation")
-        ft_updated_at = (
-            datetime.fromisoformat(raw_ft_updated_at) if raw_ft_updated_at else None
-        )
-        libelle = raw.get("lieuTravail", {}).get("libelle", "Non renseigné")
-        values.append({
-            "id": uuid.uuid4(),
-            "ft_id": raw["id"],
-            "title": raw["intitule"],
-            "company": raw.get("entreprise", {}).get("nom", "Non renseigné"),
-            "location": libelle,
-            "commune": raw.get("lieuTravail", {}).get("commune"),
-            "department": parse_department_from_location(libelle),
-            "region": parse_region_from_location(libelle),
-            "latitude": raw.get("lieuTravail", {}).get("latitude"),
-            "longitude": raw.get("lieuTravail", {}).get("longitude"),
-            "contract_type": raw.get("typeContratLibelle", "Non renseigné"),
-            "salary": raw.get("salaire", {}).get("libelle"),
-            "experience_min_years": _parse_experience_min_years(raw.get("experienceLibelle")),
-            "description": raw.get("description", ""),
-            "skills": [c["libelle"] for c in raw.get("competences", [])],
-            "rome_code": rome_code,
-            "collected_at": now,
-            "ft_updated_at": ft_updated_at,
-        })
+    values = [_build_offer_values(raw, rome_code, now) for raw in raw_offers]
 
     try:
         with get_session() as session:
-            insert_stmt = pg_insert(Offer).values(values)
-            upsert_stmt = insert_stmt.on_conflict_do_update(
-                constraint="uq_offers_ft_id",
-                set_={
-                    "title": insert_stmt.excluded.title,
-                    "company": insert_stmt.excluded.company,
-                    "location": insert_stmt.excluded.location,
-                    "commune": insert_stmt.excluded.commune,
-                    "department": insert_stmt.excluded.department,
-                    "region": insert_stmt.excluded.region,
-                    "latitude": insert_stmt.excluded.latitude,
-                    "longitude": insert_stmt.excluded.longitude,
-                    "contract_type": insert_stmt.excluded.contract_type,
-                    "salary": insert_stmt.excluded.salary,
-                    "experience_min_years": insert_stmt.excluded.experience_min_years,
-                    "description": insert_stmt.excluded.description,
-                    "skills": insert_stmt.excluded.skills,
-                    "rome_code": insert_stmt.excluded.rome_code,
-                    "collected_at": insert_stmt.excluded.collected_at,
-                    "ft_updated_at": insert_stmt.excluded.ft_updated_at,
-                    "embedding": case(
-                        (
-                            insert_stmt.excluded.ft_updated_at.isnot(None)
-                            & (
-                                Offer.ft_updated_at.is_(None)
-                                | (insert_stmt.excluded.ft_updated_at > Offer.ft_updated_at)
-                            ),
-                            None,
-                        ),
-                        else_=Offer.embedding,
-                    ),
-                },
-            ).returning((literal_column("xmax") == 0).label("inserted"))
-
-            result = session.execute(upsert_stmt)
+            result = session.execute(_build_upsert_statement(values))
             new_count = sum(1 for row in result if row.inserted)
             session.commit()
     except SQLAlchemyError:

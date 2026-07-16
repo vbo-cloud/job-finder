@@ -1,6 +1,7 @@
 """Tests for agents/match_analysis/main.py.
 
-Covers: _get_match_context, _analyze_match, _update_match_analysis.
+Covers: _get_match_context, _parse_analysis_payload, _analyze_match,
+_update_match_analysis, _persist_offer_key_skills.
 
 The module is loaded via importlib under the unique name 'match_analysis_main'
 to avoid sys.modules collision with the other agents' main.py.
@@ -24,8 +25,10 @@ sys.modules["match_analysis_main"] = _mod
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 _get_match_context = _mod._get_match_context
+_parse_analysis_payload = _mod._parse_analysis_payload
 _analyze_match = _mod._analyze_match
 _update_match_analysis = _mod._update_match_analysis
+_persist_offer_key_skills = _mod._persist_offer_key_skills
 
 
 def _session_cm(session: MagicMock):
@@ -39,10 +42,11 @@ def _session_cm(session: MagicMock):
 def _make_context(**overrides) -> dict:
     context = {
         "cv_text": "Développeur Python avec 4 ans d'expérience.",
+        "offer_id": "offer-uuid-1",
         "offer_title": "Développeur Python",
         "offer_company": "ACME",
         "offer_description": "Description complète de l'offre.",
-        "offer_skills": ["Python", "Docker"],
+        "offer_key_skills": None,
         "match_score": 0.87,
         "experience_level": "2-5",
         "candidate_description": "Recherche un poste cloud",
@@ -57,13 +61,14 @@ def _make_context(**overrides) -> dict:
 
 
 class TestGetMatchContext:
-    def test_returns_context_when_match_found(self, mocker):
+    def test_returns_context_with_key_skills_none_when_offer_never_analyzed(self, mocker):
         row = MagicMock()
         row.raw_text = "cv text"
+        row.id = "offer-uuid-1"
         row.title = "Développeur Python"
         row.company = "ACME"
         row.description = "Description de l'offre."
-        row.skills = ["Python"]
+        row.key_skills = None
         row.score = 0.87
         row.experience_level = "2-5"
         row.candidate_description = "Recherche cloud"
@@ -75,14 +80,34 @@ class TestGetMatchContext:
 
         assert context == {
             "cv_text": "cv text",
+            "offer_id": "offer-uuid-1",
             "offer_title": "Développeur Python",
             "offer_company": "ACME",
             "offer_description": "Description de l'offre.",
-            "offer_skills": ["Python"],
+            "offer_key_skills": None,
             "match_score": 0.87,
             "experience_level": "2-5",
             "candidate_description": "Recherche cloud",
         }
+
+    def test_returns_cached_key_skills_list_when_offer_already_analyzed(self, mocker):
+        row = MagicMock()
+        row.raw_text = "cv text"
+        row.id = "offer-uuid-1"
+        row.title = "Développeur Python"
+        row.company = "ACME"
+        row.description = "Description de l'offre."
+        row.key_skills = ["Python", "Docker"]
+        row.score = 0.87
+        row.experience_level = "2-5"
+        row.candidate_description = "Recherche cloud"
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = row
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        context = _get_match_context("match-uuid-1")
+
+        assert context["offer_key_skills"] == ["Python", "Docker"]
 
     def test_raises_value_error_when_match_not_found(self, mocker):
         mock_session = MagicMock()
@@ -102,11 +127,82 @@ class TestGetMatchContext:
 
 
 # ---------------------------------------------------------------------------
+# _parse_analysis_payload — the two key_skills branches
+# ---------------------------------------------------------------------------
+
+
+class TestParseAnalysisPayload:
+    def test_extraction_branch_clamps_to_max_and_returns_new_offer_key_skills(self):
+        data = {
+            "key_skills": [
+                {"name": f"Skill{i}", "matched": i % 2 == 0} for i in range(_mod.MAX_KEY_SKILLS + 5)
+            ]
+        }
+
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, None)
+
+        assert new_offer_key_skills == [f"Skill{i}" for i in range(_mod.MAX_KEY_SKILLS)]
+        assert analysis_fields["matched_skills"] == [
+            f"Skill{i}" for i in range(_mod.MAX_KEY_SKILLS) if i % 2 == 0
+        ]
+
+    def test_extraction_branch_returns_empty_list_without_floor_when_model_finds_nothing(self):
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload({"key_skills": []}, None)
+
+        assert new_offer_key_skills == []
+        assert analysis_fields["matched_skills"] == []
+
+    def test_extraction_branch_deduplicates_repeated_names(self):
+        data = {"key_skills": [
+            {"name": "Python", "matched": True},
+            {"name": "Python", "matched": False},
+        ]}
+
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, None)
+
+        assert new_offer_key_skills == ["Python"]
+        assert analysis_fields["matched_skills"] == ["Python"]
+
+    def test_match_only_branch_does_not_touch_offer_cache(self):
+        cached = ["Python", "Docker"]
+        data = {"key_skills": [
+            {"name": "Python", "matched": True},
+            {"name": "Docker", "matched": False},
+        ]}
+
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, cached)
+
+        assert new_offer_key_skills is None
+        assert analysis_fields["matched_skills"] == ["Python"]
+
+    def test_match_only_branch_drops_hallucinated_names_outside_the_cached_list(self):
+        cached = ["Python", "Docker"]
+        data = {"key_skills": [
+            {"name": "Python", "matched": True},
+            {"name": "Kubernetes", "matched": True},  # not in the cached list — invented by the model
+        ]}
+
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, cached)
+
+        assert new_offer_key_skills is None
+        assert analysis_fields["matched_skills"] == ["Python"]
+
+    def test_ignores_malformed_key_skills_items(self):
+        data = {"key_skills": ["not a dict", {"matched": True}, {"name": "  "}, {"name": "Python", "matched": True}]}
+
+        analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, None)
+
+        assert new_offer_key_skills == ["Python"]
+        assert analysis_fields["matched_skills"] == ["Python"]
+
+
+# ---------------------------------------------------------------------------
 # _analyze_match
 # ---------------------------------------------------------------------------
 
 _ANALYSIS_JSON = (
-    '{"matched_skills": ["Python", "Docker"], "points_forts": ["Expérience solide"], '
+    '{"key_skills": [{"name": "Python", "matched": true}, {"name": "Docker", "matched": true}], '
+    '"points_forts": ["Expérience solide"], '
     '"points_amelioration": [{"constat": "Certifications absentes", '
     '"suggestion_concrete": "Passer la certification AZ-104."}], '
     '"synthese": "Profil solide sur les compétences cœur.", '
@@ -128,9 +224,9 @@ class TestAnalyzeMatch:
             _mod._openai_client.chat.completions, "create", return_value=mock_response
         )
 
-        result = _analyze_match(_make_context())
+        analysis_fields, new_offer_key_skills = _analyze_match(_make_context())
 
-        assert result == {
+        assert analysis_fields == {
             "matched_skills": ["Python", "Docker"],
             "points_forts": ["Expérience solide"],
             "points_amelioration": [
@@ -148,6 +244,7 @@ class TestAnalyzeMatch:
             "score_explanation": "Le score de 87% reflète une forte couverture des compétences.",
             "questions_entretien_potentielles": ["Comment gérez-vous les migrations ?"],
         }
+        assert new_offer_key_skills == ["Python", "Docker"]
 
     def test_coerces_partial_points_amelioration_items(self, mocker):
         # An item without constat is dropped; a missing suggestion_concrete is
@@ -164,14 +261,14 @@ class TestAnalyzeMatch:
             _mod._openai_client.chat.completions, "create", return_value=mock_response
         )
 
-        result = _analyze_match(_make_context())
+        analysis_fields, _ = _analyze_match(_make_context())
 
-        assert result["points_amelioration"] == [
+        assert analysis_fields["points_amelioration"] == [
             {"constat": "Certifications absentes", "suggestion_concrete": "Passer AZ-104."},
             {"constat": "Sans suggestion", "suggestion_concrete": None},
         ]
         # An absent synthese stays None (nullable column), never "".
-        assert result["synthese"] is None
+        assert analysis_fields["synthese"] is None
 
     def test_includes_match_score_in_user_content(self, mocker):
         mock_response = MagicMock()
@@ -195,9 +292,9 @@ class TestAnalyzeMatch:
         )
         mocker.patch.object(_mod, "time", MagicMock())
 
-        result = _analyze_match(_make_context())
+        analysis_fields, _ = _analyze_match(_make_context())
 
-        assert result["matched_skills"] == ["Python", "Docker"]
+        assert analysis_fields["matched_skills"] == ["Python", "Docker"]
         assert mock_create.call_count == 2
 
     def test_raises_value_error_after_max_attempts(self, mocker):
@@ -268,6 +365,35 @@ class TestAnalyzeMatch:
         assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
         assert kwargs["seed"] == _mod.ANALYSIS_SEED
 
+    def test_uses_extraction_prompt_when_key_skills_not_cached(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _ANALYSIS_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_match(_make_context(offer_key_skills=None))
+
+        system_prompt = mock_create.call_args.kwargs["messages"][0]["content"]
+        assert "COMPÉTENCES CLÉS DE L'OFFRE (extraction)" in system_prompt
+        user_content = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Compétences clés déjà établies" not in user_content
+
+    def test_uses_match_only_prompt_and_lists_cached_skills_when_already_cached(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _ANALYSIS_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_match(_make_context(offer_key_skills=["Python", "Docker"]))
+
+        system_prompt = mock_create.call_args.kwargs["messages"][0]["content"]
+        assert "COMPÉTENCES CLÉS DE L'OFFRE (liste déjà figée)" in system_prompt
+        user_content = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Compétences clés déjà établies pour cette offre" in user_content
+        assert "Python, Docker" in user_content
+
 
 # ---------------------------------------------------------------------------
 # _update_match_analysis
@@ -310,3 +436,32 @@ class TestUpdateMatchAnalysis:
 
         with pytest.raises(SQLAlchemyError):
             _update_match_analysis("match-uuid-1", "done")
+
+
+# ---------------------------------------------------------------------------
+# _persist_offer_key_skills
+# ---------------------------------------------------------------------------
+
+
+class TestPersistOfferKeySkills:
+    def test_writes_key_skills_guarded_by_is_none(self, mocker):
+        mock_update = mocker.patch.object(_mod, "update")
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _persist_offer_key_skills("offer-uuid-1", ["Python", "Docker"])
+
+        mock_update.assert_called_once_with(_mod.Offer)
+        where_call = mock_update.return_value.where
+        where_call.assert_called_once()
+        mock_session.commit.assert_called_once()
+        values_call = where_call.return_value.values
+        values_call.assert_called_once_with(key_skills=["Python", "Docker"])
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _persist_offer_key_skills("offer-uuid-1", ["Python"])

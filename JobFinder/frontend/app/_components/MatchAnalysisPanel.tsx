@@ -10,7 +10,6 @@ interface Props {
   /** Immediate request-level failure (e.g. credits exhausted) — distinct from analysis.status "error". */
   analysisError: string | null;
   onAnalyze: () => void;
-  offerSkills: string[];
 }
 
 const ANALYZE_BUTTON_CLASS =
@@ -32,8 +31,8 @@ function SummarySection({ title, text }: { title: string; text: string | null })
   );
 }
 
-/** "Review de l'agent" column of an expanded MatchItem — pair analysis states + offer skills. */
-export default function MatchAnalysisPanel({ analysis, analysisPending, analysisError, onAnalyze, offerSkills }: Props) {
+/** "Review de l'agent" column of an expanded MatchItem — pair analysis states. */
+export default function MatchAnalysisPanel({ analysis, analysisPending, analysisError, onAnalyze }: Props) {
   const inProgress = analysisPending || analysis?.status === "processing";
 
   return (
@@ -139,23 +138,6 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
             Analyser cette offre avec l&apos;IA
           </button>
         </div>
-      )}
-
-      {offerSkills.length > 0 && (
-        <>
-          <p className={cn(SECTION_TITLE_CLASS, "mt-[18px] mb-2.5")}>Compétences détectées</p>
-          <div className="flex flex-wrap gap-[7px]">
-            {offerSkills.slice(0, 5).map((s) => (
-              <span
-                key={s}
-                className="inline-flex items-center gap-[5px] px-[10px] py-[5px] rounded-[7px] bg-match-skill text-match-skill text-[12.5px] font-semibold"
-              >
-                <span className="font-bold">✓</span>
-                {s}
-              </span>
-            ))}
-          </div>
-        </>
       )}
     </div>
   );
