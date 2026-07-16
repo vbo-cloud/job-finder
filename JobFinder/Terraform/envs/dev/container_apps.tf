@@ -120,7 +120,7 @@ module "job_matching" {
     },
     {
       name  = "MATCH_ANALYSIS_AUTO_TOP_N"
-      value = "1"
+      value = "20"
     },
     {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"

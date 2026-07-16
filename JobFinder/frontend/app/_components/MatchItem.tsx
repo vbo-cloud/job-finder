@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { MatchOut } from "@/lib/api/types";
+import AnalyzingDots from "./AnalyzingDots";
 import MatchAnalysisPanel from "./MatchAnalysisPanel";
 
 export interface MatchItemData {
@@ -12,6 +13,8 @@ export interface MatchItemData {
   isExpanded: boolean;
   /** True between the "Analyser cette offre" click and the polling resolution. */
   analysisPending: boolean;
+  /** Immediate request-level failure (e.g. credits exhausted) for this offer's analysis, if any. */
+  analysisError: string | null;
   /** Active search bar text, used to highlight matches inside the offer description. Empty/absent = no highlight. */
   searchQuery?: string;
   onSelect: () => void;
@@ -93,10 +96,11 @@ function logoBadge(company: string): { mono: string; bg: string; fg: string } {
 }
 
 export default function MatchItem({
-  match, isNew, isSaved, isExpanded, analysisPending, searchQuery,
+  match, isNew, isSaved, isExpanded, analysisPending, analysisError, searchQuery,
   onSelect, onSave, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
+  const inProgress = analysisPending || match.analysis?.status === "processing";
   const pct = Math.round(match.score * 100);
   const { color, barBg, golden } = scoreTheme(pct);
   const { city, dept } = parseLocation(offer.location);
@@ -218,9 +222,14 @@ export default function MatchItem({
             </div>
           )}
 
-          <div className="flex gap-[7px] text-[12px] text-muted leading-snug">
+          <div className="flex items-center gap-[7px] text-[12px] text-muted leading-snug">
             <span className="text-hint">—</span>
-            {match.analysis?.status === "done" && match.analysis.synthese ? (
+            {inProgress ? (
+              <span className="inline-flex items-center gap-1.5">
+                Analyse IA en cours
+                <AnalyzingDots />
+              </span>
+            ) : match.analysis?.status === "done" && match.analysis.synthese ? (
               <span>{match.analysis.synthese}</span>
             ) : (
               <span>Analyse IA — dépliez l&apos;offre pour la lancer.</span>
@@ -308,6 +317,7 @@ export default function MatchItem({
           <MatchAnalysisPanel
             analysis={match.analysis}
             analysisPending={analysisPending}
+            analysisError={analysisError}
             onAnalyze={onAnalyze}
             offerSkills={offer.skills}
           />

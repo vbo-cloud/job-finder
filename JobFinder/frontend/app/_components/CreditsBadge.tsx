@@ -7,7 +7,7 @@ import Link from "next/link";
 
 import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
-import { onCreditsConsumed } from "@/lib/creditsBus";
+import { onCreditsConsumed, onCreditsReleased, onCreditsReserved } from "@/lib/creditsBus";
 
 /**
  * Pinned pill next to AuthButton showing the user's remaining analysis
@@ -38,7 +38,21 @@ export default function CreditsBadge() {
     fetchCredits();
     // Refetch after a manual match analysis consumes a credit elsewhere in
     // the tree — the balance would otherwise go stale until the next mount.
-    return onCreditsConsumed(fetchCredits);
+    const unsubConsumed = onCreditsConsumed(fetchCredits);
+    // Optimistic -1/+1 around the request itself, so the badge reacts the
+    // instant the user clicks instead of waiting on the round-trip, and rolls
+    // back cleanly if the request never actually consumed a credit.
+    const unsubReserved = onCreditsReserved(() => {
+      setCredits((c) => (c === null ? c : Math.max(0, c - 1)));
+    });
+    const unsubReleased = onCreditsReleased(() => {
+      setCredits((c) => (c === null ? c : c + 1));
+    });
+    return () => {
+      unsubConsumed();
+      unsubReserved();
+      unsubReleased();
+    };
   }, [isAuthenticated]);
 
   if (!isAuthenticated || credits === null) return null;

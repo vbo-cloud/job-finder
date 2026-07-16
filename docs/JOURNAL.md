@@ -5434,3 +5434,96 @@ bord sur les autres ressources du module frontend.
   via un worktree Git jetable dédié à ce test. Ce drift est totalement indépendant du sujet de
   cette PR (certificat/domaine du frontend) ; le lock file a été délibérément laissé inchangé pour
   azurerm (pincé à 4.72.0), seule l'entrée `azapi` ajoutée. Voir `docs/BACKLOG.md`.
+
+---
+
+## PR #199 — feat: relever le nombre d'analyses gratuites auto-lancées + retour visuel du bouton d'analyse
+
+**Date :** 2026-07-12
+**Branche :** `feature/offer-analysis-ux-improvements` → `dev`
+
+### Contexte
+
+Deux sujets combinés sur cette branche : un ajustement produit délibéré du palier gratuit
+d'analyses de correspondance (confirmé avec l'utilisateur, cf. ADR-018), et une amélioration du
+retour visuel du bouton d'analyse IA sur la page de correspondances — le bouton restait
+insuffisamment clair pendant l'attente et en cas d'échec de la requête (ex. crédits épuisés).
+
+### Ce qui a été fait
+
+- **`JobFinder/python/shared/config.py`** : `MATCH_ANALYSIS_AUTO_TOP_N` passe de `"1"` à `"20"` —
+  ce nombre correspond aux N meilleurs matchs par CV analysés automatiquement à chaque run de
+  matching, sans consommer de crédit payant (cf. ADR-018). Commentaire au-dessus de la constante
+  mis à jour en conséquence.
+- **`JobFinder/Terraform/envs/dev/container_apps.tf`** : la variable d'environnement
+  `MATCH_ANALYSIS_AUTO_TOP_N` du Container App Job de matching était codée en dur à `"1"` —
+  repéré par `reviewer-backend` en revue, qui a signalé que le commit précédent aurait été un
+  no-op une fois déployé en dev tant que cette valeur restait désynchronisée du nouveau défaut
+  Python. Alignée à `"20"`.
+- **Frontend — `MatchAnalysisPanel.tsx`, `MatchItem.tsx`, `CorrespondancesPanel.tsx`,
+  `AnalyzingDots.tsx` (nouveau), `globals.css`** :
+  - Le bouton « Analyser cette offre avec l'IA » et le texte qui l'entoure sont désormais centrés
+    (au lieu d'alignés à gauche).
+  - Pendant qu'une analyse est en cours, le bouton est entièrement remplacé par un spinner SVG
+    centré (même motif inline que celui déjà utilisé dans `CVCard.tsx`) surmontant le libellé
+    « Analyse en cours » — auparavant un simple bouton désactivé portant ce même texte.
+  - Sur la carte repliée, la ligne teaser affiche désormais « Analyse IA en cours » avec un
+    nouvel indicateur 3 points animé (`AnalyzingDots.tsx`, `@keyframes dotPulse` ajouté dans
+    `globals.css`) tant qu'une analyse est en attente, à la place de l'indication générique
+    « dépliez l'offre ».
+  - Les échecs d'analyse au niveau de la requête (ex. HTTP 402 crédits épuisés) s'affichent
+    désormais en texte rouge directement sous le bouton, scoping à la seule offre actuellement
+    dépliée (`analysisError` réinitialisé dans `toggleExpand` au changement d'offre) — remplace
+    l'ancien bandeau d'erreur générique qui se trouvait au-dessus de toute la liste de matchs dans
+    `CorrespondancesPanel.tsx`.
+  - Tests (`MatchItem.test.tsx`, `MatchList.test.tsx`) mis à jour pour couvrir le nouveau
+    comportement (36 tests).
+
+**Vérification :** `tsc --noEmit` propre, ESLint propre sur les fichiers touchés, suite Jest verte
+(36 tests dans `MatchItem`/`MatchList`, mis à jour pour le nouveau comportement), serveur de dev
+démarré et page d'accueil non authentifiée servie sans erreur console. `reviewer-frontend`,
+`reviewer-backend` et `reviewer-infra` ont tous retourné APPROUVÉ (`reviewer-backend` a signalé le
+no-op Terraform à son premier passage, corrigé puis re-approuvé). Vérification visuelle
+interactive complète (centrage du bouton, animation des points, spinner) **non effectuée** — le
+panneau des correspondances est derrière une authentification MSAL avec des données backend
+réelles non disponibles dans cet environnement ; seule la logique (tests, typage, lint) a pu être
+vérifiée, pas le rendu visuel final.
+
+### Décisions techniques
+
+- **Texte d'erreur crédits épuisés réactif plutôt que proactif** : l'utilisateur a été consulté sur
+  le choix entre vérifier le solde de crédits avant tout clic (en connectant le composant
+  `CreditsBadge` existant, aujourd'hui non branché sur cette logique) et se contenter d'afficher
+  l'erreur seulement après un échec de requête HTTP 402. Réactif confirmé comme suffisant — c'est
+  l'implémentation retenue, un choix assumé et non un oubli du branchement proactif.
+
+### Complément — réservation optimiste des crédits sur le clic d'analyse (commit `7339409`)
+
+Le retour visuel livré ci-dessus attendait toujours la réponse serveur avant de réagir, et le
+solde affiché par `CreditsBadge` restait figé pendant toute la durée de l'analyse — angle mort du
+choix « réactif plutôt que proactif » ci-dessus : rien n'empêchait un double-clic pendant le
+round-trip, et le badge ne se mettait à jour qu'au prochain montage ou événement
+`credits-consumed`. Ce commit connecte finalement `CreditsBadge` à cette logique, sans revenir sur
+la décision « pas de vérification proactive avant clic » : le badge réagit au clic lui-même, pas
+avant.
+
+- **`lib/creditsBus.ts`** : deux nouveaux événements pub-sub, `credits-reserved` et
+  `credits-released`, aux côtés de `credits-consumed` existant.
+- **`CorrespondancesPanel.tsx` — `requestAnalysis()`** : marque désormais l'offre `pending` et
+  appelle `notifyCreditsReserved()` de façon synchrone, dans le même tick que le clic et avant
+  toute réponse serveur — le bouton (qui ne se rend que si `!inProgress`) disparaît et le badge de
+  crédits se décrémente instantanément, sans attendre le round-trip. En cas d'échec, rollback :
+  l'offre redevient non-pending, et soit `notifyCreditsReleased()` (échec générique — le crédit
+  optimiste est rendu), soit `notifyCreditsConsumed()` pour une 402 (déjà à 0 crédits côté
+  serveur — resynchronise avec le vrai solde plutôt que de créditer +1 sur une réservation qui
+  n'avait en réalité jamais rien pris côté serveur, ce qui ferait apparaître un crédit fantôme).
+- **`CreditsBadge.tsx`** : s'abonne aux deux nouveaux événements pour appliquer le -1/+1 optimiste
+  sur le solde affiché.
+- **`MatchAnalysisPanel.tsx`** : réordonnancement mineur — le message d'erreur s'affiche désormais
+  avant le bouton plutôt qu'après.
+- Tests mis à jour dans `__tests__/CorrespondancesPanel.test.tsx` et `__tests__/CreditsBadge.test.tsx`.
+
+**Vérification :** `reviewer-frontend` a retourné APPROUVÉ. Remarque non-bloquante signalée (déjà
+préexistante, non introduite par ce commit) : `CorrespondancesPanel.tsx` (~357 lignes) mélange
+plusieurs responsabilités — bon candidat à l'extraction de `requestAnalysis`/du polling dans un
+hook dédié dans un futur refactor, non actionnable maintenant.

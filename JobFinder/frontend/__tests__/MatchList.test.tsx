@@ -31,6 +31,7 @@ function makeItem(id: string, score = 0.8): MatchItemData {
     isSaved: false,
     isExpanded: false,
     analysisPending: false,
+    analysisError: null,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onReject: jest.fn(),

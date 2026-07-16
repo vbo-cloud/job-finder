@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import CreditsBadge from "@/app/_components/CreditsBadge";
 import apiClient from "@/lib/api/client";
-import { notifyCreditsConsumed } from "@/lib/creditsBus";
+import { notifyCreditsConsumed, notifyCreditsReleased, notifyCreditsReserved } from "@/lib/creditsBus";
 
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
@@ -65,5 +65,50 @@ describe("CreditsBadge", () => {
 
     await waitFor(() => expect(screen.getByText("29")).toBeInTheDocument());
     expect(apiClient.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("decrements the balance optimistically on credits-reserved, without refetching", async () => {
+    mockUseIsAuthenticated.mockReturnValue(true);
+    (apiClient.get as jest.Mock).mockResolvedValueOnce({ data: { analysis_credits_remaining: 10 } });
+
+    render(<CreditsBadge />);
+    await waitFor(() => expect(screen.getByText("10")).toBeInTheDocument());
+
+    notifyCreditsReserved();
+
+    await waitFor(() => expect(screen.getByText("9")).toBeInTheDocument());
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the balance on credits-released after a reservation is rolled back", async () => {
+    mockUseIsAuthenticated.mockReturnValue(true);
+    (apiClient.get as jest.Mock).mockResolvedValueOnce({ data: { analysis_credits_remaining: 10 } });
+
+    render(<CreditsBadge />);
+    await waitFor(() => expect(screen.getByText("10")).toBeInTheDocument());
+
+    notifyCreditsReserved();
+    await waitFor(() => expect(screen.getByText("9")).toBeInTheDocument());
+
+    notifyCreditsReleased();
+    await waitFor(() => expect(screen.getByText("10")).toBeInTheDocument());
+  });
+
+  it("does not conjure a phantom credit at 0 balance — a reserve followed by a resync (credits-consumed) settles back at 0", async () => {
+    mockUseIsAuthenticated.mockReturnValue(true);
+    (apiClient.get as jest.Mock)
+      .mockResolvedValueOnce({ data: { analysis_credits_remaining: 0 } })
+      .mockResolvedValueOnce({ data: { analysis_credits_remaining: 0 } });
+
+    render(<CreditsBadge />);
+    await waitFor(() => expect(screen.getByText("0")).toBeInTheDocument());
+
+    notifyCreditsReserved(); // clamped — stays at 0
+    // A 402 failure resyncs via notifyCreditsConsumed rather than releasing
+    // +1, which would otherwise leave the badge at 1 despite 0 real credits.
+    notifyCreditsConsumed();
+
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("0")).toBeInTheDocument();
   });
 });
