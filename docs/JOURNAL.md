@@ -5681,9 +5681,10 @@ le champ `key_skills: null` dans leurs fixtures d'offre.
   l'utilisateur en redéclenche une. Ce n'est pas un bug, c'est la conséquence assumée de la règle
   « jamais de recalcul automatique » déjà en place.
 
-**Vérification :** suite Python complète verte (45/45, `pytest tests/test_match_analysis.py
-tests/test_offer_fetching.py`), suite Jest complète verte (64/64 sur les fichiers touchés),
-`tsc --noEmit` propre côté frontend. `reviewer-infra` sur la migration 029 (APPROUVÉ, aucune
+**Vérification :** suite Python complète verte (260/260, `pytest` sur l'ensemble de
+`JobFinder/python/tests/`, pas seulement les fichiers touchés par cette PR), suite Jest complète
+verte (127/127, l'ensemble de `JobFinder/frontend/__tests__/`), `tsc --noEmit` propre côté
+frontend. `reviewer-infra` sur la migration 029 (APPROUVÉ, aucune
 remarque), `reviewer-frontend` sur `MatchItem.tsx`/`MatchAnalysisPanel.tsx`/`types.ts` (APPROUVÉ,
 une remarque non-bloquante sur la comparaison par égalité de chaîne entre `offer.key_skills` et
 `match.analysis.matched_skills` — déjà couverte défensivement par le rejet des noms hors liste dans
