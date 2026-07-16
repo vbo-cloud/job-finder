@@ -5496,3 +5496,34 @@ vérifiée, pas le rendu visuel final.
   `CreditsBadge` existant, aujourd'hui non branché sur cette logique) et se contenter d'afficher
   l'erreur seulement après un échec de requête HTTP 402. Réactif confirmé comme suffisant — c'est
   l'implémentation retenue, un choix assumé et non un oubli du branchement proactif.
+
+### Complément — réservation optimiste des crédits sur le clic d'analyse (commit `7339409`)
+
+Le retour visuel livré ci-dessus attendait toujours la réponse serveur avant de réagir, et le
+solde affiché par `CreditsBadge` restait figé pendant toute la durée de l'analyse — angle mort du
+choix « réactif plutôt que proactif » ci-dessus : rien n'empêchait un double-clic pendant le
+round-trip, et le badge ne se mettait à jour qu'au prochain montage ou événement
+`credits-consumed`. Ce commit connecte finalement `CreditsBadge` à cette logique, sans revenir sur
+la décision « pas de vérification proactive avant clic » : le badge réagit au clic lui-même, pas
+avant.
+
+- **`lib/creditsBus.ts`** : deux nouveaux événements pub-sub, `credits-reserved` et
+  `credits-released`, aux côtés de `credits-consumed` existant.
+- **`CorrespondancesPanel.tsx` — `requestAnalysis()`** : marque désormais l'offre `pending` et
+  appelle `notifyCreditsReserved()` de façon synchrone, dans le même tick que le clic et avant
+  toute réponse serveur — le bouton (qui ne se rend que si `!inProgress`) disparaît et le badge de
+  crédits se décrémente instantanément, sans attendre le round-trip. En cas d'échec, rollback :
+  l'offre redevient non-pending, et soit `notifyCreditsReleased()` (échec générique — le crédit
+  optimiste est rendu), soit `notifyCreditsConsumed()` pour une 402 (déjà à 0 crédits côté
+  serveur — resynchronise avec le vrai solde plutôt que de créditer +1 sur une réservation qui
+  n'avait en réalité jamais rien pris côté serveur, ce qui ferait apparaître un crédit fantôme).
+- **`CreditsBadge.tsx`** : s'abonne aux deux nouveaux événements pour appliquer le -1/+1 optimiste
+  sur le solde affiché.
+- **`MatchAnalysisPanel.tsx`** : réordonnancement mineur — le message d'erreur s'affiche désormais
+  avant le bouton plutôt qu'après.
+- Tests mis à jour dans `__tests__/CorrespondancesPanel.test.tsx` et `__tests__/CreditsBadge.test.tsx`.
+
+**Vérification :** `reviewer-frontend` a retourné APPROUVÉ. Remarque non-bloquante signalée (déjà
+préexistante, non introduite par ce commit) : `CorrespondancesPanel.tsx` (~357 lignes) mélange
+plusieurs responsabilités — bon candidat à l'extraction de `requestAnalysis`/du polling dans un
+hook dédié dans un futur refactor, non actionnable maintenant.
