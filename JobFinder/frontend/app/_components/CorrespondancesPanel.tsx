@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
-import { notifyCreditsConsumed } from "@/lib/creditsBus";
+import { notifyCreditsConsumed, notifyCreditsReleased, notifyCreditsReserved } from "@/lib/creditsBus";
 import MatchList from "./MatchList";
 import PaginationBar from "./PaginationBar";
 import { type MatchItemData } from "./MatchItem";
@@ -102,20 +102,49 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   ]);
 
   function requestAnalysis(offerId: string) {
+    // Guard against a duplicate trigger for an offer already in flight — the
+    // button itself unmounts as soon as analysisPending flips (see below), so
+    // this is a defensive backstop rather than the primary anti-double-click
+    // mechanism.
+    if (analysisPending.has(offerId)) return;
+
     setAnalysisError(null);
+    // Optimistic: flip to pending and reserve the credit synchronously, in the
+    // same tick as the click, so the spinner/credit badge react instantly and
+    // the button (which only renders while !inProgress) disappears before a
+    // second click can land — no round-trip delay, no double-spend on repeat clicks.
+    setAnalysisPending((prev) => new Set(prev).add(offerId));
+    notifyCreditsReserved();
+
     apiClient
       .post(`/matches/${cvId}/offers/${offerId}/analyze`)
       .then(() => {
-        setAnalysisPending((prev) => new Set(prev).add(offerId));
+        // Sync with the server's real balance now that the request landed.
         notifyCreditsConsumed();
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } })?.response?.status;
         console.error("[jf] match analysis request failed:", err);
+        // Roll back the optimistic state: no credit was actually consumed,
+        // and the button should reappear so the user can retry.
+        setAnalysisPending((prev) => {
+          const next = new Set(prev);
+          next.delete(offerId);
+          return next;
+        });
+        if (status === 402) {
+          // Already at 0 credits server-side — the optimistic reservation
+          // never had anything to give back. Resync with the real balance
+          // instead of crediting +1 back onto a floor-clamped 0, which would
+          // otherwise conjure a phantom credit.
+          notifyCreditsConsumed();
+        } else {
+          notifyCreditsReleased();
+        }
         setAnalysisError(
           status === 402
             ? "Crédits d'analyse épuisés"
-            : "Impossible de lancer l'analyse — réessayez plus tard",
+            : "Veuillez réessayer",
         );
       });
   }

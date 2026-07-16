@@ -119,10 +119,10 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
           <p className="text-[13px] text-destructive leading-relaxed">
             L&apos;analyse a échoué — vous pouvez la relancer.
           </p>
+          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
           <button onClick={onAnalyze} className={ANALYZE_BUTTON_CLASS}>
             Analyser cette offre (consomme 1 crédit)
           </button>
-          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
         </div>
       ) : (
         <div className="flex flex-col gap-3 items-center text-center">
@@ -130,10 +130,10 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
             Obtenez une analyse détaillée de votre CV face à cette offre : compétences
             correspondantes, points forts et pistes d&apos;amélioration.
           </p>
+          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
           <button onClick={onAnalyze} className={ANALYZE_BUTTON_CLASS}>
             Analyser cette offre avec l&apos;IA
           </button>
-          {analysisError && <p className="text-[12px] text-destructive">{analysisError}</p>}
         </div>
       )}
 

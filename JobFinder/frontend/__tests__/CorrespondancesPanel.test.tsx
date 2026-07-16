@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CorrespondancesPanel from "@/app/_components/CorrespondancesPanel";
 import apiClient from "@/lib/api/client";
-import { onCreditsConsumed } from "@/lib/creditsBus";
+import { onCreditsConsumed, onCreditsReleased, onCreditsReserved } from "@/lib/creditsBus";
 import type { MatchOut } from "@/lib/api/types";
 
 jest.mock("@/lib/api/client", () => ({
@@ -359,5 +359,86 @@ describe("CorrespondancesPanel — manual analysis request", () => {
     await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
 
     unsubscribe();
+  });
+
+  it("shows the pending state and reserves a credit synchronously on click, before the request resolves", () => {
+    const onReserved = jest.fn();
+    const unsubscribe = onCreditsReserved(onReserved);
+    let resolvePost = () => {};
+    (apiClient.post as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolvePost = resolve; }),
+    );
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+
+    // No await — the pending state and credit reservation must already be
+    // visible in the same tick as the click, with no round-trip delay.
+    expect(onReserved).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Analyse IA en cours")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Analyser cette offre avec l'IA" })).not.toBeInTheDocument();
+
+    resolvePost();
+    unsubscribe();
+  });
+
+  it("does not fire a second request when the button is clicked again while the first request is in flight", async () => {
+    let resolvePost = () => {};
+    (apiClient.post as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolvePost = resolve; }),
+    );
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+    const button = screen.getByRole("button", { name: "Analyser cette offre avec l'IA" });
+    fireEvent.click(button);
+    // The button unmounts the instant it's clicked (optimistic pending state) —
+    // re-clicking the same, now-detached node must not fire another request.
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    resolvePost();
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledTimes(1));
+  });
+
+  it("rolls back the pending state and the reserved credit, and shows 'Veuillez réessayer' above the button, when the analyze request fails", async () => {
+    const onReleased = jest.fn();
+    const unsubscribe = onCreditsReleased(onReleased);
+    (apiClient.post as jest.Mock).mockRejectedValueOnce(new Error("network down"));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+
+    await waitFor(() => expect(onReleased).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Veuillez réessayer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" })).toBeInTheDocument();
+
+    unsubscribe();
+  });
+
+  it("resyncs with the server balance (not a blind +1) when the analyze request fails with 402 (credits exhausted)", async () => {
+    // A blind optimistic release would conjure a phantom credit for a user
+    // already at 0 (reserve clamps at 0, but a naive release would still add
+    // 1 back) — 402 means the reservation never had anything to give back,
+    // so this path must resync with the server instead of releasing locally.
+    const onConsumed = jest.fn();
+    const onReleased = jest.fn();
+    const unsubConsumed = onCreditsConsumed(onConsumed);
+    const unsubReleased = onCreditsReleased(onReleased);
+    (apiClient.post as jest.Mock).mockRejectedValueOnce({ response: { status: 402 } });
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+
+    await waitFor(() => expect(screen.getByText("Crédits d'analyse épuisés")).toBeInTheDocument());
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+    expect(onReleased).not.toHaveBeenCalled();
+
+    unsubConsumed();
+    unsubReleased();
   });
 });
