@@ -24,7 +24,11 @@ from shared.telemetry import configure_telemetry
 MATCH_ANALYSIS_QUEUE = "match-analysis"
 MAX_ATTEMPTS = 2
 CV_TEXT_MAX_CHARS = 8000
+# Also gates key-skills extraction (KEY_SKILLS_INSTRUCTIONS_EXTRACT): a skill named only
+# beyond this many characters into the description is invisible to the model and can never
+# be extracted — not just a synthesis-quality tradeoff like it was before key_skills existed.
 OFFER_TEXT_MAX_CHARS = 4000
+MAX_KEY_SKILLS = 10
 
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
 if not AZURE_OPENAI_API_KEY:
@@ -95,8 +99,9 @@ besoin exprimé dans la description de l'offre ou ses compétences demandées.
 Les formulations généralistes qui ne référencent aucun élément précis de
 l'offre ("compétences en développement et programmation", "bon relationnel")
 sont interdites. Si le CV ne contient aucun point fort clairement rattachable
-à l'offre au-delà des compétences déjà listées dans "matched_skills", rends
-une liste plus courte plutôt que de la remplir artificiellement.
+à l'offre au-delà des compétences clés déjà identifiées comme présentes dans
+le CV (voir "key_skills"), rends une liste plus courte plutôt que de la
+remplir artificiellement.
 
 SUGGESTIONS PERSONNALISÉES :
 Avant d'écrire chaque "suggestion_concrete", identifie un élément concret et
@@ -127,6 +132,8 @@ analyse — reformule le gap identifié en question d'entretien plausible. Pas d
 questions génériques de bibliothèque qui seraient valables pour n'importe quel
 candidat du métier.
 
+@@KEY_SKILLS_INSTRUCTIONS@@
+
 Format de sortie JSON :
 {
   "verdict": string,
@@ -143,7 +150,7 @@ Format de sortie JSON :
                                     //    tous les points."
                                     //   "Écart notable sur [compétence],
                                     //    mais des atouts réels ailleurs."
-  "matched_skills": [string, ...],
+  "key_skills": [{"name": string, "matched": bool}, ...],
   "company_summary": string|null,
   "mission_summary": string,
   "why_good_fit_for_user": string,
@@ -161,6 +168,45 @@ Ton : coach bienveillant et constructif, jamais un audit froid.
 Ne retourne rien d'autre que le JSON.
 """
 
+KEY_SKILLS_INSTRUCTIONS_EXTRACT = """\
+COMPÉTENCES CLÉS DE L'OFFRE (extraction) :
+Identifie, à partir du titre et de la description de l'offre UNIQUEMENT (aucune
+liste de compétences n'est fournie séparément), les technologies et
+compétences techniques les plus essentielles réellement demandées (langages,
+frameworks, outils, plateformes cloud, méthodologies techniques — jamais de
+soft skills génériques comme "autonomie" ou "esprit d'équipe"). Retourne au
+maximum 10 compétences, SANS plancher artificiel : si l'offre ne présente
+clairement que 3 technologies essentielles, n'en retourne que 3. Pour chacune,
+indique "matched": true si elle apparaît explicitement dans le CV fourni,
+"matched": false sinon."""
+
+KEY_SKILLS_INSTRUCTIONS_MATCH_ONLY = """\
+COMPÉTENCES CLÉS DE L'OFFRE (liste déjà figée) :
+La liste des compétences clés de cette offre a déjà été établie et est fournie
+dans le message utilisateur — NE LA MODIFIE PAS : n'ajoute, ne retire, ne
+reformule AUCUN nom. Pour chaque nom EXACT de cette liste, indique
+"matched": true s'il apparaît explicitement dans le CV fourni, "matched": false
+sinon. Retourne exactement les mêmes noms, dans le même ordre."""
+
+
+def _build_system_prompt(cached_key_skills: list[str] | None) -> str:
+    """Build the match-analysis system prompt for the current cache state.
+
+    Args:
+        cached_key_skills: Offer.key_skills value — None when the offer's key
+            skills have never been extracted (extraction branch), a (possibly
+            empty) list when already cached (match-only branch).
+
+    Returns:
+        The full system prompt, with the key-skills section swapped in.
+    """
+    instructions = (
+        KEY_SKILLS_INSTRUCTIONS_EXTRACT
+        if cached_key_skills is None
+        else KEY_SKILLS_INSTRUCTIONS_MATCH_ONLY
+    )
+    return MATCH_ANALYSIS_SYSTEM_PROMPT.replace("@@KEY_SKILLS_INSTRUCTIONS@@", instructions)
+
 
 # ==============================================================================
 # Match context fetch
@@ -174,8 +220,9 @@ def _get_match_context(match_id: str) -> dict:
         match_id: UUID of the match to analyse.
 
     Returns:
-        dict with keys cv_text, offer_title, offer_company, offer_description,
-        offer_skills, experience_level, candidate_description, match_score.
+        dict with keys cv_text, offer_id, offer_title, offer_company,
+        offer_description, offer_key_skills, experience_level,
+        candidate_description, match_score.
 
     Raises:
         ValueError: If the match no longer exists (CV or match deleted between
@@ -188,10 +235,11 @@ def _get_match_context(match_id: str) -> dict:
             row = session.execute(
                 select(
                     CV.raw_text,
+                    Offer.id,
                     Offer.title,
                     Offer.company,
                     Offer.description,
-                    Offer.skills,
+                    Offer.key_skills,
                     Match.score,
                     UserProfile.experience_level,
                     UserProfile.candidate_description,
@@ -210,10 +258,11 @@ def _get_match_context(match_id: str) -> dict:
     logger.info("match_context_fetch_done", match_id=match_id)
     return {
         "cv_text": row.raw_text,
+        "offer_id": row.id,
         "offer_title": row.title,
         "offer_company": row.company,
         "offer_description": row.description,
-        "offer_skills": list(row.skills or []),
+        "offer_key_skills": list(row.key_skills) if row.key_skills is not None else None,
         "match_score": row.score,
         "experience_level": row.experience_level,
         "candidate_description": row.candidate_description,
@@ -225,7 +274,55 @@ def _get_match_context(match_id: str) -> dict:
 # ==============================================================================
 
 
-def _parse_analysis_payload(data: dict) -> dict:
+def _parse_key_skills(data: dict, cached_key_skills: list[str] | None) -> tuple[list[str], list[str] | None]:
+    """Coerce the raw model key_skills payload into (matched_skills, new_offer_key_skills).
+
+    Two branches, matching the two prompt variants built by _build_system_prompt:
+    - Extraction (cached_key_skills is None): the model invented the names, so
+      clamp to MAX_KEY_SKILLS and treat the parsed names as the offer's new
+      cached key_skills, written once by the caller.
+    - Match-only (cached_key_skills already a list): the model must reuse the
+      exact given names — any name outside that list is a hallucination and is
+      dropped defensively rather than trusted; new_offer_key_skills is None
+      since the cache is not touched on this branch.
+
+    Args:
+        data: Parsed JSON object returned by the model.
+        cached_key_skills: Offer.key_skills value passed into this analysis.
+
+    Returns:
+        Tuple of (matched_skills for MatchAnalysis, new key_skills for Offer or
+        None if the offer's cache must not be written).
+    """
+    parsed: list[dict] = []
+    seen: set[str] = set()
+    for item in data.get("key_skills") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
+        if name in seen:
+            continue
+        seen.add(name)
+        parsed.append({"name": name, "matched": bool(item.get("matched"))})
+
+    if cached_key_skills is None:
+        parsed = parsed[:MAX_KEY_SKILLS]
+        new_offer_key_skills = [item["name"] for item in parsed]
+        matched_skills = [item["name"] for item in parsed if item["matched"]]
+        return matched_skills, new_offer_key_skills
+
+    cached_set = set(cached_key_skills)
+    dropped = [item["name"] for item in parsed if item["name"] not in cached_set]
+    if dropped:
+        logger.warning("match_analysis_key_skills_hallucinated", dropped=dropped)
+    matched_skills = [item["name"] for item in parsed if item["matched"] and item["name"] in cached_set]
+    return matched_skills, None
+
+
+def _parse_analysis_payload(data: dict, cached_key_skills: list[str] | None) -> tuple[dict, list[str] | None]:
     """Coerce the raw model JSON into MatchAnalysis column values.
 
     Defensive coercion, same policy as the existing fields: text fields are cast
@@ -238,9 +335,12 @@ def _parse_analysis_payload(data: dict) -> dict:
 
     Args:
         data: Parsed JSON object returned by the model.
+        cached_key_skills: Offer.key_skills value passed into this analysis —
+            see _parse_key_skills.
 
     Returns:
-        dict whose keys map 1:1 to MatchAnalysis result columns.
+        Tuple of (dict whose keys map 1:1 to MatchAnalysis result columns,
+        new key_skills to persist onto Offer or None to leave it untouched).
     """
     def _text(key: str) -> str | None:
         value = data.get(key)
@@ -257,8 +357,9 @@ def _parse_analysis_payload(data: dict) -> dict:
                 "suggestion_concrete": str(suggestion) if suggestion is not None else None,
             }
         )
-    return {
-        "matched_skills": [str(x) for x in data.get("matched_skills") or []],
+    matched_skills, new_offer_key_skills = _parse_key_skills(data, cached_key_skills)
+    analysis_fields = {
+        "matched_skills": matched_skills,
         "points_forts": [str(x) for x in data.get("points_forts") or []],
         "points_amelioration": points_amelioration,
         "synthese": _text("synthese"),
@@ -272,27 +373,22 @@ def _parse_analysis_payload(data: dict) -> dict:
             str(x) for x in data.get("questions_entretien_potentielles") or []
         ],
     }
+    return analysis_fields, new_offer_key_skills
 
 
-def _analyze_match(context: dict) -> dict:
-    """Analyze one CV<->offer pair with GPT-4o-mini.
+def _build_intent_text(context: dict) -> str:
+    """Render the candidate's profile intent as free text for the prompt.
 
-    Retries up to MAX_ATTEMPTS times on JSON parse errors — same policy as the
-    cv_analysis agent. OpenAI API errors are not retried.
+    Same fragments as _build_intent_text in routers/profile.py — duplicated on
+    purpose: agents must not depend on agents/webapp.
 
     Args:
         context: Match context dict as returned by _get_match_context.
 
     Returns:
-        dict whose keys map 1:1 to MatchAnalysis result columns — see
-        _parse_analysis_payload.
-
-    Raises:
-        OpenAIError: If the API call fails.
-        ValueError: If all retry attempts fail to produce valid JSON.
+        Intent text, or the "no intent" fallback sentence when both the
+        experience level and candidate description are empty.
     """
-    # Same fragments as _build_intent_text in routers/profile.py — duplicated on
-    # purpose: agents must not depend on agents/webapp.
     fragments = []
     experience_level = context.get("experience_level")
     if experience_level == "0-2":
@@ -304,16 +400,55 @@ def _analyze_match(context: dict) -> dict:
     candidate_description = context.get("candidate_description")
     if candidate_description and candidate_description.strip():
         fragments.append(candidate_description.strip())
-    intent_text = "\n".join(fragments) if fragments else "Aucune intention renseignée par l'utilisateur."
+    return "\n".join(fragments) if fragments else "Aucune intention renseignée par l'utilisateur."
 
+
+def _build_user_content(context: dict, cached_key_skills: list[str] | None) -> str:
+    """Render the match-analysis user message for the current cache state.
+
+    Args:
+        context: Match context dict as returned by _get_match_context.
+        cached_key_skills: Offer.key_skills value — appended as a fixed list
+            to reuse verbatim when not None (match-only prompt variant).
+
+    Returns:
+        The full user message content.
+    """
     user_content = (
-        f"Intention du candidat :\n{intent_text}\n\n"
+        f"Intention du candidat :\n{_build_intent_text(context)}\n\n"
         f"Score de correspondance déjà calculé : {context['match_score']:.0%}\n\n"
         f"CV :\n{context['cv_text'][:CV_TEXT_MAX_CHARS]}\n\n"
         f"Offre : {context['offer_title']} — {context['offer_company']}\n"
-        f"Description :\n{context['offer_description'][:OFFER_TEXT_MAX_CHARS]}\n"
-        f"Compétences demandées : {', '.join(context['offer_skills'])}"
+        f"Description :\n{context['offer_description'][:OFFER_TEXT_MAX_CHARS]}"
     )
+    if cached_key_skills is not None:
+        user_content += (
+            f"\n\nCompétences clés déjà établies pour cette offre (noms exacts, ne "
+            f"pas les modifier) : {', '.join(cached_key_skills)}"
+        )
+    return user_content
+
+
+def _analyze_match(context: dict) -> tuple[dict, list[str] | None]:
+    """Analyze one CV<->offer pair with GPT-4o-mini.
+
+    Retries up to MAX_ATTEMPTS times on JSON parse errors — same policy as the
+    cv_analysis agent. OpenAI API errors are not retried.
+
+    Args:
+        context: Match context dict as returned by _get_match_context.
+
+    Returns:
+        Tuple of (dict whose keys map 1:1 to MatchAnalysis result columns, new
+        key_skills to persist onto Offer or None) — see _parse_analysis_payload.
+
+    Raises:
+        OpenAIError: If the API call fails.
+        ValueError: If all retry attempts fail to produce valid JSON.
+    """
+    cached_key_skills = context.get("offer_key_skills")
+    system_prompt = _build_system_prompt(cached_key_skills)
+    user_content = _build_user_content(context, cached_key_skills)
 
     last_error: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -325,14 +460,18 @@ def _analyze_match(context: dict) -> dict:
                 temperature=ANALYSIS_TEMPERATURE,
                 seed=ANALYSIS_SEED,
                 messages=[
-                    {"role": "system", "content": MATCH_ANALYSIS_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
             )
             data = json.loads(response.choices[0].message.content)
-            result = _parse_analysis_payload(data)
-            logger.info("match_analysis_succeeded", attempt=attempt, matched_skills_count=len(result["matched_skills"]))
-            return result
+            analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, cached_key_skills)
+            logger.info(
+                "match_analysis_succeeded",
+                attempt=attempt,
+                matched_skills_count=len(analysis_fields["matched_skills"]),
+            )
+            return analysis_fields, new_offer_key_skills
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
             logger.warning("match_analysis_attempt_failed", attempt=attempt, exc_info=True)
             last_error = e
@@ -381,6 +520,36 @@ def _update_match_analysis(match_id: str, status: str, **fields) -> None:
         raise
 
 
+def _persist_offer_key_skills(offer_id: str, key_skills: list[str]) -> None:
+    """Cache a freshly extracted key_skills list onto its offer, once.
+
+    The `Offer.key_skills.is_(None)` guard makes this write-once safe even if
+    two analyses for the same offer race each other in the extraction branch
+    (concurrent Container App Job replicas) — only the first write wins, the
+    second becomes a no-op. Any later re-extraction goes through the
+    ft_updated_at-based reset in offer_fetching, never through this function.
+
+    Args:
+        offer_id: UUID of the offer to cache key skills onto.
+        key_skills: Extracted key skills (already clamped to MAX_KEY_SKILLS).
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("offer_key_skills_persist_started", offer_id=offer_id, count=len(key_skills))
+    try:
+        with get_session() as session:
+            session.execute(
+                update(Offer)
+                .where(Offer.id == offer_id, Offer.key_skills.is_(None))
+                .values(key_skills=key_skills)
+            )
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("offer_key_skills_persist_failed", offer_id=offer_id, exc_info=True)
+        raise
+
+
 # ==============================================================================
 # Entry point
 # ==============================================================================
@@ -411,8 +580,10 @@ def main() -> None:
                 logger.info("match_analysis_match_gone_skipping", match_id=match_id)
                 return
             try:
-                result = _analyze_match(context)
-                _update_match_analysis(match_id, "done", **result)
+                analysis_fields, new_offer_key_skills = _analyze_match(context)
+                if new_offer_key_skills is not None:
+                    _persist_offer_key_skills(context["offer_id"], new_offer_key_skills)
+                _update_match_analysis(match_id, "done", **analysis_fields)
             except (OpenAIError, SQLAlchemyError, ValueError):
                 # ValueError — _analyze_match exhausted its JSON retries; must
                 # mark the row errored, not be mistaken for a deleted match.
