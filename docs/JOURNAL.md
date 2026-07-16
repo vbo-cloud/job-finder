@@ -5528,11 +5528,10 @@ préexistante, non introduite par ce commit) : `CorrespondancesPanel.tsx` (~357 
 plusieurs responsabilités — bon candidat à l'extraction de `requestAnalysis`/du polling dans un
 hook dédié dans un futur refactor, non actionnable maintenant.
 
-## PR (à venir) — feat: planification DST-safe du fetch d'offres + copy bibliothèque sur la cadence
+## PR #200 — fix: fetch d'offres à l'heure française (DST-safe) + copy bibliothèque
 
 **Date :** 2026-07-16
 **Branche :** `feature/library-refresh-schedule-copy` → `dev`
-**Numéro de PR :** pas encore ouverte au moment de cette entrée — à corriger une fois la PR créée.
 
 ### Contexte
 
