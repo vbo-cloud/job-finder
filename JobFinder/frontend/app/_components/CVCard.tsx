@@ -6,6 +6,7 @@ import { Check, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVData } from "@/lib/api/types";
+import useCoarsePointer from "@/lib/useCoarsePointer";
 
 type DeleteState = "idle" | "armed" | "closing" | "absorbing";
 
@@ -145,7 +146,10 @@ export default function CVCard({ cv, onDeleted, onSelect, active = false }: CVCa
   };
 
   const confirming   = deleteState === "armed" || deleteState === "closing";
-  const rowVisible   = (cardHovered || confirming) && deleteState !== "absorbing";
+  // Touch screens have no hover to reveal the trash tab — keep it permanently
+  // visible there (in its resting "peek" position, same as a hovered card).
+  const coarsePointer = useCoarsePointer();
+  const rowVisible   = (cardHovered || confirming || coarsePointer) && deleteState !== "absorbing";
   // The icon sits a fixed 6px above the button's bottom edge (pb-[5px] + border),
   // so the button needs to clear the card by at least 20px (6 + the icon's own
   // 14px) before the icon is fully out from behind the card instead of being

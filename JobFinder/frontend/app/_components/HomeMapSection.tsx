@@ -110,6 +110,8 @@ interface HomeMapSectionProps {
  * from the map plays the reverse transition — either with the cursor
  * outside the Leaflet container, or over it once the view has been fully
  * zoomed out for a moment (no brush stroke in progress in both cases).
+ * On coarse pointers the wheel gesture has no equivalent — pill buttons
+ * ("Carte" / "Terminé") enter and leave the map mode instead.
  * The painted zone is auto-saved to the profile with a debounce, flushed
  * when leaving the map mode.
  */
@@ -193,20 +195,26 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
     atMinZoomSinceRef.current = atMinZoom ? performance.now() : null;
   }, []);
 
+  const startTransition = useCallback((transition: Mode, target: Mode) => {
+    setMode(transition);
+    modeTimerRef.current = setTimeout(() => setMode(target), TRANSITION_MS);
+  }, []);
+
+  const exitMap = useCallback(() => {
+    flushSave(); // do not lose the last stroke to the debounce
+    setViewResetToken((t) => t + 1); // origin view snaps behind the exit blur
+    startTransition("to-cv", "cv");
+  }, [flushSave, startTransition]);
+
+  // Touch entry point — the wheel gesture below has no finger equivalent.
+  const enterMap = useCallback(() => {
+    if (modeRef.current !== "cv") return;
+    startTransition("to-map", "map");
+  }, [startTransition]);
+
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
-
-    const startTransition = (transition: Mode, target: Mode) => {
-      setMode(transition);
-      modeTimerRef.current = setTimeout(() => setMode(target), TRANSITION_MS);
-    };
-
-    const exitMap = () => {
-      flushSave(); // do not lose the last stroke to the debounce
-      setViewResetToken((t) => t + 1); // origin view snaps behind the exit blur
-      startTransition("to-cv", "cv");
-    };
 
     // Native non-passive listener: React attaches onWheel as passive, which
     // would silently ignore preventDefault(). Capture phase, because
@@ -254,7 +262,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
 
     section.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => section.removeEventListener("wheel", onWheel, { capture: true });
-  }, [flushSave]);
+  }, [exitMap, startTransition]);
 
   // Unmount: drop a pending mode timer, flush a pending save (best effort).
   useEffect(() => {
@@ -279,6 +287,32 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
         />
       </div>
       <div aria-hidden="true" className="absolute inset-0" style={lensStyle(mode)} />
+      {/* Coarse-pointer replacement for the wheel-driven CV ↔ map switch:
+          scroll-up/scroll-down has no one-finger equivalent (the map consumes
+          touch gestures for painting), so pill buttons enter and leave the map
+          mode. Hidden on mouse-only devices — the desktop hero is unchanged
+          (UploadSection's decorative "CARTE" hint is hidden on coarse pointers
+          in exchange, so the two never show together). */}
+      {isAuthenticated && mode === "cv" && (
+        <button
+          type="button"
+          onClick={enterMap}
+          className="absolute left-1/2 top-3 z-10 hidden min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default [@media(any-pointer:coarse)]:flex"
+        >
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
+          Carte
+        </button>
+      )}
+      {mode === "map" && (
+        <button
+          type="button"
+          onClick={exitMap}
+          aria-label="Quitter la carte et revenir à l'import de CV"
+          className="absolute right-4 top-3 z-10 hidden min-h-11 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default [@media(any-pointer:coarse)]:flex"
+        >
+          Terminé
+        </button>
+      )}
     </section>
   );
 }

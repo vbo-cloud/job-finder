@@ -3,13 +3,13 @@
 import "leaflet/dist/leaflet.css";
 
 import type { LatLngBoundsExpression } from "leaflet";
-import { ChevronRight, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Eraser, Hand, Paintbrush, Redo2, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { MapContainer } from "react-leaflet";
 
 import { cn } from "@/lib/utils";
 
-import CommunePaintLayer from "./CommunePaintLayer";
+import CommunePaintLayer, { type TouchTool } from "./CommunePaintLayer";
 import { compressSelection, expandSelection, type SelectableCommune } from "./communeGeo";
 
 interface CommuneZonePickerProps {
@@ -41,6 +41,15 @@ const FRANCE_MAX_BOUNDS: LatLngBoundsExpression = [
 /** Undo/redo depth — one entry per brush stroke or toolbar action. */
 const HISTORY_LIMIT = 50;
 
+/** Touch-mode toolbar entries, in the Peinture → Gomme → Déplacement order.
+ * The bar only appears on coarse-pointer devices; a mouse never needs it
+ * (left button paints, right button erases, middle button pans). */
+const TOUCH_TOOLS: { tool: TouchTool; label: string; Icon: typeof Paintbrush }[] = [
+  { tool: "paint", label: "Peinture — glisser pour sélectionner des communes", Icon: Paintbrush },
+  { tool: "erase", label: "Gomme — glisser pour désélectionner des communes", Icon: Eraser },
+  { tool: "pan", label: "Déplacement — glisser pour déplacer la carte", Icon: Hand },
+];
+
 /** Numeric department order, with Corsica (2A/2B) slotted after 20. */
 function deptSortKey(dept: string): number {
   if (dept === "2A") return 20.1;
@@ -57,6 +66,10 @@ function deptSortKey(dept: string): number {
  * means no geographic restriction — the map then shows a national outline.
  * Undo/redo history is kept per brush stroke, and the selection is
  * summarised live below the map, grouped by department.
+ *
+ * On touch screens a floating toolbar (coarse pointers only) picks what a
+ * one-finger drag does — paint, erase or pan — while two-finger pinch/drag
+ * always zooms and pans the map regardless of the active mode.
  */
 export default function CommuneZonePicker({
   value,
@@ -69,6 +82,7 @@ export default function CommuneZonePicker({
   const embedded = variant === "embedded";
   const [past, setPast] = useState<string[][]>([]);
   const [future, setFuture] = useState<string[][]>([]);
+  const [touchTool, setTouchTool] = useState<TouchTool>("paint");
   const [communes, setCommunes] = useState<SelectableCommune[] | null>(null);
   const [deptNoms, setDeptNoms] = useState<Record<string, string>>({});
   const [openDepts, setOpenDepts] = useState<Set<string>>(new Set());
@@ -171,8 +185,10 @@ export default function CommuneZonePicker({
     onChange([]);
   }, [snapshot, onChange]);
 
+  // min-h on coarse pointers only: 44px tap targets on touch, the original
+  // compact row on desktop.
   const toolButtonClass =
-    "rounded bg-solid-secondary px-3 py-1.5 text-sm text-body hover:bg-solid-secondary-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+    "rounded bg-solid-secondary px-3 py-1.5 text-sm text-body hover:bg-solid-secondary-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [@media(any-pointer:coarse)]:min-h-11 [@media(any-pointer:coarse)]:px-4";
 
   return (
     <div className={cn("flex flex-col gap-2", embedded && "h-full")}>
@@ -257,8 +273,35 @@ export default function CommuneZonePicker({
             onPaintingChange={onPaintingChange}
             onAtMinZoomChange={onAtMinZoomChange}
             viewResetToken={viewResetToken}
+            touchTool={touchTool}
           />
         </MapContainer>
+        {/* Touch-mode toolbar: floating at the bottom of the map, coarse
+            pointers only — with a single finger there is no equivalent of the
+            right/middle mouse buttons, so erase and pan need explicit modes.
+            44px targets; the active mode is marked by both aria-pressed and
+            an accent-filled background. */}
+        <div
+          role="toolbar"
+          aria-label="Outil tactile de sélection de zone"
+          className="absolute bottom-4 left-1/2 z-[1000] hidden -translate-x-1/2 items-center gap-1 rounded-full border border-subtle bg-surface p-1 shadow-lg [@media(any-pointer:coarse)]:flex"
+        >
+          {TOUCH_TOOLS.map(({ tool, label, Icon }) => (
+            <button
+              key={tool}
+              type="button"
+              aria-label={label}
+              aria-pressed={touchTool === tool}
+              onClick={() => setTouchTool(tool)}
+              className={cn(
+                "flex h-11 w-11 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                touchTool === tool ? "bg-accent-muted text-accent" : "text-muted",
+              )}
+            >
+              <Icon className="h-5 w-5" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
         {embedded && (
           <p className="pointer-events-none absolute bottom-1 right-2 z-[1000] text-[10px] text-hint">
             Contours administratifs © Etalab / IGN (Licence Ouverte).
@@ -280,7 +323,7 @@ export default function CommuneZonePicker({
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-body hover:bg-solid-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 >
                   <ChevronRight
-                    className={`h-4 w-4 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`}
+                    className={cn("h-4 w-4 shrink-0 text-muted transition-transform", open && "rotate-90")}
                     aria-hidden="true"
                   />
                   <span>

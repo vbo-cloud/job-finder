@@ -81,6 +81,12 @@ const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
  * dynamic label to avoid doubled names. */
 const CITY_NAMES = new Set(CITY_LABELS.map((c) => c.name));
 
+/** One-finger touch behaviour, selected in the picker's floating toolbar.
+ * Two-finger gestures (pinch zoom, two-finger pan) bypass the active tool and
+ * always navigate the map. Mouse interactions ignore it entirely — the
+ * left/right/middle buttons keep their fixed paint/erase/pan roles. */
+export type TouchTool = "paint" | "erase" | "pan";
+
 interface CommunePaintLayerProps {
   value: string[];
   onChange: (codes: string[]) => void;
@@ -99,6 +105,8 @@ interface CommunePaintLayerProps {
   /** Increment to snap the view back to its initial nationwide fit — used
    * by the home page when leaving the map mode. */
   viewResetToken?: number;
+  /** Active one-finger touch tool (see TouchTool). Defaults to "paint". */
+  touchTool?: TouchTool;
 }
 
 /* Leaflet canvas paths cannot be styled through CSS classes — colors are read
@@ -159,7 +167,9 @@ function communeLabelIcon(commune: CommuneFeature): L.DivIcon {
  * Imperative Leaflet layer: a stylised France basemap (department contours and
  * city labels on the page background — no tiles) on which the user paints
  * whole communes with a circular brush. Left button paints, right button
- * erases, middle button pans, the wheel zooms toward the cursor. All commune
+ * erases, middle button pans, the wheel zooms toward the cursor. On touch
+ * screens one finger runs the `touchTool` (paint, erase or pan) and two
+ * fingers always pinch-zoom/pan via Leaflet, whatever the tool. All commune
  * geometries load up front so painting works anywhere at any zoom; only the
  * selection is drawn. Must be rendered inside a react-leaflet MapContainer.
  */
@@ -171,6 +181,7 @@ export default function CommunePaintLayer({
   onPaintingChange,
   onAtMinZoomChange,
   viewResetToken,
+  touchTool = "paint",
 }: CommunePaintLayerProps) {
   const map = useMap();
   const [pendingDepts, setPendingDepts] = useState<number | null>(null);
@@ -194,6 +205,8 @@ export default function CommunePaintLayer({
   onPaintingChangeRef.current = onPaintingChange;
   const onAtMinZoomChangeRef = useRef(onAtMinZoomChange);
   onAtMinZoomChangeRef.current = onAtMinZoomChange;
+  const touchToolRef = useRef(touchTool);
+  touchToolRef.current = touchTool;
   const strokeRef = useRef<"paint" | "erase" | null>(null);
   const strokeSnapshottedRef = useRef(false);
   const panPointRef = useRef<{ x: number; y: number } | null>(null);
@@ -557,10 +570,16 @@ export default function CommunePaintLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewResetToken]);
 
-  // Mouse interactions: left = paint, right = erase, middle drag = pan.
+  // Pointer interactions. Mouse: left = paint, right = erase, middle drag =
+  // pan. Touch: one finger runs the active touchTool, two fingers are left to
+  // Leaflet's pinch zoom (which also pans with the midpoint).
   useEffect(() => {
     const container = map.getContainer();
     container.style.cursor = "crosshair";
+    // One-finger gestures are fully handled below and two-finger gestures
+    // belong to Leaflet — the browser must not consume any of them to scroll
+    // or zoom the page instead.
+    container.style.touchAction = "none";
 
     const brush = document.createElement("div");
     brush.style.cssText =
@@ -572,6 +591,13 @@ export default function CommunePaintLayer({
     };
     setBrushAppearance(false);
     container.appendChild(brush);
+
+    const positionBrush = (clientX: number, clientY: number) => {
+      const rect = container.getBoundingClientRect();
+      brush.style.transform =
+        `translate(${clientX - rect.left - BRUSH_RADIUS_PX}px, ` +
+        `${clientY - rect.top - BRUSH_RADIUS_PX}px)`;
+    };
 
     const moveBrush = (e: MouseEvent) => {
       const rect = container.getBoundingClientRect();
@@ -587,14 +613,16 @@ export default function CommunePaintLayer({
           : null;
       const visible = hit !== null && container.contains(hit);
       brush.style.display = visible ? "block" : "none";
-      brush.style.transform = `translate(${x - BRUSH_RADIUS_PX}px, ${y - BRUSH_RADIUS_PX}px)`;
+      positionBrush(e.clientX, e.clientY);
     };
 
     // The zoom-dependent factor is cached per zoom level — stamp runs on
     // every mousemove of a stroke, only the latitude term varies.
     let equatorMetersPerPixel = { zoom: NaN, value: 0 };
-    const stamp = (e: MouseEvent, erase: boolean) => {
-      const latlng = map.mouseEventToLatLng(e);
+    const stamp = (clientX: number, clientY: number, erase: boolean) => {
+      // mouseEventToLatLng only reads clientX/clientY — a bare coordinate
+      // object works for both mouse events and touch points.
+      const latlng = map.mouseEventToLatLng({ clientX, clientY } as MouseEvent);
       const zoom = map.getZoom();
       if (equatorMetersPerPixel.zoom !== zoom) {
         equatorMetersPerPixel = { zoom, value: EARTH_CIRCUMFERENCE_M / Math.pow(2, zoom + 8) };
@@ -635,14 +663,14 @@ export default function CommunePaintLayer({
         strokeSnapshottedRef.current = false;
         setBrushAppearance(false);
         onPaintingChangeRef.current?.(true);
-        stamp(e, false);
+        stamp(e.clientX, e.clientY, false);
         e.preventDefault();
       } else if (e.button === 2) {
         strokeRef.current = "erase";
         strokeSnapshottedRef.current = false;
         setBrushAppearance(true);
         onPaintingChangeRef.current?.(true);
-        stamp(e, true);
+        stamp(e.clientX, e.clientY, true);
         e.preventDefault();
       } else if (e.button === 1) {
         panPointRef.current = { x: e.clientX, y: e.clientY };
@@ -657,7 +685,7 @@ export default function CommunePaintLayer({
         panPointRef.current = { x: e.clientX, y: e.clientY };
         return;
       }
-      if (strokeRef.current) stamp(e, strokeRef.current === "erase");
+      if (strokeRef.current) stamp(e.clientX, e.clientY, strokeRef.current === "erase");
     };
     const onMouseUp = () => {
       strokeRef.current = null;
@@ -670,19 +698,86 @@ export default function CommunePaintLayer({
       brush.style.display = "none";
     };
 
+    // Touch: one finger runs the active tool, a second finger aborts the
+    // one-finger gesture and hands over to Leaflet's pinch zoom — map
+    // navigation never requires switching tool. preventDefault() on the
+    // one-finger path suppresses the browser's simulated mouse events:
+    // without it a tap would re-enter onMouseDown and paint whatever the
+    // active tool is.
+    const endTouchGesture = () => {
+      panPointRef.current = null;
+      if (!strokeRef.current) return;
+      strokeRef.current = null;
+      brush.style.display = "none";
+      setBrushAppearance(false);
+      onPaintingChangeRef.current?.(false);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
+      if (e.touches.length !== 1) {
+        endTouchGesture();
+        return; // no preventDefault: Leaflet's TouchZoom owns the gesture now
+      }
+      const touch = e.touches[0];
+      if (touchToolRef.current === "pan") {
+        panPointRef.current = { x: touch.clientX, y: touch.clientY };
+      } else {
+        const erase = touchToolRef.current === "erase";
+        strokeRef.current = erase ? "erase" : "paint";
+        strokeSnapshottedRef.current = false;
+        setBrushAppearance(erase);
+        positionBrush(touch.clientX, touch.clientY);
+        brush.style.display = "block";
+        onPaintingChangeRef.current?.(true);
+        stamp(touch.clientX, touch.clientY, erase);
+      }
+      e.preventDefault();
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return; // pinch in progress — Leaflet's business
+      const touch = e.touches[0];
+      const panPoint = panPointRef.current;
+      if (panPoint) {
+        map.panBy([panPoint.x - touch.clientX, panPoint.y - touch.clientY], { animate: false });
+        panPointRef.current = { x: touch.clientX, y: touch.clientY };
+        e.preventDefault();
+      } else if (strokeRef.current) {
+        positionBrush(touch.clientX, touch.clientY);
+        stamp(touch.clientX, touch.clientY, strokeRef.current === "erase");
+        e.preventDefault();
+      }
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      // Going from two fingers to one leaves the tail of the pinch to
+      // Leaflet; a new one-finger gesture starts from a fresh touchstart.
+      if (e.touches.length === 0) endTouchGesture();
+    };
+    const onTouchCancel = () => endTouchGesture();
+
     container.addEventListener("mousedown", onMouseDown);
     container.addEventListener("contextmenu", onContextMenu);
     container.addEventListener("mouseleave", onMouseLeave);
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+    // Non-passive: both single-finger paths call preventDefault().
+    container.addEventListener("touchstart", onTouchStart, { passive: false });
+    container.addEventListener("touchmove", onTouchMove, { passive: false });
+    container.addEventListener("touchend", onTouchEnd);
+    container.addEventListener("touchcancel", onTouchCancel);
     return () => {
       container.removeEventListener("mousedown", onMouseDown);
       container.removeEventListener("contextmenu", onContextMenu);
       container.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      container.removeEventListener("touchstart", onTouchStart);
+      container.removeEventListener("touchmove", onTouchMove);
+      container.removeEventListener("touchend", onTouchEnd);
+      container.removeEventListener("touchcancel", onTouchCancel);
       brush.remove();
       container.style.cursor = "";
+      container.style.touchAction = "";
     };
   }, [map]);
 

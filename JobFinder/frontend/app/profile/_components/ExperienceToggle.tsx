@@ -15,7 +15,9 @@ const OPTIONS: { value: "0-2" | "2-5" | "5+"; label: string; sub: string }[] = [
 
 export default function ExperienceToggle({ value, onChange }: ExperienceToggleProps) {
   return (
-    <div className="flex gap-2">
+    // Stacked below sm: three side-by-side options get too narrow for their
+    // label + sub-label on a 375px screen once the page paddings are deducted.
+    <div className="flex flex-col gap-2 sm:flex-row">
       {OPTIONS.map((option) => {
         const isActive = value === option.value;
         return (

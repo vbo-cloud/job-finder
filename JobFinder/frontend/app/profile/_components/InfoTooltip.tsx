@@ -28,7 +28,11 @@ export function InfoTooltip({ text }: InfoTooltipProps) {
         <span
           id={tooltipId}
           role="tooltip"
-          className="absolute bottom-full left-full z-10 w-56 rounded border border-default bg-surface px-2 py-1.5 text-xs text-body shadow-lg"
+          // Below md the desktop placement (left-full, 224px wide) would spill
+          // past the right edge of a phone viewport and create horizontal
+          // scroll — centre a narrower bubble on the icon instead. A touch tap
+          // focuses the button, so onFocus keeps the tooltip reachable there.
+          className="absolute bottom-full left-1/2 z-10 w-48 -translate-x-1/2 rounded border border-default bg-surface px-2 py-1.5 text-xs text-body shadow-lg md:left-full md:w-56 md:translate-x-0"
         >
           {text}
         </span>

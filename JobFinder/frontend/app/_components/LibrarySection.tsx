@@ -16,8 +16,13 @@ const POLL_INTERVAL_MS = 3000;
 const MAX_CVS = 10;
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
+// Mobile-first: narrower minimum column and shorter rows so a 375px screen
+// fits two card columns instead of one card stretched full-width; the desktop
+// values are restored from md: up (unchanged rendering ≥768px). 130px: after
+// px-4 and the two reserved scrollbar gutters, a 375px viewport leaves ~294px
+// for the grid — two columns need min ≤ (294 - 18px gap) / 2 = 138px.
 const GRID_CLASSES =
-  "grid gap-x-[18px] gap-y-[52px] [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))] [grid-auto-rows:352px]";
+  "grid gap-x-[18px] gap-y-[52px] [grid-template-columns:repeat(auto-fill,minmax(130px,1fr))] [grid-auto-rows:300px] md:[grid-template-columns:repeat(auto-fill,minmax(180px,1fr))] md:[grid-auto-rows:352px]";
 
 interface OptimisticUpload {
   thumbnailUrl: string;
@@ -212,7 +217,7 @@ export default function LibrarySection({
       {/* Header is taken out of flow (absolute) so its own vertical offset
           doesn't push the grid below down — the grid stays centered in the
           full section regardless of how far down the header sits. */}
-      <div className="absolute inset-x-0 top-0 px-10 pt-40">
+      <div className="absolute inset-x-0 top-0 px-4 pt-24 md:px-10 md:pt-40">
         <div className="mx-auto w-full max-w-[1080px]">
           <div className="flex items-end justify-between gap-5">
             <div className="min-w-0">
@@ -231,7 +236,7 @@ export default function LibrarySection({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-10 pb-16 [scrollbar-gutter:stable_both-edges]">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-16 [scrollbar-gutter:stable_both-edges] md:px-10">
         {/* min-h-full + justify-center vertically centers short content without
             the classic flex-centering bug where overflow gets clipped at the
             top when there are enough CVs to fill more than one viewport. */}

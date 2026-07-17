@@ -134,7 +134,7 @@ export default function ProfilePage() {
         </Link>
       </div>
 
-      <main className="mx-auto max-w-4xl px-10 pb-16 pt-20">
+      <main className="mx-auto max-w-4xl px-4 pb-16 pt-20 sm:px-10">
         <div className="flex items-center gap-4">
           <div className="flex h-[60px] w-[60px] flex-none items-center justify-center rounded-2xl bg-accent-muted text-xl font-bold text-accent">
             {initials}
@@ -148,7 +148,7 @@ export default function ProfilePage() {
         </div>
 
         {analysisCredits !== null && (
-          <div className="mt-6 flex items-center gap-1.5 rounded-2xl bg-profile-surface p-6">
+          <div className="mt-6 flex items-center gap-1.5 rounded-2xl bg-profile-surface p-4 sm:p-6">
             <span className={microLabel}>Crédits d&apos;analyse restants</span>
             <InfoTooltip text="1 crédit = 1 analyse détaillée d'une offre par l'IA. 30 crédits offerts à l'inscription, cadeau de bienvenue bêta-testeur non renouvelable." />
             <span className="ml-auto flex items-center gap-3">
@@ -158,7 +158,7 @@ export default function ProfilePage() {
           </div>
         )}
 
-        <div className="mt-6 rounded-2xl bg-profile-surface p-6">
+        <div className="mt-6 rounded-2xl bg-profile-surface p-4 sm:p-6">
           <div className="flex items-center gap-1.5">
             <span className={microLabel}>Expérience</span>
             <InfoTooltip text="Influence le score de pertinence des offres." />

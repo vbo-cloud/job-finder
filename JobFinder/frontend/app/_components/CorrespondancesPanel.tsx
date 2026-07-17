@@ -295,7 +295,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   return (
     <section className="flex flex-1 flex-col overflow-hidden min-w-0">
       {/* Section header */}
-      <div className="flex-none px-[22px] pt-[15px] pb-0 bg-surface border-b border-faint">
+      <div className="flex-none px-3 pt-[15px] pb-0 bg-surface border-b border-faint md:px-[22px]">
         <h2 className="m-0 font-bold text-[17px] text-strong whitespace-nowrap overflow-hidden text-ellipsis">
           Vos correspondances
         </h2>
@@ -324,7 +324,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
 
       {/* Filter bar */}
       {tab === "Offres" && (
-        <div className="flex-none flex items-center gap-[10px] px-[22px] py-[11px] bg-chip border-b border-faint flex-wrap">
+        <div className="flex-none flex items-center gap-[10px] px-3 py-[11px] bg-chip border-b border-faint flex-wrap md:px-[22px]">
           <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-[320px] bg-page border border-soft rounded-[9px] px-3 py-2">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
               <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
@@ -357,7 +357,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       )}
 
       {/* Content area */}
-      <div ref={contentRef} className="flex-1 overflow-y-auto px-[22px] py-4 pb-12">
+      <div ref={contentRef} className="flex-1 overflow-y-auto px-3 py-4 pb-12 md:px-[22px]">
         {error ? (
           <p className="text-xs text-destructive mt-8 text-center">{error} — impossible de charger les matchs</p>
         ) : tab === "Offres" && !filters.nouvelle && !filters.vue ? (

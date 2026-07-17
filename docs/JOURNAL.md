@@ -5747,3 +5747,84 @@ fois l'analyse passée à `done`.
 `pending`), `tsc --noEmit` propre. `reviewer-frontend` sur les trois fichiers modifiés —
 APPROUVÉ, aucune remarque. Numéro de PR `#202` confirmé via `gh pr list` avant l'ouverture de
 la PR (prochain numéro disponible après #201).
+
+---
+
+## PR #203 — feat(frontend): responsive mobile/tablette + picker communes tactile
+
+**Date :** 2026-07-17
+**Branche :** `feature/responsive-mobile` → `dev`
+
+### Contexte
+
+Le frontend était pensé desktop-only : aucune classe responsive (`sm:`/`md:`/`lg:`) dans tout
+le code, plusieurs largeurs fixes en pixels (`w-[38%]` du détail CV, colonnes de 180px de la
+bibliothèque, colonne score 70px des matchs), et des interactions dépendantes de la souris —
+survol pour révéler la corbeille d'un CV, molette pour basculer CV ↔ carte sur le hero, et
+surtout le dessin de la zone de recherche 100 % MouseEvent (clic gauche = peindre, clic
+droit = gommer, clic milieu = déplacer). Objectif : rendre le site utilisable sur mobile et
+tablette (375px / 768px / 1280px) sans aucune régression visuelle desktop.
+
+### Ce qui a été fait
+
+**Commit 1 — page d'accueil.** Approche mobile-first inversée : les valeurs mobiles sont la
+base et les valeurs desktop d'origine sont restaurées à l'identique derrière `md:`/`lg:`,
+ce qui garantit mécaniquement le non-changement du rendu ≥ 1024px. `CVDetailSection` passe
+en colonne sous `lg` (vignette PDF masquée, zone d'analyse plafonnée à `38dvh` avec scroll
+interne, boutons de navigation CV à 44px) ; `LibrarySection` resserre la grille sous `md`
+(minimum 130px par colonne — calculé pour que 375px de viewport moins `px-4` et les deux
+gouttières de scrollbar donnent deux colonnes — lignes de 300px) ; `MatchItem` compacte la
+colonne score (56px), agrandit le bookmark en cible 44px et dégage le titre du bouton
+flottant (`pr-10`) ; `CorrespondancesPanel` et les panneaux d'analyse réduisent leurs
+paddings. Deux affordances tactiles : le switch CV ↔ carte, uniquement pilotable à la
+molette, gagne des pilules « Carte » / « Terminé » visibles sur pointeurs grossiers
+(`@media (any-pointer: coarse)`) — le hint décoratif « CARTE » d'`UploadSection` est masqué
+sur ces mêmes écrans pour ne pas doubler ; et la corbeille de `CVCard`, révélée au survol,
+devient visible en permanence via le nouveau hook `lib/useCoarsePointer.ts` (matchMedia,
+inerte sous jsdom donc sans effet sur les tests hover existants).
+
+**Commit 2 — page profil.** Paddings mobiles (`px-4`/`p-4` sous `sm`), `ExperienceToggle`
+empilé verticalement sous `sm` (trois colonnes trop étroites à 375px), et `InfoTooltip`
+recentré sur l'icône et réduit à `w-48` sous `md` — le placement desktop `left-full` de la
+bulle de 224px débordait du viewport téléphone et créait un scroll horizontal.
+
+**Commit 3 — picker communes tactile.** `CommunePaintLayer` : les helpers `stamp` et
+`positionBrush` sont refactorés pour travailler en coordonnées client (partagées entre
+MouseEvent et Touch), et des listeners `touchstart/touchmove/touchend/touchcancel` non
+passifs gèrent le geste à un doigt selon un nouveau type `TouchTool` (`paint` / `erase` /
+`pan`) exposé en prop. Un second doigt interrompt le geste en cours et laisse la main au
+pinch-zoom natif de Leaflet (`touchZoom`, qui déplace aussi la carte avec le point médian) :
+la navigation à deux doigts reste donc disponible quel que soit le mode actif.
+`preventDefault()` sur le chemin un doigt supprime les événements souris simulés du
+navigateur (sans quoi un tap repeindrait via `onMouseDown` quel que soit le mode) et
+`touch-action: none` empêche le navigateur de scroller la page. `CommuneZonePicker` porte
+l'état du mode et une barre d'outils flottante en bas de carte (pointeurs grossiers
+uniquement, cibles 44px, mode actif marqué par `aria-pressed` + fond accent) dans l'ordre
+Peinture → Gomme → Déplacement, mode Peinture par défaut sur la vue France entière.
+
+### Décisions techniques
+
+- **`any-pointer: coarse` plutôt que `pointer: coarse`** pour toutes les affordances
+  tactiles : un portable à écran tactile dont le pointeur principal est le trackpad doit
+  quand même exposer la toolbar et les pilules ; un desktop souris-seul ne les voit jamais.
+- **Trois boutons visibles plutôt qu'un bouton unique qui cycle** pour le toggle du picker :
+  un mode est atteignable en un tap au lieu de deux, et l'état actif est non ambigu
+  (`aria-pressed` + fond accent), ce qui reste dans l'esprit « cycler Peinture → Gomme →
+  Déplacement » du besoin exprimé.
+- **Fin de trait sur le second doigt plutôt qu'annulation** : les communes déjà peintes par
+  le premier doigt restent (annulables via Annuler) — distinguer un « vrai » début de trait
+  d'un début de pinch demanderait un délai artificiel sur le premier stamp, au prix d'un
+  tap-pour-peindre moins réactif.
+- **Interactions souris strictement inchangées** : les handlers mouse existants ne lisent
+  jamais `TouchTool` ; la répartition gauche/droit/milieu/molette du desktop est intacte.
+
+**Vérification :** suite Jest complète verte (131/131, dont un nouveau cas `CVCard` simulant
+un pointeur grossier via mock de `matchMedia`), `tsc --noEmit` et `next lint` propres.
+Vérification visuelle en dev server via Chrome : 1280px (hero, bibliothèque 5 colonnes,
+détail côte à côte, peinture/annulation/sortie molette de la carte — inchangés), ~768px
+(layout empilé, paddings `md:`), et 375px exactement via une iframe à largeur contrôlée
+(Chrome ne descend pas sous ~657px de fenêtre) : bibliothèque 2 colonnes, détail empilé,
+profil empilé avec tooltip contenu dans le viewport, `scrollWidth === clientWidth` (aucun
+scroll horizontal) mesuré sur les trois pages. Limite : le comportement tactile réel
+(toolbar visible, gestes un/deux doigts) n'est pas émulable dans une session Chrome
+desktop — validé par revue de code et test unitaire du hook, à confirmer sur appareil réel.
