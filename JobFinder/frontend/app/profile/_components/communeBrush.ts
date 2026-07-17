@@ -5,6 +5,14 @@ import { communeIntersectsCircle, type CommuneFeature } from "./communeGeo";
 /** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
 const BRUSH_RADIUS_PX = 24;
 
+/** Grace period before the first stamp of a touch stroke. A pinch's second
+ * finger virtually always lands within this window — deferring the first
+ * stamp until the grace expires keeps a two-finger zoom/pan from leaving
+ * paint behind (stamping on touchstart made every pinch paint a blob under
+ * whichever finger landed first). A tap shorter than the grace still paints:
+ * the pending stroke is committed on touchend instead. */
+const TOUCH_STROKE_GRACE_MS = 120;
+
 const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
 
 /** One-finger touch behaviour, selected in the picker's floating toolbar.
@@ -169,6 +177,39 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
   // one-finger path suppresses the browser's simulated mouse events:
   // without it a tap would re-enter onMouseDown and paint whatever the
   // active tool is.
+  //
+  // Paint/erase strokes do not start on touchstart: they sit pending for
+  // TOUCH_STROKE_GRACE_MS (path accumulated, brush visible, nothing painted)
+  // and only commit once the grace expires — or on touchend for a quick tap.
+  // A second finger landing during the grace cancels the pending stroke
+  // outright, so a pinch never paints.
+  let pendingTouch: {
+    erase: boolean;
+    points: { x: number; y: number }[];
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  const commitPendingTouch = () => {
+    if (!pendingTouch) return;
+    const { erase, points, timer } = pendingTouch;
+    clearTimeout(timer);
+    pendingTouch = null;
+    stroke = erase ? "erase" : "paint";
+    strokeSnapshotted = false;
+    opts.onPaintingChange(true);
+    // Replay the path accumulated during the grace — the stroke starts where
+    // the finger landed, not where it happens to be when the grace expires.
+    for (const point of points) stamp(point.x, point.y, erase);
+  };
+
+  const cancelPendingTouch = () => {
+    if (!pendingTouch) return;
+    clearTimeout(pendingTouch.timer);
+    pendingTouch = null;
+    brush.style.display = "none";
+    setBrushAppearance(false);
+  };
+
   const endTouchGesture = () => {
     panPoint = null;
     if (!stroke) return;
@@ -181,6 +222,7 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
   const onTouchStart = (e: TouchEvent) => {
     if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
     if (e.touches.length !== 1) {
+      cancelPendingTouch();
       endTouchGesture();
       return; // no preventDefault: Leaflet's TouchZoom owns the gesture now
     }
@@ -189,13 +231,14 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
       panPoint = { x: touch.clientX, y: touch.clientY };
     } else {
       const erase = opts.getTouchTool() === "erase";
-      stroke = erase ? "erase" : "paint";
-      strokeSnapshotted = false;
       setBrushAppearance(erase);
       positionBrush(touch.clientX, touch.clientY);
       brush.style.display = "block";
-      opts.onPaintingChange(true);
-      stamp(touch.clientX, touch.clientY, erase);
+      pendingTouch = {
+        erase,
+        points: [{ x: touch.clientX, y: touch.clientY }],
+        timer: setTimeout(commitPendingTouch, TOUCH_STROKE_GRACE_MS),
+      };
     }
     e.preventDefault();
   };
@@ -206,6 +249,10 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
       map.panBy([panPoint.x - touch.clientX, panPoint.y - touch.clientY], { animate: false });
       panPoint = { x: touch.clientX, y: touch.clientY };
       e.preventDefault();
+    } else if (pendingTouch) {
+      positionBrush(touch.clientX, touch.clientY);
+      pendingTouch.points.push({ x: touch.clientX, y: touch.clientY });
+      e.preventDefault();
     } else if (stroke) {
       positionBrush(touch.clientX, touch.clientY);
       stamp(touch.clientX, touch.clientY, stroke === "erase");
@@ -213,11 +260,17 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
     }
   };
   const onTouchEnd = (e: TouchEvent) => {
+    if (e.touches.length !== 0) return;
     // Going from two fingers to one leaves the tail of the pinch to
     // Leaflet; a new one-finger gesture starts from a fresh touchstart.
-    if (e.touches.length === 0) endTouchGesture();
+    // A tap released within the grace still paints: commit now.
+    commitPendingTouch();
+    endTouchGesture();
   };
-  const onTouchCancel = () => endTouchGesture();
+  const onTouchCancel = () => {
+    cancelPendingTouch();
+    endTouchGesture();
+  };
 
   container.addEventListener("mousedown", onMouseDown);
   container.addEventListener("contextmenu", onContextMenu);
@@ -230,6 +283,7 @@ export function attachBrushInteractions(map: L.Map, opts: BrushOptions): () => v
   container.addEventListener("touchend", onTouchEnd);
   container.addEventListener("touchcancel", onTouchCancel);
   return () => {
+    cancelPendingTouch();
     container.removeEventListener("mousedown", onMouseDown);
     container.removeEventListener("contextmenu", onContextMenu);
     container.removeEventListener("mouseleave", onMouseLeave);
