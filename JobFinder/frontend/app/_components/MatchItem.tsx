@@ -128,7 +128,8 @@ export default function MatchItem({
         onClick={(e) => { e.stopPropagation(); onSave(); }}
         aria-label={isSaved ? "Retirer des favoris" : "Sauvegarder"}
         className={cn(
-          "absolute top-3 right-3.5 z-10 flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
+          // 44px tap target below md, the original compact 32px square beyond.
+          "absolute top-2 right-2 z-10 flex h-11 w-11 items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default md:top-3 md:right-3.5 md:h-8 md:w-8",
           isSaved ? "border-accent bg-accent-muted text-accent" : "border-faint bg-page text-muted hover:border-subtle",
         )}
       >
@@ -146,13 +147,13 @@ export default function MatchItem({
         className="flex items-stretch cursor-pointer hover:bg-overlay rounded-[13px] transition-colors"
       >
         {/* Score column */}
-        <div className="relative flex flex-none w-[70px] flex-col items-center justify-center gap-2 py-4 px-2 bg-chip border-r border-faint">
+        <div className="relative flex flex-none w-[56px] flex-col items-center justify-center gap-2 py-4 px-1 bg-chip border-r border-faint md:w-[70px] md:px-2">
           <span className="absolute top-3 left-0 right-0 text-center text-[10.5px] font-bold tracking-[.05em] text-muted">
             {short}
           </span>
           {golden ? (
             <span
-              className="font-mono text-[20px] font-bold tabular-nums"
+              className="font-mono text-[17px] font-bold tabular-nums md:text-[20px]"
               style={{
                 background: "linear-gradient(95deg,#b8860b,#f6d879,#fff3c4,#f6d879,#b8860b)",
                 backgroundSize: "200% 100%",
@@ -165,7 +166,7 @@ export default function MatchItem({
               {pct}%
             </span>
           ) : (
-            <span className="font-mono text-[20px] font-bold tabular-nums" style={{ color }}>
+            <span className="font-mono text-[17px] font-bold tabular-nums md:text-[20px]" style={{ color }}>
               {pct}%
             </span>
           )}
@@ -175,7 +176,7 @@ export default function MatchItem({
         </div>
 
         {/* Content column */}
-        <div className="flex flex-1 min-w-0 flex-col gap-[9px] py-4 px-[18px]">
+        <div className="flex flex-1 min-w-0 flex-col gap-[9px] py-3 px-3 md:py-4 md:px-[18px]">
           <div className="flex items-center gap-3">
             <div
               className="flex flex-none h-[42px] w-[42px] items-center justify-center rounded-xl text-sm font-bold"
@@ -184,7 +185,9 @@ export default function MatchItem({
               {badge.mono}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
+              {/* pr clears the floating bookmark button on the first row only
+                  (below md it grows to 44px and would overlap long titles). */}
+              <div className="flex items-center gap-2 flex-wrap pr-10 md:pr-0">
                 <a
                   href={`${FT_OFFER_URL}/${offer.ft_id}`}
                   target="_blank"
@@ -240,7 +243,7 @@ export default function MatchItem({
         </div>
 
         {/* Chevron */}
-        <div className="flex flex-none items-center justify-center px-3.5 self-center">
+        <div className="flex flex-none items-center justify-center px-0.5 self-center md:px-3.5">
           <span className={cn("flex h-8 w-8 items-center justify-center text-muted transition-transform duration-200", isExpanded && "rotate-180")}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
               <path d="m6 9 6 6 6-6" />
@@ -251,7 +254,7 @@ export default function MatchItem({
 
       {/* Accordion panel */}
       {isExpanded && (
-        <div className="border-t border-faint px-5 py-5 grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-5 [animation:expandIn_.2s_ease]">
+        <div className="border-t border-faint px-3 py-4 grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-5 [animation:expandIn_.2s_ease] md:px-5 md:py-5 md:grid-cols-[repeat(auto-fit,minmax(300px,1fr))]">
           {/* Offer column */}
           <div>
             <p className="text-[10.5px] font-bold tracking-[.09em] uppercase text-muted mb-3">Descriptif de l&apos;offre</p>

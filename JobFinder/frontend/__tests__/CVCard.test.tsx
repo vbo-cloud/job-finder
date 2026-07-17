@@ -117,6 +117,27 @@ describe("CVCard", () => {
       expect(trashButton.parentElement).toBeVisible();
     });
 
+    it("keeps the delete button visible without hover on coarse-pointer devices", () => {
+      // jsdom has no matchMedia — the hook then reports "fine pointer" and the
+      // hover tests above keep exercising the desktop path. Simulate a touch
+      // device by providing one.
+      const mediaQueryList = {
+        matches: true,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+      };
+      window.matchMedia = jest
+        .fn()
+        .mockReturnValue(mediaQueryList) as unknown as typeof window.matchMedia;
+      try {
+        render(<CVCard cv={baseCV} onDeleted={jest.fn()} />);
+        const trashButton = screen.getByRole("button", { name: "Supprimer ce CV" });
+        expect(trashButton.parentElement).toBeVisible();
+      } finally {
+        delete (window as { matchMedia?: unknown }).matchMedia;
+      }
+    });
+
     it("clicking trash button shows confirm and cancel buttons", () => {
       const { container } = render(
         <CVCard cv={baseCV} onDeleted={jest.fn()} />

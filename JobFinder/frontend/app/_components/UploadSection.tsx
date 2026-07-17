@@ -140,8 +140,10 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
 
       {/* Gated like the map mode itself (HomeMapSection): the zone is tied
           to the profile, which requires being signed in. */}
+      {/* Hidden on coarse pointers: HomeMapSection shows a tappable "Carte"
+          pill at the same spot there — the scroll hint would double it. */}
       {isAuthenticated && (
-        <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+        <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 [@media(any-pointer:coarse)]:hidden">
           <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
           <span className="text-[9px] tracking-widest text-label">CARTE</span>
         </div>

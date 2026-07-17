@@ -169,16 +169,17 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
           </button>
         </div>
 
-        {/* Body */}
-        <div className="flex flex-1 overflow-hidden">
+        {/* Body — stacked below lg (selector + analysis on top, matches under),
+            side-by-side columns from lg up (the original desktop layout). */}
+        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
           {/* Left — CV thumbnail */}
-          <div className="w-[38%] border-r border-faint flex flex-col items-center gap-4 px-6 pt-5 pb-6 overflow-hidden">
+          <div className="w-full shrink-0 border-b border-faint flex flex-col items-center gap-2 px-3 pt-2 pb-3 overflow-hidden lg:w-[38%] lg:shrink lg:border-b-0 lg:border-r lg:gap-4 lg:px-6 lg:pt-5 lg:pb-6">
             {/* Document selector — +50% */}
             <div className="flex items-center gap-2 bg-chip border border-faint rounded-full py-[6px] pl-[18px] pr-[6px] shrink-0">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
                 <path d="M14 3v5h5M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
               </svg>
-              <span className="text-[13px] text-body font-medium max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap">
+              <span className="text-[13px] text-body font-medium max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap sm:max-w-[180px]">
                 {currentCv?.name ?? "CV"}
               </span>
               <span className="font-mono text-[11px] text-muted tabular-nums">
@@ -188,7 +189,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
                 onClick={() => prevCv && goToCv(prevCv.id)}
                 disabled={!prevCv}
                 aria-label="CV précédent"
-                className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-page text-body text-[18px] disabled:opacity-0 hover:text-strong transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-page lg:h-[36px] lg:w-[36px] text-body text-[18px] disabled:opacity-0 hover:text-strong transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
               >
                 ‹
               </button>
@@ -196,14 +197,15 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
                 onClick={() => nextCv && goToCv(nextCv.id)}
                 disabled={!nextCv}
                 aria-label="CV suivant"
-                className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-page text-body text-[18px] disabled:opacity-0 hover:text-strong transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-page lg:h-[36px] lg:w-[36px] text-body text-[18px] disabled:opacity-0 hover:text-strong transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-default"
               >
                 ›
               </button>
             </div>
 
-            {/* Thumbnail — fits entirely, no scroll */}
-            <div className="flex-1 min-h-0 flex items-center justify-center w-full">
+            {/* Thumbnail — fits entirely, no scroll. Hidden below lg: in the
+                stacked layout the vertical space goes to the matches list. */}
+            <div className="flex-1 min-h-0 hidden lg:flex items-center justify-center w-full">
               {thumbnailSrc ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -233,7 +235,13 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               style={analysisOpen && analysisHeight !== null ? { height: analysisHeight } : undefined}
               className={cn(
                 "w-full shrink-0 flex flex-col min-h-0 rounded-xl border border-faint bg-chip overflow-hidden",
-                analysisOpen && (analysisHeight === null ? "h-[80%]" : "max-h-[80%]"),
+                // Below lg the column height is driven by its content, so the
+                // percentage caps are meaningless — a dvh cap bounds the open
+                // panel instead, leaving the matches list most of the screen.
+                analysisOpen &&
+                  (analysisHeight === null
+                    ? "max-h-[38dvh] lg:max-h-none lg:h-[80%]"
+                    : "max-h-[38dvh] lg:max-h-[80%]"),
               )}
             >
               <button
@@ -268,7 +276,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
           </div>
 
           {/* Right — Vos correspondances, aligné sur le haut du pill */}
-          <div className="flex-1 min-w-0 overflow-hidden flex flex-col pt-5">
+          <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col pt-2 lg:pt-5">
             <CorrespondancesPanel
               key={selectedCvId}
               cvId={selectedCvId}

@@ -41,7 +41,7 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
     analysisPending || analysis?.status === "processing" || analysis?.status === "pending";
 
   return (
-    <div className="rounded-xl border border-faint bg-chip p-[18px]">
+    <div className="rounded-xl border border-faint bg-chip p-3.5 md:p-[18px]">
       {analysis?.status === "done" && analysis.verdict && (
         <p className="text-[15px] font-bold text-strong leading-snug mb-1.5">{analysis.verdict}</p>
       )}
