@@ -9,7 +9,8 @@ import { MapContainer } from "react-leaflet";
 
 import { cn } from "@/lib/utils";
 
-import CommunePaintLayer, { type TouchTool } from "./CommunePaintLayer";
+import { type TouchTool } from "./communeBrush";
+import CommunePaintLayer from "./CommunePaintLayer";
 import { compressSelection, expandSelection, type SelectableCommune } from "./communeGeo";
 
 interface CommuneZonePickerProps {
