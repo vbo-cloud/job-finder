@@ -11,6 +11,16 @@ interface OptimisticUpload {
   cvId: string | null;
 }
 
+// Smooth scrolling stalls midway on the overflow-hidden mobile container
+// (Chrome drops the animation when nested scrollers are involved) — below md
+// the sections jump instantly, which also matches the menu-driven "page"
+// navigation; the desktop snap container keeps its animation. The
+// typeof guard covers jsdom, where matchMedia does not exist.
+const sectionScrollBehavior = (): ScrollBehavior =>
+  typeof window.matchMedia === "function" && window.matchMedia("(min-width: 768px)").matches
+    ? "smooth"
+    : "auto";
+
 export default function HomeClient() {
   // Bumped on upload, zone save, and marking a match seen — anything that can
   // change a CV's unseen_count badge in the library.
@@ -36,7 +46,7 @@ export default function HomeClient() {
         // detail section unmounts — send the user back to the home section
         // rather than leaving the scroll stranded on a vanished section.
         setSelectedCvId(null);
-        document.getElementById("home")?.scrollIntoView({ behavior: "smooth" });
+        document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
       }
       return;
     }
@@ -69,13 +79,13 @@ export default function HomeClient() {
     setSelectedCvId(id);
     // Defer one frame so snap-mandatory has registered the section before scrolling.
     requestAnimationFrame(() => {
-      detailRef.current?.scrollIntoView({ behavior: "smooth" });
+      detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
     });
   }, []);
 
   // Back action from CVDetailSection: scroll to library without unmounting the section.
   const handleCloseDetail = useCallback(() => {
-    document.getElementById("library")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
   // Scrolls to the home/upload section, then calls onLanded once the scroll
@@ -95,7 +105,7 @@ export default function HomeClient() {
     };
     container.addEventListener("scrollend", finish, { once: true });
     setTimeout(finish, 900);
-    home.scrollIntoView({ behavior: "smooth" });
+    home.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
   const handleZoneSaved = useCallback(() => {
@@ -110,7 +120,14 @@ export default function HomeClient() {
   }, []);
 
   return (
-    <main ref={mainRef} className="h-dvh snap-y snap-mandatory overflow-y-scroll">
+    // Below md the swipe/scroll navigation between the full-screen sections
+    // is disabled (overflow-hidden): moving around goes through the pinned
+    // mobile menu (layout.tsx), which scrolls this container programmatically
+    // — scrollIntoView still scrolls an overflow-hidden box.
+    <main
+      ref={mainRef}
+      className="h-dvh overflow-hidden md:snap-y md:snap-mandatory md:overflow-y-scroll"
+    >
       <HomeMapSection
         uploadProps={{
           onUploadComplete: handleUploadComplete,

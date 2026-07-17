@@ -297,7 +297,8 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
         <button
           type="button"
           onClick={enterMap}
-          className="absolute left-1/2 top-3 z-10 hidden min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default [@media(any-pointer:coarse)]:flex"
+          // max-md:top-16 drops it below the pinned mobile bar (h-14).
+          className="absolute left-1/2 top-3 z-10 hidden min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default max-md:top-16 [@media(any-pointer:coarse)]:flex"
         >
           <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
           Carte
@@ -308,7 +309,9 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
           type="button"
           onClick={exitMap}
           aria-label="Quitter la carte et revenir à l'import de CV"
-          className="absolute right-4 top-3 z-10 hidden min-h-11 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default [@media(any-pointer:coarse)]:flex"
+          // Below md it moves to the bottom-right corner: the top row is taken
+          // by the pinned bar and the picker's own toolbar (undo/redo/status).
+          className="absolute right-4 top-3 z-10 hidden min-h-11 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default max-md:bottom-4 max-md:top-auto [@media(any-pointer:coarse)]:flex"
         >
           Terminé
         </button>

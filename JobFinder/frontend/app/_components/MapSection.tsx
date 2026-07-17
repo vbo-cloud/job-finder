@@ -35,7 +35,9 @@ export default function MapSection({
   viewResetToken,
 }: MapSectionProps) {
   return (
-    <div className="absolute inset-0 flex flex-col p-6">
+    // max-md:pt-16 clears the pinned mobile bar (h-14) so the picker's
+    // toolbar row stays reachable below it.
+    <div className="absolute inset-0 flex flex-col p-6 max-md:pt-16">
       <div className="min-h-0 flex-1">
         <CommuneZonePicker
           value={communeCodes}

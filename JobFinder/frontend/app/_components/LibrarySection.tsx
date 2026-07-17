@@ -204,12 +204,14 @@ export default function LibrarySection({
         accessible ? "snap-start" : "hidden",
       )}
     >
-      <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+      {/* Scroll hints — meaningless below md, where swipe navigation is off
+          (the pinned mobile menu navigates instead) and the bar covers the top. */}
+      <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
         <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
         <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
       </div>
 
-      <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+      <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
         <span className="text-[9px] tracking-widest text-label">OFFRES</span>
         <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
       </div>

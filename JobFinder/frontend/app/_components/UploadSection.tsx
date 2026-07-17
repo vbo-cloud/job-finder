@@ -141,16 +141,19 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
       {/* Gated like the map mode itself (HomeMapSection): the zone is tied
           to the profile, which requires being signed in. */}
       {/* Hidden on coarse pointers: HomeMapSection shows a tappable "Carte"
-          pill at the same spot there — the scroll hint would double it. */}
+          pill at the same spot there — the scroll hint would double it.
+          Hidden below md too: the mobile bar covers that area and swipe
+          navigation is disabled there anyway. */}
       {isAuthenticated && (
-        <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 [@media(any-pointer:coarse)]:hidden">
+        <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden [@media(any-pointer:coarse)]:hidden">
           <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
           <span className="text-[9px] tracking-widest text-label">CARTE</span>
         </div>
       )}
 
+      {/* Scroll hint — meaningless below md where swipe navigation is off. */}
       {libraryAccessible && (
-        <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1">
+        <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
           <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
           <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
         </div>

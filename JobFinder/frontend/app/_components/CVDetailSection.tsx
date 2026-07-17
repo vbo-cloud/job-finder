@@ -155,10 +155,13 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
       <section
         ref={ref}
         id="cv-detail"
-        className="h-dvh snap-start bg-page flex flex-col"
+        // max-md:pt-14 : dégage la barre mobile épinglée (opaque, h-14).
+        className="h-dvh snap-start bg-page flex flex-col max-md:pt-14"
       >
-        {/* BIBLIOTHÈQUE — dans le flux, centré, pousse le body en dessous */}
-        <div className="flex-none flex justify-center pt-[3px]">
+        {/* BIBLIOTHÈQUE — dans le flux, centré, pousse le body en dessous.
+            Masqué sous md : la navigation passe par le menu épinglé, et le
+            geste de scroll vers la bibliothèque n'existe plus sur mobile. */}
+        <div className="flex-none flex justify-center pt-[3px] max-md:hidden">
           <button
             onClick={onClose}
             aria-label="Retour à la bibliothèque"
