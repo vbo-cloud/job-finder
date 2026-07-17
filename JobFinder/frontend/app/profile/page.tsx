@@ -124,7 +124,10 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-profile-page">
-      <div className="fixed inset-x-0 top-0 z-40 flex h-[52px] items-center bg-profile-surface px-5">
+      {/* Hidden below md: the global pinned mobile bar (layout.tsx) already
+          occupies the top of the screen and its menu navigates back home —
+          two stacked fixed bars would fight for the same space. */}
+      <div className="fixed inset-x-0 top-0 z-40 hidden h-[52px] items-center bg-profile-surface px-5 md:flex">
         <Link
           href="/"
           className="flex h-8 items-center gap-1 rounded-full border border-soft pl-2 pr-3.5 text-xs font-medium text-strong transition-colors hover:border-default hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"

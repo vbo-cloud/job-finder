@@ -5828,3 +5828,81 @@ profil empilé avec tooltip contenu dans le viewport, `scrollWidth === clientWid
 scroll horizontal) mesuré sur les trois pages. Limite : le comportement tactile réel
 (toolbar visible, gestes un/deux doigts) n'est pas émulable dans une session Chrome
 desktop — validé par revue de code et test unitaire du hook, à confirmer sur appareil réel.
+
+---
+
+## PR #204 — refactor picker, fix pinch tactile, navigation mobile par menu épinglé
+
+**Date :** 2026-07-17
+**Branche :** `feature/mobile-nav-picker-refactor` → `dev`
+
+### Contexte
+
+Retours d'usage mobile après le merge du PR #203 : (1) `CommunePaintLayer.tsx` avait
+atteint ~800 lignes (dette signalée en review du #203), (2) un geste à deux doigts sur la
+carte (pincer pour zoomer) laissait un coup de pinceau parasite sous le premier doigt posé,
+et (3) la navigation entre les sections plein écran de l'accueil restait au swipe, peu
+adaptée au mobile — remplacée par un menu de navigation épinglé.
+
+### Ce qui a été fait
+
+**Commit 1 — refactor.** `CommunePaintLayer.tsx` découpé par responsabilité, sans
+changement de comportement : `communeMapStyles.ts` (lecture des tokens de thème → styles
+Leaflet), `communeMapDetail.ts` (contours haute-zoom et labels de villes/communes avec
+placement anti-collision, derrière une factory `createDetailLayers()`), `communeBrush.ts`
+(toutes les interactions pointeur — souris et tactile — derrière
+`attachBrushInteractions(map, opts)` qui retourne son cleanup, et propriétaire du type
+`TouchTool`), le composant conservant fond de carte, chargement des données et synchro de
+la sélection contrôlée (~360 lignes).
+
+**Commit 2 — fix pinch.** Le trait tactile démarrait au `touchstart` : le premier doigt
+d'un pincement peignait donc toujours avant que Leaflet ne prenne le geste. Les traits
+peinture/gomme passent par une fenêtre de grâce de 120 ms : le chemin est accumulé et le
+curseur pinceau affiché, mais rien n'est peint ; un second doigt qui arrive pendant la
+grâce annule le trait en attente (pincement pur, zéro peinture) ; l'expiration de la grâce
+committe le trait en rejouant le chemin accumulé (pas de trou au départ) ; un tap relâché
+avant la grâce committe au `touchend` (le tap-pour-peindre reste immédiat). Couvert par
+`communeBrush.test.ts` (pinch sans peinture, commit à l'expiration, commit du tap, outil
+déplacement).
+
+**Commit 3 — navigation mobile.** Sous `md` : le conteneur scroll-snap passe en
+`overflow-hidden` (plus de swipe entre sections — le scroll programmatique fonctionne
+toujours), et les pills flottants Crédits/Compte du layout deviennent le côté droit d'une
+barre épinglée pleine largeur, opaque (`bg-surface`, `z-50`, `border-b`) — le contenu passe
+derrière elle, jamais dessus. Nouveau `MobileNavMenu` (burger en haut à gauche, cible
+44px) : panneau opaque listant Accueil / Bibliothèque / Correspondances / Mon profil,
+entrées de section désactivées quand la section n'existe pas (bibliothèque vide, aucun CV
+sélectionné — disponibilité échantillonnée à l'ouverture via `checkVisibility`), et depuis
+une autre route elles ramènent d'abord sur l'accueil. Les hints de scroll ⌃/⌄ sont masqués
+sous `md`, `CVDetailSection` prend `pt-14` sous la barre, les pilules Carte/Terminé passent
+sous la barre (Terminé en bas à droite), et /profile masque sa propre barre « ← Accueil »
+sous `md` (une seule barre fixe à la fois). Au-dessus de `md`, rien ne change : mêmes
+éléments repositionnés en CSS pur (un seul montage de CreditsBadge/AuthButton — une seconde
+instance dupliquerait le GET /profile).
+
+### Décisions techniques
+
+- **Saut instantané pour la navigation par menu** : `scrollIntoView({behavior:"smooth"})`
+  cale à mi-course sur un conteneur `overflow-hidden` quand des scrollers imbriqués sont en
+  jeu (constaté dans Chrome, reproductible hors interaction) — et une navigation « de page
+  en page » se prête de toute façon mieux à un saut. Les flux de scroll internes de
+  `HomeClient` choisissent smooth/instantané par breakpoint (`sectionScrollBehavior()`,
+  gardé contre l'absence de `matchMedia` sous jsdom).
+- **Grâce temporelle plutôt que rollback** pour le fix pinch : annuler un trait déjà commité
+  aurait pollué la pile d'annulation (le snapshot part au premier stamp effectif) ; 120 ms
+  couvrent largement le délai entre les deux doigts d'un pincement réel tout en restant
+  imperceptibles au dessin.
+- **Barre mobile sous `md`** (largeur) et non `any-pointer: coarse` : c'est un changement de
+  layout, pas d'input — une tablette ≥ 768px garde le comportement actuel, les affordances
+  purement tactiles (toolbar du picker, pilules Carte/Terminé) restent quant à elles pilotées
+  par `any-pointer: coarse`.
+
+**Vérification :** suite Jest complète verte (139/139 dont 4 nouveaux cas `communeBrush` et
+4 `MobileNavMenu`), `tsc --noEmit` et `next lint` propres. Vérification visuelle en dev
+server (iframe 390px, la fenêtre Chrome ne descendant pas sous ~660px) : barre épinglée
+opaque avec burger + Crédits + Compte, menu ouvert/fermé, navigation vers Bibliothèque /
+Correspondances / Mon profil (une seule barre sur /profile), contenu passant derrière la
+barre sans jamais la recouvrir ; desktop ≥ md inchangé (pills flottants, snap-scroll,
+souris sur la carte). Limite : gestes tactiles réels (pinch) non émulables en session
+Chrome desktop — le fix pinch est couvert par les tests unitaires de `communeBrush`, à
+confirmer sur appareil réel.

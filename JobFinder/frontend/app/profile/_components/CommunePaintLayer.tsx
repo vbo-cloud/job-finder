@@ -1,15 +1,13 @@
 "use client";
 
-import type { FeatureCollection } from "geojson";
 import L from "leaflet";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 
-import { CITY_LABELS } from "./cityLabels";
+import { attachBrushInteractions, type TouchTool } from "./communeBrush";
 import {
   bboxIntersects,
   buildFranceOutline,
-  communeIntersectsCircle,
   loadDepartementContours,
   loadDeptCommunes,
   loadDeptIndex,
@@ -18,74 +16,8 @@ import {
   type DeptIndexEntry,
   type SelectableCommune,
 } from "./communeGeo";
-
-/** Fixed on-screen brush radius — covers more communes the further the map is zoomed out. */
-const BRUSH_RADIUS_PX = 24;
-
-/** From this zoom, the contours of every commune in the viewport are drawn
- * (e.g. the Paris arrondissements become visible) and the 100m-simplified
- * geometries are fetched per visible department to sharpen the rendering. */
-const CONTOUR_MIN_ZOOM = 10;
-
-/* Commune name labels appear progressively by population while zooming in,
- * ending with every village at COMMUNE_LABEL_MIN_ZOOM. */
-const TOWN_LABEL_MIN_ZOOM = 9;
-const TOWN_MIN_POP = 20_000;
-const SMALL_TOWN_LABEL_MIN_ZOOM = 10;
-const SMALL_TOWN_MIN_POP = 5_000;
-const COMMUNE_LABEL_MIN_ZOOM = 11;
-
-/* Municipal arrondissements ("Paris 12e Arrondissement") are labelled with
- * the short form ("12e") and only once their contours are drawn. */
-const ARRONDISSEMENT_RE = /^(?:Paris|Lyon|Marseille) (\d+(?:er|e)) Arrondissement$/;
-
-/* Labels are placed biggest-population-first and dropped when they would
- * overlap an already-placed one, so names fill in gradually as zooming in
- * frees screen space instead of a whole population tier popping at once.
- * Collision boxes are estimated from the name length. */
-const LABEL_CHAR_PX = 7;
-const LABEL_HEIGHT_PX = 20;
-const LABEL_GAP_PX = 14;
-const MAX_DYNAMIC_LABELS = 200;
-
-/* The further the map is zoomed out, the more breathing room each label
- * demands — keeps dense areas (Île-de-France) down to a handful of names
- * instead of a wall of text. 1x from zoom 11.5 up. */
-function labelSpacingScale(zoom: number): number {
-  return 1 + Math.max(0, 11.5 - zoom) * 0.6;
-}
-
-interface PlacedLabel {
-  x: number;
-  y: number;
-  halfW: number;
-}
-
-function labelCollides(
-  placed: PlacedLabel[],
-  x: number,
-  y: number,
-  halfW: number,
-  scale: number,
-): boolean {
-  return placed.some(
-    (p) =>
-      Math.abs(y - p.y) < LABEL_HEIGHT_PX * scale &&
-      Math.abs(x - p.x) < p.halfW + halfW + LABEL_GAP_PX * scale,
-  );
-}
-
-const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
-
-/* Communes already labelled through the static city tiers — skip their
- * dynamic label to avoid doubled names. */
-const CITY_NAMES = new Set(CITY_LABELS.map((c) => c.name));
-
-/** One-finger touch behaviour, selected in the picker's floating toolbar.
- * Two-finger gestures (pinch zoom, two-finger pan) bypass the active tool and
- * always navigate the map. Mouse interactions ignore it entirely — the
- * left/right/middle buttons keep their fixed paint/erase/pan roles. */
-export type TouchTool = "paint" | "erase" | "pan";
+import { createCityMarkers, createDetailLayers, syncCityLabels } from "./communeMapDetail";
+import { departementStyle, selectedStyle, themeVar } from "./communeMapStyles";
 
 interface CommunePaintLayerProps {
   value: string[];
@@ -105,62 +37,8 @@ interface CommunePaintLayerProps {
   /** Increment to snap the view back to its initial nationwide fit — used
    * by the home page when leaving the map mode. */
   viewResetToken?: number;
-  /** Active one-finger touch tool (see TouchTool). Defaults to "paint". */
+  /** Active one-finger touch tool (see TouchTool in communeBrush). Defaults to "paint". */
   touchTool?: TouchTool;
-}
-
-/* Leaflet canvas paths cannot be styled through CSS classes — colors are read
- * from the theme CSS variables at style time (same exception as OrbitAnimation). */
-function themeVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-function selectedStyle(): L.PathOptions {
-  return {
-    color: themeVar("--border-accent"),
-    weight: 1.5,
-    fill: true,
-    // The rgba token carries its own alpha — do not multiply it by Leaflet's default fillOpacity.
-    fillColor: themeVar("--bg-accent-muted"),
-    fillOpacity: 1,
-  };
-}
-
-function departementStyle(): L.PathOptions {
-  return {
-    color: themeVar("--border-faint"),
-    weight: 1,
-    fill: true,
-    fillColor: themeVar("--bg-card"),
-    fillOpacity: 1,
-  };
-}
-
-function contourStyle(): L.PathOptions {
-  return { color: themeVar("--border-subtle"), weight: 1, fill: false };
-}
-
-/** Zoom from which a commune's name label is shown — lower for bigger towns. */
-function labelMinZoom(commune: CommuneFeature): number {
-  if (ARRONDISSEMENT_RE.test(commune.nom)) return CONTOUR_MIN_ZOOM;
-  if (commune.pop >= TOWN_MIN_POP) return TOWN_LABEL_MIN_ZOOM;
-  if (commune.pop >= SMALL_TOWN_MIN_POP) return SMALL_TOWN_LABEL_MIN_ZOOM;
-  return COMMUNE_LABEL_MIN_ZOOM;
-}
-
-function communeLabelText(commune: CommuneFeature): string {
-  return ARRONDISSEMENT_RE.exec(commune.nom)?.[1] ?? commune.nom;
-}
-
-function communeLabelIcon(commune: CommuneFeature): L.DivIcon {
-  const nom = communeLabelText(commune);
-  const sizeClass = commune.pop >= TOWN_MIN_POP ? "text-xs" : "text-[11px]";
-  return L.divIcon({
-    className: "",
-    html:
-      `<span class="pointer-events-none whitespace-nowrap ${sizeClass} text-muted" ` +
-      `style="position:absolute;transform:translate(-50%,-50%)">${nom}</span>`,
-  });
 }
 
 /**
@@ -172,6 +50,11 @@ function communeLabelIcon(commune: CommuneFeature): L.DivIcon {
  * fingers always pinch-zoom/pan via Leaflet, whatever the tool. All commune
  * geometries load up front so painting works anywhere at any zoom; only the
  * selection is drawn. Must be rendered inside a react-leaflet MapContainer.
+ *
+ * The heavy lifting is delegated: brush/pointer interactions live in
+ * communeBrush.ts, high-zoom contours and name labels in communeMapDetail.ts,
+ * theme-token → Leaflet styles in communeMapStyles.ts. This component owns
+ * the basemap, the data loading and the controlled-selection syncing.
  */
 export default function CommunePaintLayer({
   value,
@@ -207,18 +90,17 @@ export default function CommunePaintLayer({
   onAtMinZoomChangeRef.current = onAtMinZoomChange;
   const touchToolRef = useRef(touchTool);
   touchToolRef.current = touchTool;
-  const strokeRef = useRef<"paint" | "erase" | null>(null);
-  const strokeSnapshottedRef = useRef(false);
-  const panPointRef = useRef<{ x: number; y: number } | null>(null);
   const homeViewRef = useRef<{ center: L.LatLng; zoom: number } | null>(null);
 
-  const addSelectionFill = (code: string) => {
+  // Stable (only reads refs) so the effects below can list it as a
+  // dependency without ever re-running because of it.
+  const addSelectionFill = useCallback((code: string) => {
     if (selectionLayersRef.current.has(code)) return;
     const commune = communesRef.current.get(code);
     if (!commune || !selectionGroupRef.current) return;
     // onEachFeature (below) registers the created sublayer in selectionLayersRef.
     selectionGroupRef.current.addData(commune.feature);
-  };
+  }, []);
 
   // Stylised basemap, commune geometries, selection layer, view lock.
   useEffect(() => {
@@ -303,124 +185,23 @@ export default function CommunePaintLayer({
         console.error("[CommunePaintLayer] loading departements failed:", err),
       );
 
-    // City labels appear progressively: the biggest cities are always
-    // visible, medium ones only from their minZoom.
-    const cityMarkers = CITY_LABELS.map((city) => ({
-      minZoom: city.minZoom,
-      name: city.name,
-      marker: L.marker([city.lat, city.lng], {
-        interactive: false,
-        keyboard: false,
-        icon: L.divIcon({
-          className: "",
-          html: `<span class="pointer-events-none whitespace-nowrap text-xs ${
-            city.minZoom === 0 ? "text-secondary" : "text-muted"
-          }">${city.name}</span>`,
-        }),
-      }),
-    }));
-    const syncCityLabels = () => {
-      const zoom = map.getZoom();
-      for (const { marker, minZoom } of cityMarkers) {
-        if (zoom >= minZoom) {
-          if (!map.hasLayer(marker)) marker.addTo(map);
-        } else if (map.hasLayer(marker)) {
-          marker.remove();
-        }
-      }
-    };
-    syncCityLabels();
-    map.on("zoomend", syncCityLabels);
+    const cityMarkers = createCityMarkers();
+    const doSyncCityLabels = () => syncCityLabels(map, cityMarkers);
+    doSyncCityLabels();
+    map.on("zoomend", doSyncCityLabels);
     for (const { marker } of cityMarkers) baseLayers.push(marker);
 
-    // High-zoom detail: contours of every visible commune from
-    // CONTOUR_MIN_ZOOM, and name labels revealed progressively by population
-    // (big towns first, then every village) — driven by the loaded dataset.
-    let contoursLayer: L.GeoJSON | null = null;
-    const communeLabelMarkers = new Map<string, L.Marker>();
-    const syncDetailLayers = () => {
-      const zoom = map.getZoom();
-      const b = map.getBounds();
-      const view: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-
-      contoursLayer?.remove();
-      contoursLayer = null;
-      if (zoom >= CONTOUR_MIN_ZOOM) {
-        upgradeVisibleDepts(view);
-        const features: CommuneFeature["feature"][] = [];
-        communesRef.current.forEach((commune) => {
-          if (bboxIntersects(commune.bbox, view)) features.push(commune.feature);
-        });
-        const collection: FeatureCollection = { type: "FeatureCollection", features };
-        contoursLayer = L.geoJSON(collection, {
-          style: () => ({
-            ...contourStyle(),
-            renderer: rendererRef.current ?? undefined,
-            interactive: false,
-          }),
-        }).addTo(map);
-      }
-
-      const visibleCodes = new Set<string>();
-      if (zoom >= TOWN_LABEL_MIN_ZOOM) {
-        const candidates: CommuneFeature[] = [];
-        communesRef.current.forEach((commune) => {
-          if (
-            zoom < labelMinZoom(commune) ||
-            !bboxIntersects(commune.bbox, view) ||
-            CITY_NAMES.has(commune.nom)
-          ) {
-            return;
-          }
-          candidates.push(commune);
-        });
-        // Biggest towns claim their spot first; the code tie-break keeps the
-        // selection stable from one pan to the next.
-        candidates.sort((a, b) => b.pop - a.pop || a.code.localeCompare(b.code));
-
-        // The static city labels already on screen reserve their space.
-        const placed: PlacedLabel[] = [];
-        for (const city of cityMarkers) {
-          if (zoom < city.minZoom) continue;
-          const pt = map.latLngToContainerPoint(city.marker.getLatLng());
-          placed.push({ x: pt.x, y: pt.y, halfW: (city.name.length * LABEL_CHAR_PX) / 2 });
-        }
-
-        const spacing = labelSpacingScale(zoom);
-        for (const commune of candidates) {
-          if (visibleCodes.size >= MAX_DYNAMIC_LABELS) break;
-          const [w, s, e, n] = commune.bbox;
-          const center = L.latLng((s + n) / 2, (w + e) / 2);
-          const pt = map.latLngToContainerPoint(center);
-          const halfW = (communeLabelText(commune).length * LABEL_CHAR_PX) / 2;
-          if (labelCollides(placed, pt.x, pt.y, halfW, spacing)) continue;
-          placed.push({ x: pt.x, y: pt.y, halfW });
-          visibleCodes.add(commune.code);
-          if (!communeLabelMarkers.has(commune.code)) {
-            const marker = L.marker(center, {
-              interactive: false,
-              keyboard: false,
-              icon: communeLabelIcon(commune),
-            }).addTo(map);
-            communeLabelMarkers.set(commune.code, marker);
-          }
-        }
-      }
-      communeLabelMarkers.forEach((marker, code) => {
-        if (!visibleCodes.has(code)) {
-          marker.remove();
-          communeLabelMarkers.delete(code);
-        }
-      });
-    };
-    // Debounced: fast successive pans/zooms only pay one full detail pass
-    // (contours + label collision over every commune in the viewport).
-    let detailTimer: ReturnType<typeof setTimeout> | undefined;
-    const scheduleDetailSync = () => {
-      clearTimeout(detailTimer);
-      detailTimer = setTimeout(syncDetailLayers, 50);
-    };
-    map.on("moveend", scheduleDetailSync);
+    // The arrow defers the resolution of upgradeVisibleDepts (defined below):
+    // detail.sync() only ever runs from map events or load callbacks, long
+    // after this effect body has finished.
+    const detail = createDetailLayers({
+      map,
+      communes: communesRef.current,
+      getRenderer: () => rendererRef.current,
+      cityMarkers,
+      upgradeVisibleDepts: (view) => upgradeVisibleDepts(view),
+    });
+    map.on("moveend", detail.schedule);
 
     // Once zoomed in, swap each visible department for its 100m-simplified
     // geometry (fetched once) so contours and selection match the zoom level —
@@ -445,7 +226,7 @@ export default function CommunePaintLayer({
               selectionLayersRef.current.delete(code);
               addSelectionFill(code);
             });
-            syncDetailLayers();
+            detail.sync();
           })
           .catch((err: unknown) => {
             hdDepts.delete(dept);
@@ -461,7 +242,7 @@ export default function CommunePaintLayer({
     const restyleThemedLayers = () => {
       selectionGroupRef.current?.setStyle(selectedStyle());
       departementsLayer?.setStyle(departementStyle());
-      contoursLayer?.setStyle(contourStyle());
+      detail.restyle();
       franceOutlineRef.current?.setStyle({ color: themeVar("--border-accent") });
     };
     const themeObserver = new MutationObserver(restyleThemedLayers);
@@ -509,7 +290,7 @@ export default function CommunePaintLayer({
                 }
                 onCommunesLoadedRef.current(list, deptNoms);
                 // The user may already be zoomed in on a detail level.
-                syncDetailLayers();
+                detail.sync();
               }
             });
         }
@@ -519,20 +300,16 @@ export default function CommunePaintLayer({
     return () => {
       cancelled = true;
       themeObserver.disconnect();
-      clearTimeout(detailTimer);
-      map.off("zoomend", syncCityLabels);
+      map.off("zoomend", doSyncCityLabels);
       map.off("zoomstart", clearAtMinZoom);
       map.off("zoomend", syncAtMinZoom);
-      map.off("moveend", scheduleDetailSync);
-      contoursLayer?.remove();
-      communeLabelMarkers.forEach((marker) => marker.remove());
-      communeLabelMarkers.clear();
+      map.off("moveend", detail.schedule);
+      detail.dispose();
       for (const layer of baseLayers) layer.remove();
       selectionGroupRef.current?.remove();
       selectionLayers.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map]);
+  }, [map, addSelectionFill]);
 
   // Reflect the controlled selection on the always-visible selection layer,
   // and swap the national outline in/out ("empty zone = whole country").
@@ -557,8 +334,7 @@ export default function CommunePaintLayer({
       selectionLayersRef.current.delete(code);
     }
     selected.forEach(addSelectionFill);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  }, [value, map, addSelectionFill]);
 
   // Snap back to the initial nationwide view. animate: false, twice over:
   // the change happens behind the home exit blur anyway, and an instant
@@ -567,218 +343,19 @@ export default function CommunePaintLayer({
     if (!viewResetToken) return;
     const home = homeViewRef.current;
     if (home) map.setView(home.center, home.zoom, { animate: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewResetToken]);
+  }, [viewResetToken, map]);
 
-  // Pointer interactions. Mouse: left = paint, right = erase, middle drag =
-  // pan. Touch: one finger runs the active touchTool, two fingers are left to
-  // Leaflet's pinch zoom (which also pans with the midpoint).
+  // Brush interactions (mouse + touch) — see communeBrush.ts. The options
+  // read through refs so the wiring never has to re-run on prop changes.
   useEffect(() => {
-    const container = map.getContainer();
-    container.style.cursor = "crosshair";
-    // One-finger gestures are fully handled below and two-finger gestures
-    // belong to Leaflet — the browser must not consume any of them to scroll
-    // or zoom the page instead.
-    container.style.touchAction = "none";
-
-    const brush = document.createElement("div");
-    brush.style.cssText =
-      `position:absolute;top:0;left:0;width:${BRUSH_RADIUS_PX * 2}px;height:${BRUSH_RADIUS_PX * 2}px;` +
-      "border-radius:9999px;pointer-events:none;z-index:800;display:none;";
-    const setBrushAppearance = (erasing: boolean) => {
-      brush.style.border = `2px solid var(${erasing ? "--ring-destructive" : "--border-accent"})`;
-      brush.style.background = `var(${erasing ? "--bg-destructive-muted" : "--bg-accent-muted"})`;
-    };
-    setBrushAppearance(false);
-    container.appendChild(brush);
-
-    const positionBrush = (clientX: number, clientY: number) => {
-      const rect = container.getBoundingClientRect();
-      brush.style.transform =
-        `translate(${clientX - rect.left - BRUSH_RADIUS_PX}px, ` +
-        `${clientY - rect.top - BRUSH_RADIUS_PX}px)`;
-    };
-
-    const moveBrush = (e: MouseEvent) => {
-      const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      // Being inside the rectangle is not enough: embedded on the home page
-      // the map also lives as a non-interactive background layer
-      // (pointer-events: none) — only show the brush when the cursor
-      // actually reaches the map.
-      const hit =
-        x >= 0 && y >= 0 && x <= rect.width && y <= rect.height
-          ? document.elementFromPoint(e.clientX, e.clientY)
-          : null;
-      const visible = hit !== null && container.contains(hit);
-      brush.style.display = visible ? "block" : "none";
-      positionBrush(e.clientX, e.clientY);
-    };
-
-    // The zoom-dependent factor is cached per zoom level — stamp runs on
-    // every mousemove of a stroke, only the latitude term varies.
-    let equatorMetersPerPixel = { zoom: NaN, value: 0 };
-    const stamp = (clientX: number, clientY: number, erase: boolean) => {
-      // mouseEventToLatLng only reads clientX/clientY — a bare coordinate
-      // object works for both mouse events and touch points.
-      const latlng = map.mouseEventToLatLng({ clientX, clientY } as MouseEvent);
-      const zoom = map.getZoom();
-      if (equatorMetersPerPixel.zoom !== zoom) {
-        equatorMetersPerPixel = { zoom, value: EARTH_CIRCUMFERENCE_M / Math.pow(2, zoom + 8) };
-      }
-      const radiusM =
-        BRUSH_RADIUS_PX *
-        equatorMetersPerPixel.value *
-        Math.abs(Math.cos((latlng.lat * Math.PI) / 180));
-
-      const next = new Set(selectedRef.current);
-      let changed = false;
-      communesRef.current.forEach((commune) => {
-        if (erase === next.has(commune.code) &&
-            communeIntersectsCircle(commune, latlng.lng, latlng.lat, radiusM)) {
-          if (erase) next.delete(commune.code);
-          else next.add(commune.code);
-          changed = true;
-        }
-      });
-      if (!changed) return;
-      // Snapshot the pre-stroke state exactly once, and only for strokes
-      // that actually change something — keeps the undo history meaningful.
-      if (!strokeSnapshottedRef.current) {
-        strokeSnapshottedRef.current = true;
-        onStrokeStartRef.current();
-      }
-      onChangeRef.current(Array.from(next));
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      // Clicks on Leaflet controls must not paint.
-      if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
-      // preventDefault() below suppresses the implicit focus — restore it so
-      // Leaflet keyboard navigation (+/- and arrows) keeps working.
-      container.focus({ preventScroll: true });
-      if (e.button === 0) {
-        strokeRef.current = "paint";
-        strokeSnapshottedRef.current = false;
-        setBrushAppearance(false);
-        onPaintingChangeRef.current?.(true);
-        stamp(e.clientX, e.clientY, false);
-        e.preventDefault();
-      } else if (e.button === 2) {
-        strokeRef.current = "erase";
-        strokeSnapshottedRef.current = false;
-        setBrushAppearance(true);
-        onPaintingChangeRef.current?.(true);
-        stamp(e.clientX, e.clientY, true);
-        e.preventDefault();
-      } else if (e.button === 1) {
-        panPointRef.current = { x: e.clientX, y: e.clientY };
-        e.preventDefault(); // suppress browser autoscroll
-      }
-    };
-    const onMouseMove = (e: MouseEvent) => {
-      moveBrush(e);
-      const panPoint = panPointRef.current;
-      if (panPoint) {
-        map.panBy([panPoint.x - e.clientX, panPoint.y - e.clientY], { animate: false });
-        panPointRef.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
-      if (strokeRef.current) stamp(e.clientX, e.clientY, strokeRef.current === "erase");
-    };
-    const onMouseUp = () => {
-      strokeRef.current = null;
-      panPointRef.current = null;
-      setBrushAppearance(false);
-      onPaintingChangeRef.current?.(false);
-    };
-    const onContextMenu = (e: MouseEvent) => e.preventDefault();
-    const onMouseLeave = () => {
-      brush.style.display = "none";
-    };
-
-    // Touch: one finger runs the active tool, a second finger aborts the
-    // one-finger gesture and hands over to Leaflet's pinch zoom — map
-    // navigation never requires switching tool. preventDefault() on the
-    // one-finger path suppresses the browser's simulated mouse events:
-    // without it a tap would re-enter onMouseDown and paint whatever the
-    // active tool is.
-    const endTouchGesture = () => {
-      panPointRef.current = null;
-      if (!strokeRef.current) return;
-      strokeRef.current = null;
-      brush.style.display = "none";
-      setBrushAppearance(false);
-      onPaintingChangeRef.current?.(false);
-    };
-
-    const onTouchStart = (e: TouchEvent) => {
-      if ((e.target as HTMLElement).closest(".leaflet-control-container")) return;
-      if (e.touches.length !== 1) {
-        endTouchGesture();
-        return; // no preventDefault: Leaflet's TouchZoom owns the gesture now
-      }
-      const touch = e.touches[0];
-      if (touchToolRef.current === "pan") {
-        panPointRef.current = { x: touch.clientX, y: touch.clientY };
-      } else {
-        const erase = touchToolRef.current === "erase";
-        strokeRef.current = erase ? "erase" : "paint";
-        strokeSnapshottedRef.current = false;
-        setBrushAppearance(erase);
-        positionBrush(touch.clientX, touch.clientY);
-        brush.style.display = "block";
-        onPaintingChangeRef.current?.(true);
-        stamp(touch.clientX, touch.clientY, erase);
-      }
-      e.preventDefault();
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return; // pinch in progress — Leaflet's business
-      const touch = e.touches[0];
-      const panPoint = panPointRef.current;
-      if (panPoint) {
-        map.panBy([panPoint.x - touch.clientX, panPoint.y - touch.clientY], { animate: false });
-        panPointRef.current = { x: touch.clientX, y: touch.clientY };
-        e.preventDefault();
-      } else if (strokeRef.current) {
-        positionBrush(touch.clientX, touch.clientY);
-        stamp(touch.clientX, touch.clientY, strokeRef.current === "erase");
-        e.preventDefault();
-      }
-    };
-    const onTouchEnd = (e: TouchEvent) => {
-      // Going from two fingers to one leaves the tail of the pinch to
-      // Leaflet; a new one-finger gesture starts from a fresh touchstart.
-      if (e.touches.length === 0) endTouchGesture();
-    };
-    const onTouchCancel = () => endTouchGesture();
-
-    container.addEventListener("mousedown", onMouseDown);
-    container.addEventListener("contextmenu", onContextMenu);
-    container.addEventListener("mouseleave", onMouseLeave);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    // Non-passive: both single-finger paths call preventDefault().
-    container.addEventListener("touchstart", onTouchStart, { passive: false });
-    container.addEventListener("touchmove", onTouchMove, { passive: false });
-    container.addEventListener("touchend", onTouchEnd);
-    container.addEventListener("touchcancel", onTouchCancel);
-    return () => {
-      container.removeEventListener("mousedown", onMouseDown);
-      container.removeEventListener("contextmenu", onContextMenu);
-      container.removeEventListener("mouseleave", onMouseLeave);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      container.removeEventListener("touchstart", onTouchStart);
-      container.removeEventListener("touchmove", onTouchMove);
-      container.removeEventListener("touchend", onTouchEnd);
-      container.removeEventListener("touchcancel", onTouchCancel);
-      brush.remove();
-      container.style.cursor = "";
-      container.style.touchAction = "";
-    };
+    return attachBrushInteractions(map, {
+      getSelected: () => selectedRef.current,
+      communes: communesRef.current,
+      getTouchTool: () => touchToolRef.current,
+      onStrokeStart: () => onStrokeStartRef.current(),
+      onChange: (codes) => onChangeRef.current(codes),
+      onPaintingChange: (painting) => onPaintingChangeRef.current?.(painting),
+    });
   }, [map]);
 
   if (pendingDepts !== null && pendingDepts <= 0) return null;
