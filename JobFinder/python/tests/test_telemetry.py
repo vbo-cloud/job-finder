@@ -86,3 +86,30 @@ class TestStructlogStdlibBridge:
         [record] = [r for r in captured if r.getMessage() == "cv_upload_started"]
         assert record.event_filename == "cv.pdf"
         assert record.filename != "cv.pdf"
+
+    def test_exc_info_still_captures_traceback(self, monkeypatch: pytest.MonkeyPatch):
+        """Regression test: `_rename_reserved_keys` must not rename `exc_info`
+        itself, since `render_to_log_kwargs` relies on finding it in the event
+        dict to pass the traceback through as a real stdlib kwarg. Mandatory
+        per conventions-python (`logger.error(..., exc_info=True)` on every
+        error log) and used throughout the codebase (cleanup, auth, bus)."""
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        telemetry.configure_telemetry("test-service")
+
+        captured: list[logging.LogRecord] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record)
+
+        logging.getLogger().addHandler(_CaptureHandler())
+
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            structlog.get_logger().error("op_failed", exc_info=True)
+
+        [record] = [r for r in captured if r.getMessage() == "op_failed"]
+        assert record.exc_info is not None
+        assert record.exc_info[1].args == ("boom",)
+        assert not hasattr(record, "event_exc_info")

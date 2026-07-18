@@ -5954,6 +5954,19 @@ sur ce site d'appel, et ajouté `_rename_reserved_keys()` comme processor juste 
 puisse pas réintroduire ce crash silencieusement. Nouveau cas de test dédié dans
 `test_telemetry.py`.
 
+**Commit 4 — fix régression sur `exc_info`.** Le premier jet de `_rename_reserved_keys()`
+(commit 3) incluait `exc_info`, `stack_info` et `stacklevel` dans l'ensemble des clés
+réservées à préfixer — alors que `render_to_log_kwargs` les extrait lui-même de l'event
+dict pour les repasser en vrais kwargs stdlib, et que c'est ce mécanisme qui fait
+fonctionner `logger.error(..., exc_info=True)`, obligatoire sur tout log d'erreur selon
+`conventions-python` et utilisé dans tout le repo (cleanup, auth, bus). Résultat non
+détecté par les tests existants (aucun n'exerçait `exc_info` à travers le bridge) : la clé
+`exc_info` se retrouvait renommée en `event_exc_info` avant d'atteindre
+`render_to_log_kwargs`, qui ne la trouvait plus — la traceback ne partait donc plus du tout,
+silencieusement, ni en console ni vers Application Insights. Repéré par vérification
+empirique avant ouverture de la PR, corrigé en excluant ces trois clés de l'ensemble
+réservé. Nouveau cas de test dédié (`test_exc_info_still_captures_traceback`).
+
 ### Écarts avec la tâche d'origine
 
 Deux points de la tâche écrite par Cowork ne correspondaient pas au comportement réel du
@@ -5974,8 +5987,11 @@ d'adapter :
   `extra=` — vérifié par exécution locale avant et après (voir docstring de
   `_configure_structlog`).
 
-**Vérification :** `pytest` complet vert (264/264 sur `JobFinder/python/tests/` + 4/4 sur
-`agents/cleanup/tests/`). Vérifié manuellement en local : sortie console lisible sans
+**Vérification :** `pytest` complet vert (265/265 sur `JobFinder/python/tests/` + 4/4 sur
+`agents/cleanup/tests/`, dont les 5 cas de `tests/test_telemetry.py` — champs custom
+présents comme attributs individuels du `LogRecord`, root logger à INFO, loggers tiers
+bruyants repinnés à WARNING, collision de nom réservé préfixée sans crash, traceback
+toujours capturé via `exc_info`). Vérifié manuellement en local : sortie console lisible sans
 `APPLICATIONINSIGHTS_CONNECTION_STRING`, et avec une connection string factice,
 confirmation que le `LoggingHandler` OpenTelemetry produit bien des `attributes` contenant
 `total`/`rome_code` (donc `customDimensions` non vide) avant translation vers l'exporteur

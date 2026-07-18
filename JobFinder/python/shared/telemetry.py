@@ -19,10 +19,9 @@ APPLICATIONINSIGHTS_CONNECTION_STRING = os.environ.get("APPLICATIONINSIGHTS_CONN
 
 _NOISY_THIRD_PARTY_LOGGERS = ("azure", "urllib3")
 
-_RESERVED_LOG_RECORD_KEYS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {
-    "message",
-    "asctime",
-}
+_RESERVED_LOG_RECORD_KEYS = (
+    frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {"message", "asctime"}
+) - {"exc_info", "stack_info", "stacklevel"}
 
 
 def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) -> dict:
@@ -36,6 +35,13 @@ def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) 
     runs before `render_to_log_kwargs` so a call site can log e.g.
     `filename=...` (a real collision found in `cv.py`'s upload flow) without
     needing to know this stdlib constraint.
+
+    Deliberately excludes `exc_info`, `stack_info`, and `stacklevel`:
+    `render_to_log_kwargs` pulls those out of the event dict itself and
+    passes them through as real stdlib kwargs (not `extra=`), which is how
+    `logger.error(..., exc_info=True)` — mandatory on every error log per
+    `conventions-python` — attaches its traceback. Renaming them here would
+    silently swallow every traceback in the codebase instead.
     """
     for key in list(event_dict.keys()):
         if key in _RESERVED_LOG_RECORD_KEYS:
