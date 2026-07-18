@@ -5941,6 +5941,19 @@ en repinnant les loggers tiers bruyants (`azure`, `urllib3`) à `WARNING`.
 `LogRecord` stdlib — pas seulement qu'un record est émis — puisque c'est exactement ce que
 lit Application Insights pour peupler `customDimensions`.
 
+**Commit 3 — fix collision de nom réservé.** `render_to_log_kwargs` pousse tout champ
+custom via `extra=`, et `logging.Logger.makeRecord` lève un `KeyError` si une clé de
+`extra` existe déjà sur `LogRecord` (`filename`, `name`, `module`, ...) — un crash à
+l'appel du log, avant même qu'un handler ne s'exécute. Un grep de tous les appels
+`logger.info/warning/error(...)` sous `JobFinder/python/` a trouvé une collision réelle :
+`agents/webapp/routers/cv.py:222` loguait `filename=file.filename` sur le flux d'upload de
+CV — un crash en production dès la mise en ligne de ce bridge. Renommé en `cv_filename=`
+sur ce site d'appel, et ajouté `_rename_reserved_keys()` comme processor juste avant
+`render_to_log_kwargs` dans `_configure_structlog()` : préfixe toute clé collisionnante en
+`event_<clé>` plutôt que de laisser planter l'appel, pour qu'un futur site d'appel ne
+puisse pas réintroduire ce crash silencieusement. Nouveau cas de test dédié dans
+`test_telemetry.py`.
+
 ### Écarts avec la tâche d'origine
 
 Deux points de la tâche écrite par Cowork ne correspondaient pas au comportement réel du
@@ -5961,7 +5974,7 @@ d'adapter :
   `extra=` — vérifié par exécution locale avant et après (voir docstring de
   `_configure_structlog`).
 
-**Vérification :** `pytest` complet vert (259/259 sur `JobFinder/python/tests/` + 4/4 sur
+**Vérification :** `pytest` complet vert (264/264 sur `JobFinder/python/tests/` + 4/4 sur
 `agents/cleanup/tests/`). Vérifié manuellement en local : sortie console lisible sans
 `APPLICATIONINSIGHTS_CONNECTION_STRING`, et avec une connection string factice,
 confirmation que le `LoggingHandler` OpenTelemetry produit bien des `attributes` contenant

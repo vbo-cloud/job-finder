@@ -19,6 +19,29 @@ APPLICATIONINSIGHTS_CONNECTION_STRING = os.environ.get("APPLICATIONINSIGHTS_CONN
 
 _NOISY_THIRD_PARTY_LOGGERS = ("azure", "urllib3")
 
+_RESERVED_LOG_RECORD_KEYS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {
+    "message",
+    "asctime",
+}
+
+
+def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) -> dict:
+    """Prefix event fields whose name collides with a stdlib `LogRecord` attribute.
+
+    `structlog.stdlib.render_to_log_kwargs` passes every non-event field
+    through `logging`'s `extra=`, and `logging.Logger.makeRecord` raises
+    `KeyError` if any key in `extra` already exists on `LogRecord` (`name`,
+    `filename`, `module`, `process`, ...) — a hard crash at log time, before
+    any handler runs, not something `exc_info`/`handleError` can catch. This
+    runs before `render_to_log_kwargs` so a call site can log e.g.
+    `filename=...` (a real collision found in `cv.py`'s upload flow) without
+    needing to know this stdlib constraint.
+    """
+    for key in list(event_dict.keys()):
+        if key in _RESERVED_LOG_RECORD_KEYS:
+            event_dict[f"event_{key}"] = event_dict.pop(key)
+    return event_dict
+
 
 class _ConsoleFormatter(logging.Formatter):
     """Append structlog's custom event fields to the standard log line.
@@ -60,6 +83,13 @@ def _configure_structlog() -> None:
     empirically against the installed azure-monitor-opentelemetry==1.8.8
     before choosing this over the prescribed pattern.
 
+    `render_to_log_kwargs` routes every custom field through stdlib's
+    `extra=`, which raises `KeyError` if a field name collides with an
+    existing `LogRecord` attribute (`filename`, `name`, `module`, ...) — a
+    real call site (`cv.py`'s upload flow) logged `filename=...` and would
+    have crashed at log time in production. `_rename_reserved_keys` runs
+    first in the chain to prefix any such collision instead.
+
     No separate level/timestamp processor is needed: `render_to_log_kwargs`
     calls the stdlib logger method matching the structlog level (`.info()`,
     `.warning()`, ...), so `record.levelname`/`record.created` are already
@@ -78,6 +108,7 @@ def _configure_structlog() -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            _rename_reserved_keys,
             structlog.stdlib.render_to_log_kwargs,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

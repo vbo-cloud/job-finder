@@ -22,9 +22,14 @@ def _reset_logging_state():
     root_logger = logging.getLogger()
     original_handlers = list(root_logger.handlers)
     original_level = root_logger.level
+    original_noisy_levels = {
+        name: logging.getLogger(name).level for name in telemetry._NOISY_THIRD_PARTY_LOGGERS
+    }
     yield
     root_logger.handlers = original_handlers
     root_logger.setLevel(original_level)
+    for name, level in original_noisy_levels.items():
+        logging.getLogger(name).setLevel(level)
     structlog.reset_defaults()
 
 
@@ -59,3 +64,25 @@ class TestStructlogStdlibBridge:
 
         for noisy_logger_name in telemetry._NOISY_THIRD_PARTY_LOGGERS:
             assert logging.getLogger(noisy_logger_name).getEffectiveLevel() == logging.WARNING
+
+    def test_field_colliding_with_log_record_attribute_does_not_crash(self, monkeypatch: pytest.MonkeyPatch):
+        """Regression test for the crash `render_to_log_kwargs` alone would cause:
+        `logging.Logger.makeRecord` raises `KeyError` if an `extra` key already
+        exists on `LogRecord` (e.g. `filename`, found in cv.py's upload flow).
+        `_rename_reserved_keys` must prefix it instead of letting it collide."""
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        telemetry.configure_telemetry("test-service")
+
+        captured: list[logging.LogRecord] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record)
+
+        logging.getLogger().addHandler(_CaptureHandler())
+
+        structlog.get_logger().info("cv_upload_started", user_id="u1", filename="cv.pdf")
+
+        [record] = [r for r in captured if r.getMessage() == "cv_upload_started"]
+        assert record.event_filename == "cv.pdf"
+        assert record.filename != "cv.pdf"
