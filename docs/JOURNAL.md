@@ -6021,11 +6021,12 @@ d'adapter :
   `extra=` — vérifié par exécution locale avant et après (voir docstring de
   `_configure_structlog`).
 
-**Vérification :** `pytest` complet vert (265/265 sur `JobFinder/python/tests/` + 4/4 sur
-`agents/cleanup/tests/`, dont les 5 cas de `tests/test_telemetry.py` — champs custom
+**Vérification :** `pytest` complet vert (267/267 sur `JobFinder/python/tests/` + 4/4 sur
+`agents/cleanup/tests/`, dont les 7 cas de `tests/test_telemetry.py` — champs custom
 présents comme attributs individuels du `LogRecord`, root logger à INFO, loggers tiers
 bruyants repinnés à WARNING, collision de nom réservé préfixée sans crash, traceback
-toujours capturé via `exc_info`). Vérifié manuellement en local : sortie console lisible sans
+toujours capturé via `exc_info`, coloration console gatée sur `use_color` dans les deux
+sens). Vérifié manuellement en local : sortie console lisible sans
 `APPLICATIONINSIGHTS_CONNECTION_STRING`, et avec une connection string factice,
 confirmation que le `LoggingHandler` OpenTelemetry produit bien des `attributes` contenant
 `total`/`rome_code` (donc `customDimensions` non vide) avant translation vers l'exporteur

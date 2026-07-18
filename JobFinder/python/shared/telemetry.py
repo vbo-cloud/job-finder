@@ -87,7 +87,7 @@ def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) 
 class _ConsoleFormatter(logging.Formatter):
     """Colorize by level (dev only) and append structlog's custom event fields.
 
-    Only affects what a human sees on local stdout — Application Insights
+    Only affects what a human sees on the console — Application Insights
     export reads the same fields directly off the `LogRecord` regardless of
     this formatter (see `_configure_structlog` docstring). Colorizes by
     level rather than gating JSON/color on a `LOG_LEVEL` env var: no module
