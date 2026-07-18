@@ -18,7 +18,14 @@ import shared.telemetry as telemetry
 
 
 @pytest.fixture(autouse=True)
-def _reset_logging_state():
+def _reset_logging_state() -> None:
+    """Undo `configure_telemetry`'s global side effects after each test.
+
+    `structlog.configure`, root logger handlers/level, and the noisy
+    third-party logger levels are all process-global state, so a test that
+    calls `configure_telemetry` would otherwise leak its logging setup into
+    every test that runs after it.
+    """
     root_logger = logging.getLogger()
     original_handlers = list(root_logger.handlers)
     original_level = root_logger.level

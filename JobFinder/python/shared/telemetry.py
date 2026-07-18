@@ -6,6 +6,29 @@ structlog's default renderer writes straight to stdout and no `logger.info(...)`
 event ever reaches Application Insights, even when `configure_azure_monitor()`
 runs successfully. The bridge is applied unconditionally (connection string
 present or not) so local dev and production log the same way.
+
+Design notes for `_configure_structlog`'s processor chain:
+- Uses `structlog.stdlib.render_to_log_kwargs` as the final processor rather
+  than the more commonly documented `ProcessorFormatter.wrap_for_formatter`:
+  the latter bundles the whole event dict into `record.msg`, so custom
+  fields (e.g. `total`, `rome_code`) never become individual `LogRecord`
+  attributes. Application Insights builds `customDimensions` from exactly
+  those attributes (`vars(record)` — see opentelemetry-instrumentation-logging's
+  `LoggingHandler._get_attributes`), so `wrap_for_formatter` would leave
+  `customDimensions` empty. Verified empirically against the installed
+  azure-monitor-opentelemetry==1.8.8 before choosing this over the
+  prescribed pattern.
+- No separate level/timestamp processor: `render_to_log_kwargs` calls the
+  stdlib logger method matching the structlog level (`.info()`, `.warning()`,
+  ...), so `record.levelname`/`record.created` are already correct —
+  duplicating them would only add redundant `level`/`timestamp` entries to
+  `customDimensions`.
+- Root logger forced to INFO: azure-monitor-opentelemetry's own
+  `LoggingHandler` has no level filter of its own (NOTSET), so the root
+  logger's default WARNING level would otherwise silently drop most
+  business-event logs (e.g. `offers_upserted`) before they ever reach either
+  handler. Noisy third-party loggers (`azure`, `urllib3`) are pinned back to
+  WARNING so they don't drown out application events in AppTraces.
 """
 
 import logging
@@ -13,15 +36,27 @@ import os
 
 import structlog
 
-logger = structlog.get_logger()
-
 APPLICATIONINSIGHTS_CONNECTION_STRING = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
 
 _NOISY_THIRD_PARTY_LOGGERS = ("azure", "urllib3")
 
+# Deliberately not shared with _ConsoleFormatter._RESERVED below: this set
+# feeds _rename_reserved_keys, which must NOT touch exc_info/stack_info (see
+# that function's docstring) or render_to_log_kwargs stops routing tracebacks.
 _RESERVED_LOG_RECORD_KEYS = (
     frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {"message", "asctime"}
 ) - {"exc_info", "stack_info", "stacklevel"}
+
+_LEVEL_COLORS = {
+    logging.DEBUG: "\033[37m",
+    logging.INFO: "\033[36m",
+    logging.WARNING: "\033[33m",
+    logging.ERROR: "\033[31m",
+    logging.CRITICAL: "\033[41m",
+}
+_COLOR_RESET = "\033[0m"
+
+logger = structlog.get_logger()
 
 
 def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) -> dict:
@@ -50,13 +85,20 @@ def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) 
 
 
 class _ConsoleFormatter(logging.Formatter):
-    """Append structlog's custom event fields to the standard log line.
+    """Colorize by level and append structlog's custom event fields.
 
     Only affects what a human sees on local stdout — Application Insights
     export reads the same fields directly off the `LogRecord` regardless of
-    this formatter (see `_configure_structlog` docstring).
+    this formatter (see `_configure_structlog` docstring). Colorizes by
+    level rather than gating JSON/color on a `LOG_LEVEL` env var: no module
+    in this codebase reads `LOG_LEVEL` today, so wiring that up here would be
+    new cross-cutting infrastructure well beyond this bridge's scope.
     """
 
+    # Not shared with _RESERVED_LOG_RECORD_KEYS above: this one only decides
+    # what's redundant to print on the console line, so — unlike that one —
+    # it can safely include exc_info/stack_info (the traceback is rendered
+    # separately by super().format(), not worth repeating as a trailing extra).
     _RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {
         "message",
         "asctime",
@@ -65,6 +107,9 @@ class _ConsoleFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)
+        color = _LEVEL_COLORS.get(record.levelno, "")
+        if color:
+            base = f"{color}{base}{_COLOR_RESET}"
         extra = {key: value for key, value in vars(record).items() if key not in self._RESERVED}
         if not extra:
             return base
@@ -76,40 +121,9 @@ def _configure_structlog() -> None:
     """Route structlog events through the stdlib `logging` root logger.
 
     Required so azure-monitor-opentelemetry (which instruments `logging`, not
-    structlog) can export structured events to Application Insights.
-
-    Uses `structlog.stdlib.render_to_log_kwargs` as the final processor rather
-    than the more commonly documented `ProcessorFormatter.wrap_for_formatter`:
-    the latter bundles the whole event dict into `record.msg`, so custom
-    fields (e.g. `total`, `rome_code`) never become individual `LogRecord`
-    attributes. Application Insights builds `customDimensions` from exactly
-    those attributes (`vars(record)` — see
-    opentelemetry-instrumentation-logging's `LoggingHandler._get_attributes`),
-    so `wrap_for_formatter` would leave `customDimensions` empty. Verified
-    empirically against the installed azure-monitor-opentelemetry==1.8.8
-    before choosing this over the prescribed pattern.
-
-    `render_to_log_kwargs` routes every custom field through stdlib's
-    `extra=`, which raises `KeyError` if a field name collides with an
-    existing `LogRecord` attribute (`filename`, `name`, `module`, ...) — a
-    real call site (`cv.py`'s upload flow) logged `filename=...` and would
-    have crashed at log time in production. `_rename_reserved_keys` runs
-    first in the chain to prefix any such collision instead.
-
-    No separate level/timestamp processor is needed: `render_to_log_kwargs`
-    calls the stdlib logger method matching the structlog level (`.info()`,
-    `.warning()`, ...), so `record.levelname`/`record.created` are already
-    correct — adding `add_log_level`/`TimeStamper` on top would only
-    duplicate them as redundant `level`/`timestamp` entries in
-    `customDimensions`.
-
-    Also sets the root logger to INFO: azure-monitor-opentelemetry's own
-    `LoggingHandler` has no level filter of its own (NOTSET), so without this
-    the root logger's default WARNING level would silently drop most
-    business-event logs (e.g. `offers_upserted`) before they ever reach
-    either handler. Third-party libraries are pinned back to WARNING since
-    they get noisy at INFO (HTTP retries, etc.) and would otherwise drown out
-    application events in AppTraces.
+    structlog) can export structured events to Application Insights. See the
+    module docstring for the rationale behind each processor/config choice
+    below, and `_rename_reserved_keys`' own docstring for why it runs first.
     """
     structlog.configure(
         processors=[

@@ -5954,18 +5954,36 @@ sur ce site d'appel, et ajouté `_rename_reserved_keys()` comme processor juste 
 puisse pas réintroduire ce crash silencieusement. Nouveau cas de test dédié dans
 `test_telemetry.py`.
 
-**Commit 4 — fix régression sur `exc_info`.** Le premier jet de `_rename_reserved_keys()`
-(commit 3) incluait `exc_info`, `stack_info` et `stacklevel` dans l'ensemble des clés
-réservées à préfixer — alors que `render_to_log_kwargs` les extrait lui-même de l'event
-dict pour les repasser en vrais kwargs stdlib, et que c'est ce mécanisme qui fait
-fonctionner `logger.error(..., exc_info=True)`, obligatoire sur tout log d'erreur selon
-`conventions-python` et utilisé dans tout le repo (cleanup, auth, bus). Résultat non
-détecté par les tests existants (aucun n'exerçait `exc_info` à travers le bridge) : la clé
-`exc_info` se retrouvait renommée en `event_exc_info` avant d'atteindre
-`render_to_log_kwargs`, qui ne la trouvait plus — la traceback ne partait donc plus du tout,
-silencieusement, ni en console ni vers Application Insights. Repéré par vérification
-empirique avant ouverture de la PR, corrigé en excluant ces trois clés de l'ensemble
-réservé. Nouveau cas de test dédié (`test_exc_info_still_captures_traceback`).
+**Commit 4 — fix régression sur `exc_info`.** `exc_info` et `stack_info` sont deux vrais
+attributs de `LogRecord` : le premier jet de `_rename_reserved_keys()` (commit 3) les
+incluait donc dans l'ensemble des clés réservées à préfixer, alors que
+`render_to_log_kwargs` les extrait lui-même de l'event dict pour les repasser en vrais
+kwargs stdlib — c'est ce mécanisme qui fait fonctionner `logger.error(..., exc_info=True)`,
+obligatoire sur tout log d'erreur selon `conventions-python` et utilisé dans tout le repo
+(cleanup, auth, bus). Résultat non détecté par les tests existants (aucun n'exerçait
+`exc_info` à travers le bridge) : la clé `exc_info` se retrouvait renommée en
+`event_exc_info` avant d'atteindre `render_to_log_kwargs`, qui ne la trouvait plus — la
+traceback ne partait donc plus du tout, silencieusement, ni en console ni vers Application
+Insights. Repéré par vérification empirique avant ouverture de la PR, corrigé en excluant
+`exc_info` et `stack_info` de l'ensemble réservé — `stacklevel` (consommé par
+`render_to_log_kwargs` de la même façon, mais qui n'est pas un attribut de `LogRecord` et
+n'a donc jamais fait partie de l'ensemble réservé ni été renommé par le commit 3) exclu par
+la même expression, par précaution plutôt que pour corriger une régression réelle sur cette
+clé. Nouveau cas de test dédié (`test_exc_info_still_captures_traceback`).
+
+**Commit 5 — retours `reviewer-backend`.** Premier passage : `CHANGEMENTS REQUIS` sur 3
+points. (1) `logger = structlog.get_logger()` était déclaré avant les nouvelles constantes
+de la branche (`_NOISY_THIRD_PARTY_LOGGERS`, `_RESERVED_LOG_RECORD_KEYS`) — réordonné pour
+que toutes les constantes précèdent le logger, comme l'exige `conventions-python`. (2) La
+fixture `_reset_logging_state` de `test_telemetry.py` n'avait ni docstring ni annotation de
+retour — ajoutées. (3) La sortie console dev n'était pas colorée (règle Logging : "JSON en
+prod, coloré en dev") — colorée par niveau via des codes ANSI minimalistes (`_LEVEL_COLORS`),
+sans introduire de lecture de `LOG_LEVEL` (absente de tout le reste du repo, hors périmètre
+de cette branche). Remarques non-bloquantes également traitées : commentaires ajoutés sur
+`_RESERVED_LOG_RECORD_KEYS` et `_ConsoleFormatter._RESERVED` expliquant pourquoi ces deux
+ensembles ne doivent pas être fusionnés (`exc_info` doit être exclu du premier, inclus dans
+le second), et la docstring de `_configure_structlog` raccourcie — le raisonnement déplacé
+dans la docstring du module — pour rester sous la limite de 40 lignes de lecture.
 
 ### Écarts avec la tâche d'origine
 
