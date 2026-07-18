@@ -1,0 +1,61 @@
+"""Tests for shared/telemetry.py — structlog -> stdlib logging bridge.
+
+The bridge exists so azure-monitor-opentelemetry (which instruments `logging`,
+never structlog directly) can export structured events to Application
+Insights. The regression these tests guard against: a structlog event silently
+never reaching the stdlib root logger, or reaching it without its custom
+fields as individual `LogRecord` attributes (which is what Application
+Insights reads into `customDimensions` — see `_configure_structlog`'s
+docstring in shared/telemetry.py).
+"""
+
+import logging
+
+import pytest
+import structlog
+
+import shared.telemetry as telemetry
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging_state():
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+    yield
+    root_logger.handlers = original_handlers
+    root_logger.setLevel(original_level)
+    structlog.reset_defaults()
+
+
+class TestStructlogStdlibBridge:
+    def test_custom_fields_land_as_log_record_attributes(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        telemetry.configure_telemetry("test-service")
+
+        captured: list[logging.LogRecord] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record)
+
+        logging.getLogger().addHandler(_CaptureHandler())
+
+        structlog.get_logger().info("offers_upserted", total=5, rome_code="M1234")
+
+        [record] = [r for r in captured if r.getMessage() == "offers_upserted"]
+        assert record.total == 5
+        assert record.rome_code == "M1234"
+
+    def test_root_logger_captures_info_level(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        telemetry.configure_telemetry("test-service")
+
+        assert logging.getLogger().getEffectiveLevel() == logging.INFO
+
+    def test_noisy_third_party_loggers_pinned_to_warning(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+        telemetry.configure_telemetry("test-service")
+
+        for noisy_logger_name in telemetry._NOISY_THIRD_PARTY_LOGGERS:
+            assert logging.getLogger(noisy_logger_name).getEffectiveLevel() == logging.WARNING
