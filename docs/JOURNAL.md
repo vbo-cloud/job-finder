@@ -5985,6 +5985,22 @@ ensembles ne doivent pas être fusionnés (`exc_info` doit être exclu du premie
 le second), et la docstring de `_configure_structlog` raccourcie — le raisonnement déplacé
 dans la docstring du module — pour rester sous la limite de 40 lignes de lecture.
 
+**Commit 6 — fix fuite de couleur en prod + remarques non-bloquantes du 2e passage.**
+`reviewer-backend` a approuvé le commit 5, mais une vérification manuelle du chemin
+« connection string présente » (donc prod-like) faite juste après a montré que
+`_ConsoleFormatter` colorait aussi cette sortie : le `logging.StreamHandler` qu'il porte
+tourne sans distinction dev/prod sur le root logger, et `envs/dev/monitoring.tf` capture le
+stdout/stderr brut du conteneur dans `ContainerAppConsoleLogs_CL` — des codes ANSI y
+seraient apparus comme du texte brut (`\x1b[36m...`) au lieu d'être rendus. Ajouté un
+paramètre `use_color` à `_ConsoleFormatter.__init__`, réglé sur
+`not APPLICATIONINSIGHTS_CONNECTION_STRING` au point d'appel (même proxy dev/prod que le
+reste du fichier) ; vérifié empiriquement dans les deux sens (dev coloré, prod-like sans
+codes ANSI). A aussi corrigé deux remarques non-bloquantes du 2e passage de
+`reviewer-backend` : annotation de retour de `_reset_logging_state` passée de `-> None` à
+`-> Iterator[None]` (fonction génératrice, `None` était syntaxiquement accepté mais
+incorrect), et ajout de `TestConsoleFormatterColor` (2 cas) testant directement
+`_ConsoleFormatter.format` avec `use_color=True`/`False`.
+
 ### Écarts avec la tâche d'origine
 
 Deux points de la tâche écrite par Cowork ne correspondaient pas au comportement réel du

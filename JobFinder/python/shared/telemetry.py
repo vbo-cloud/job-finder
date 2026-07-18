@@ -85,14 +85,20 @@ def _rename_reserved_keys(_logger: object, _method_name: str, event_dict: dict) 
 
 
 class _ConsoleFormatter(logging.Formatter):
-    """Colorize by level and append structlog's custom event fields.
+    """Colorize by level (dev only) and append structlog's custom event fields.
 
     Only affects what a human sees on local stdout — Application Insights
     export reads the same fields directly off the `LogRecord` regardless of
     this formatter (see `_configure_structlog` docstring). Colorizes by
     level rather than gating JSON/color on a `LOG_LEVEL` env var: no module
     in this codebase reads `LOG_LEVEL` today, so wiring that up here would be
-    new cross-cutting infrastructure well beyond this bridge's scope.
+    new cross-cutting infrastructure well beyond this bridge's scope. Color
+    is instead gated on `use_color` (see `__init__`): this same
+    `logging.StreamHandler` also runs in production (root logger has no
+    dev/prod split), and `envs/dev/monitoring.tf`'s diagnostic setting
+    captures raw stdout/stderr into `ContainerAppConsoleLogs_CL` — ANSI
+    codes would show up as literal `\x1b[36m` garbage in that Log Analytics
+    stream instead of being rendered.
     """
 
     # Not shared with _RESERVED_LOG_RECORD_KEYS above: this one only decides
@@ -105,9 +111,13 @@ class _ConsoleFormatter(logging.Formatter):
         "taskName",
     }
 
+    def __init__(self, fmt: str, use_color: bool) -> None:
+        super().__init__(fmt)
+        self._use_color = use_color
+
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)
-        color = _LEVEL_COLORS.get(record.levelno, "")
+        color = _LEVEL_COLORS.get(record.levelno, "") if self._use_color else ""
         if color:
             base = f"{color}{base}{_COLOR_RESET}"
         extra = {key: value for key, value in vars(record).items() if key not in self._RESERVED}
@@ -139,7 +149,11 @@ def _configure_structlog() -> None:
     root_logger = logging.getLogger()
     if not any(isinstance(handler.formatter, _ConsoleFormatter) for handler in root_logger.handlers):
         handler = logging.StreamHandler()
-        handler.setFormatter(_ConsoleFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        formatter = _ConsoleFormatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            use_color=not APPLICATIONINSIGHTS_CONNECTION_STRING,
+        )
+        handler.setFormatter(formatter)
         root_logger.addHandler(handler)
 
     root_logger.setLevel(logging.INFO)

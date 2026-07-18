@@ -10,6 +10,7 @@ docstring in shared/telemetry.py).
 """
 
 import logging
+from typing import Iterator
 
 import pytest
 import structlog
@@ -18,7 +19,7 @@ import shared.telemetry as telemetry
 
 
 @pytest.fixture(autouse=True)
-def _reset_logging_state() -> None:
+def _reset_logging_state() -> Iterator[None]:
     """Undo `configure_telemetry`'s global side effects after each test.
 
     `structlog.configure`, root logger handlers/level, and the noisy
@@ -120,3 +121,22 @@ class TestStructlogStdlibBridge:
         assert record.exc_info is not None
         assert record.exc_info[1].args == ("boom",)
         assert not hasattr(record, "event_exc_info")
+
+
+class TestConsoleFormatterColor:
+    """Regression coverage for the console/prod split found via manual review:
+    `_ConsoleFormatter` must only colorize when `use_color=True`, since the
+    same handler also runs when APPLICATIONINSIGHTS_CONNECTION_STRING is set
+    (production) — raw ANSI codes there would corrupt ContainerAppConsoleLogs_CL."""
+
+    def test_colorizes_when_use_color_is_true(self):
+        formatter = telemetry._ConsoleFormatter("%(levelname)s %(message)s", use_color=True)
+        record = logging.LogRecord("test", logging.INFO, "", 0, "hello", (), None)
+
+        assert formatter.format(record).startswith(telemetry._LEVEL_COLORS[logging.INFO])
+
+    def test_no_color_when_use_color_is_false(self):
+        formatter = telemetry._ConsoleFormatter("%(levelname)s %(message)s", use_color=False)
+        record = logging.LogRecord("test", logging.INFO, "", 0, "hello", (), None)
+
+        assert "\033[" not in formatter.format(record)
