@@ -219,7 +219,7 @@ async def upload_cv(
         HTTPException 503: If Azure Blob Storage is unavailable.
     """
     user_id = identity.user_id
-    logger.info("cv_upload_started", user_id=user_id, filename=file.filename)
+    logger.info("cv_upload_started", user_id=user_id, cv_filename=file.filename)
 
     if file.content_type != "application/pdf":
         raise HTTPException(

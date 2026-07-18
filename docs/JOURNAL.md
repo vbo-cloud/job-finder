@@ -5906,3 +5906,130 @@ barre sans jamais la recouvrir ; desktop ≥ md inchangé (pills flottants, snap
 souris sur la carte). Limite : gestes tactiles réels (pinch) non émulables en session
 Chrome desktop — le fix pinch est couvert par les tests unitaires de `communeBrush`, à
 confirmer sur appareil réel.
+
+---
+
+## PR #205 — brancher structlog sur `logging` standard pour peupler AppTraces
+
+**Date :** 2026-07-18
+**Branche :** `feature/structlog-stdlib-logging-bridge` → `dev`
+
+### Contexte
+
+Diagnostic établi avec Vincent (Claude Cowork) : la table `AppTraces` du workspace
+`log-jf-dev-frc` restait vide malgré des exécutions récentes des Container App Jobs, alors
+que `ContainerAppConsoleLogs_CL` se remplissait normalement (pipeline infra indépendant,
+`envs/dev/monitoring.tf:146-158`). Cause : `shared/telemetry.py::configure_telemetry()`
+appelle bien `configure_azure_monitor(...)`, mais `structlog.configure(...)` n'était jamais
+appelé nulle part dans le repo — par défaut, `structlog.get_logger()` écrit sur stdout sans
+jamais passer par le module `logging` standard, seul module instrumenté par le SDK Azure
+Monitor. Aucun `logger.info(...)` structlog n'atteignait donc jamais Application Insights.
+
+### Ce qui a été fait
+
+**Commit 1 — implémentation.** `_configure_structlog()` (appelée en tête de
+`configure_telemetry()`, inconditionnellement — présence ou non de
+`APPLICATIONINSIGHTS_CONNECTION_STRING`) bascule structlog sur le backend stdlib
+(`logger_factory=structlog.stdlib.LoggerFactory()`, `wrapper_class=structlog.stdlib.BoundLogger`),
+ajoute un `logging.StreamHandler` avec un formatter dédié (`_ConsoleFormatter`) pour garder
+une sortie console lisible en dev, et force le root logger à `INFO` (WARNING par défaut,
+ce qui aurait fait disparaître la majorité des logs métier même après le branchement) tout
+en repinnant les loggers tiers bruyants (`azure`, `urllib3`) à `WARNING`.
+
+**Commit 2 — test.** Nouveau `tests/test_telemetry.py` : vérifie que les champs custom d'un
+événement structlog (`total`, `rome_code`) atterrissent comme attributs individuels du
+`LogRecord` stdlib — pas seulement qu'un record est émis — puisque c'est exactement ce que
+lit Application Insights pour peupler `customDimensions`.
+
+**Commit 3 — fix collision de nom réservé.** `render_to_log_kwargs` pousse tout champ
+custom via `extra=`, et `logging.Logger.makeRecord` lève un `KeyError` si une clé de
+`extra` existe déjà sur `LogRecord` (`filename`, `name`, `module`, ...) — un crash à
+l'appel du log, avant même qu'un handler ne s'exécute. Un grep de tous les appels
+`logger.info/warning/error(...)` sous `JobFinder/python/` a trouvé une collision réelle :
+`agents/webapp/routers/cv.py:222` loguait `filename=file.filename` sur le flux d'upload de
+CV — un crash en production dès la mise en ligne de ce bridge. Renommé en `cv_filename=`
+sur ce site d'appel, et ajouté `_rename_reserved_keys()` comme processor juste avant
+`render_to_log_kwargs` dans `_configure_structlog()` : préfixe toute clé collisionnante en
+`event_<clé>` plutôt que de laisser planter l'appel, pour qu'un futur site d'appel ne
+puisse pas réintroduire ce crash silencieusement. Nouveau cas de test dédié dans
+`test_telemetry.py`.
+
+**Commit 4 — fix régression sur `exc_info`.** `exc_info` et `stack_info` sont deux vrais
+attributs de `LogRecord` : le premier jet de `_rename_reserved_keys()` (commit 3) les
+incluait donc dans l'ensemble des clés réservées à préfixer, alors que
+`render_to_log_kwargs` les extrait lui-même de l'event dict pour les repasser en vrais
+kwargs stdlib — c'est ce mécanisme qui fait fonctionner `logger.error(..., exc_info=True)`,
+obligatoire sur tout log d'erreur selon `conventions-python` et utilisé dans tout le repo
+(cleanup, auth, bus). Résultat non détecté par les tests existants (aucun n'exerçait
+`exc_info` à travers le bridge) : la clé `exc_info` se retrouvait renommée en
+`event_exc_info` avant d'atteindre `render_to_log_kwargs`, qui ne la trouvait plus — la
+traceback ne partait donc plus du tout, silencieusement, ni en console ni vers Application
+Insights. Repéré par vérification empirique avant ouverture de la PR, corrigé en excluant
+`exc_info` et `stack_info` de l'ensemble réservé — `stacklevel` (consommé par
+`render_to_log_kwargs` de la même façon, mais qui n'est pas un attribut de `LogRecord` et
+n'a donc jamais fait partie de l'ensemble réservé ni été renommé par le commit 3) exclu par
+la même expression, par précaution plutôt que pour corriger une régression réelle sur cette
+clé. Nouveau cas de test dédié (`test_exc_info_still_captures_traceback`).
+
+**Commit 5 — retours `reviewer-backend`.** Premier passage : `CHANGEMENTS REQUIS` sur 3
+points. (1) `logger = structlog.get_logger()` était déclaré avant les nouvelles constantes
+de la branche (`_NOISY_THIRD_PARTY_LOGGERS`, `_RESERVED_LOG_RECORD_KEYS`) — réordonné pour
+que toutes les constantes précèdent le logger, comme l'exige `conventions-python`. (2) La
+fixture `_reset_logging_state` de `test_telemetry.py` n'avait ni docstring ni annotation de
+retour — ajoutées. (3) La sortie console dev n'était pas colorée (règle Logging : "JSON en
+prod, coloré en dev") — colorée par niveau via des codes ANSI minimalistes (`_LEVEL_COLORS`),
+sans introduire de lecture de `LOG_LEVEL` (absente de tout le reste du repo, hors périmètre
+de cette branche). Remarques non-bloquantes également traitées : commentaires ajoutés sur
+`_RESERVED_LOG_RECORD_KEYS` et `_ConsoleFormatter._RESERVED` expliquant pourquoi ces deux
+ensembles ne doivent pas être fusionnés (`exc_info` doit être exclu du premier, inclus dans
+le second), et la docstring de `_configure_structlog` raccourcie — le raisonnement déplacé
+dans la docstring du module — pour rester sous la limite de 40 lignes de lecture.
+
+**Commit 6 — fix fuite de couleur en prod + remarques non-bloquantes du 2e passage.**
+`reviewer-backend` a approuvé le commit 5, mais une vérification manuelle du chemin
+« connection string présente » (donc prod-like) faite juste après a montré que
+`_ConsoleFormatter` colorait aussi cette sortie : le `logging.StreamHandler` qu'il porte
+tourne sans distinction dev/prod sur le root logger, et `envs/dev/monitoring.tf` capture le
+stdout/stderr brut du conteneur dans `ContainerAppConsoleLogs_CL` — des codes ANSI y
+seraient apparus comme du texte brut (`\x1b[36m...`) au lieu d'être rendus. Ajouté un
+paramètre `use_color` à `_ConsoleFormatter.__init__`, réglé sur
+`not APPLICATIONINSIGHTS_CONNECTION_STRING` au point d'appel (même proxy dev/prod que le
+reste du fichier) ; vérifié empiriquement dans les deux sens (dev coloré, prod-like sans
+codes ANSI). A aussi corrigé deux remarques non-bloquantes du 2e passage de
+`reviewer-backend` : annotation de retour de `_reset_logging_state` passée de `-> None` à
+`-> Iterator[None]` (fonction génératrice, `None` était syntaxiquement accepté mais
+incorrect), et ajout de `TestConsoleFormatterColor` (2 cas) testant directement
+`_ConsoleFormatter.format` avec `use_color=True`/`False`.
+
+### Écarts avec la tâche d'origine
+
+Deux points de la tâche écrite par Cowork ne correspondaient pas au comportement réel du
+SDK installé (`azure-monitor-opentelemetry==1.8.8`), vérifiés empiriquement avant
+d'adapter :
+
+- **`configure_azure_monitor(..., logging_level=logging.INFO)`** n'est pas un paramètre
+  reconnu par cette version du SDK (`**kwargs` avale silencieusement toute clé inconnue) —
+  aucun effet, ni erreur. Le vrai verrou est le niveau du root logger lui-même (WARNING par
+  défaut), fixé directement à `INFO` dans `_configure_structlog()`.
+- **`structlog.stdlib.ProcessorFormatter.wrap_for_formatter`** (le pattern documenté par
+  défaut pour l'intégration stdlib) regroupe tout l'event dict dans `record.msg` — les
+  champs custom n'existent alors jamais comme attributs individuels du `LogRecord`.
+  Application Insights construit `customDimensions` à partir de `vars(record)`
+  (`LoggingHandler._get_attributes` du package `opentelemetry-instrumentation-logging`) :
+  avec `wrap_for_formatter`, `customDimensions` serait resté vide malgré le fix. Utilisé
+  `structlog.stdlib.render_to_log_kwargs` à la place, qui pousse les champs custom via
+  `extra=` — vérifié par exécution locale avant et après (voir docstring de
+  `_configure_structlog`).
+
+**Vérification :** `pytest` complet vert (267/267 sur `JobFinder/python/tests/` + 4/4 sur
+`agents/cleanup/tests/`, dont les 7 cas de `tests/test_telemetry.py` — champs custom
+présents comme attributs individuels du `LogRecord`, root logger à INFO, loggers tiers
+bruyants repinnés à WARNING, collision de nom réservé préfixée sans crash, traceback
+toujours capturé via `exc_info`, coloration console gatée sur `use_color` dans les deux
+sens). Vérifié manuellement en local : sortie console lisible sans
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, et avec une connection string factice,
+confirmation que le `LoggingHandler` OpenTelemetry produit bien des `attributes` contenant
+`total`/`rome_code` (donc `customDimensions` non vide) avant translation vers l'exporteur
+Azure Monitor. Limite : test manuel contre un vrai workspace Application Insights
+(`AppTraces | take 50` dans le portail) non exécuté depuis cette session — à confirmer par
+Vincent lors d'un run réel d'un agent.
