@@ -2,9 +2,15 @@
 
 Tests use an in-memory SQLite DB created with raw DDL to avoid the pgvector
 Vector type, which SQLite does not support. _cleanup only reads and deletes on
-offers.id/offers.collected_at, and _snapshot_totals only issues COUNT(*)
-queries with no column references, so omitting the vector column (and the
-rest of the cvs schema beyond `id`) is safe here.
+offers.id/offers.collected_at/matches.id, and _snapshot_totals only issues
+COUNT(*) queries with no column references, so omitting the vector column
+(and the rest of the cvs schema beyond `id`) is safe here.
+
+The db_session fixture enables PRAGMA foreign_keys=ON (off by default in
+SQLite) so that the match_analyses -> matches foreign key is actually
+enforced, matching PostgreSQL's default behavior. Without it,
+test_stale_offer_with_analyzed_match_deleted_without_fk_violation would pass
+even without the fix in _cleanup(), making it a false regression test.
 
 Datetime values are formatted with strftime('%Y-%m-%d %H:%M:%S.%f') to match
 SQLAlchemy's SQLite DateTime bind-parameter representation, ensuring correct
@@ -53,6 +59,7 @@ def db_session():
     """In-memory SQLite session with the minimal schema required by _cleanup."""
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
+        conn.execute(sa.text("PRAGMA foreign_keys=ON"))
         conn.execute(sa.text("""
             CREATE TABLE offers (
                 id          TEXT PRIMARY KEY,
@@ -82,6 +89,12 @@ def db_session():
         conn.execute(sa.text("""
             CREATE TABLE cvs (
                 id          TEXT PRIMARY KEY
+            )
+        """))
+        conn.execute(sa.text("""
+            CREATE TABLE match_analyses (
+                id          TEXT PRIMARY KEY,
+                match_id    TEXT NOT NULL UNIQUE REFERENCES matches(id)
             )
         """))
     with Session(engine) as session:
@@ -119,13 +132,22 @@ def _add_cv(session: Session) -> str:
     return cid
 
 
+def _add_analysis(session: Session, match_id: str) -> str:
+    aid = str(uuid.uuid4())
+    session.execute(
+        sa.text("INSERT INTO match_analyses (id, match_id) VALUES (:id, :match_id)"),
+        {"id": aid, "match_id": match_id},
+    )
+    return aid
+
+
 def test_stale_offer_deleted(db_session: Session) -> None:
     """An offer not refreshed in > CLEANUP_COLLECTED_AGE_DAYS is deleted."""
     now = datetime.now(timezone.utc)
     _add_offer(db_session, now - timedelta(days=3))
     db_session.flush()
 
-    deleted_offers, _ = _cleanup(db_session)
+    deleted_offers, _, _ = _cleanup(db_session)
 
     assert deleted_offers == 1
 
@@ -137,7 +159,7 @@ def test_stale_match_cascade_deleted(db_session: Session) -> None:
     _add_match(db_session, oid)
     db_session.flush()
 
-    deleted_offers, deleted_matches = _cleanup(db_session)
+    deleted_offers, deleted_matches, _ = _cleanup(db_session)
 
     assert deleted_offers == 1
     assert deleted_matches == 1
@@ -149,7 +171,7 @@ def test_fresh_offer_preserved(db_session: Session) -> None:
     _add_offer(db_session, now - timedelta(hours=12))
     db_session.flush()
 
-    deleted_offers, _ = _cleanup(db_session)
+    deleted_offers, _, _ = _cleanup(db_session)
 
     assert deleted_offers == 0
 
@@ -163,7 +185,7 @@ def test_only_stale_deleted_in_mixed_set(db_session: Session) -> None:
     _add_match(db_session, fresh_id)
     db_session.flush()
 
-    deleted_offers, deleted_matches = _cleanup(db_session)
+    deleted_offers, deleted_matches, _ = _cleanup(db_session)
 
     assert deleted_offers == 1
     assert deleted_matches == 1
@@ -171,6 +193,23 @@ def test_only_stale_deleted_in_mixed_set(db_session: Session) -> None:
         sa.text("SELECT id FROM offers")
     ).scalars().all()
     assert set(remaining) == {fresh_id}
+
+
+def test_stale_offer_with_analyzed_match_deleted_without_fk_violation(db_session: Session) -> None:
+    """Regression: a stale offer whose match has a MatchAnalysis is cleaned up without a
+    ForeignKeyViolation. match_analyses.match_id has a NOT NULL FK to matches.id with no
+    ondelete=CASCADE, so the analysis must be deleted before its match (see PR description)."""
+    now = datetime.now(timezone.utc)
+    oid = _add_offer(db_session, now - timedelta(days=3))
+    mid = _add_match(db_session, oid)
+    _add_analysis(db_session, mid)
+    db_session.flush()
+
+    deleted_offers, deleted_matches, deleted_analyses = _cleanup(db_session)
+
+    assert deleted_offers == 1
+    assert deleted_matches == 1
+    assert deleted_analyses == 1
 
 
 def test_snapshot_totals_empty_database(db_session: Session) -> None:
@@ -234,7 +273,7 @@ class TestMainDailySnapshot:
         mocker.patch.object(_mod, "configure_telemetry")
         mocker.patch.object(_mod, "run_migrations")
         mocker.patch.object(_mod, "get_session", _session_cm(MagicMock()))
-        mocker.patch.object(_mod, "_cleanup", return_value=(0, 0))
+        mocker.patch.object(_mod, "_cleanup", return_value=(0, 0, 0))
 
     def test_daily_snapshot_logged_after_cleanup(self, mocker: MockerFixture) -> None:
         """main() logs daily_snapshot with the totals returned by _snapshot_totals."""
@@ -261,12 +300,12 @@ class TestMainDailySnapshot:
     def test_cleanup_still_completes_normally_alongside_snapshot(self, mocker: MockerFixture) -> None:
         """cleanup_completed keeps logging as before, unaffected by the new snapshot step."""
         self._mock_main_deps(mocker)
-        mocker.patch.object(_mod, "_cleanup", return_value=(3, 5))
+        mocker.patch.object(_mod, "_cleanup", return_value=(3, 5, 2))
         mocker.patch.object(_mod, "_snapshot_totals", return_value=(0, 0))
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
 
         _mod.main()
 
         mock_logger_info.assert_any_call(
-            "cleanup_completed", deleted_offers=3, deleted_matches=5
+            "cleanup_completed", deleted_offers=3, deleted_matches=5, deleted_analyses=2
         )
