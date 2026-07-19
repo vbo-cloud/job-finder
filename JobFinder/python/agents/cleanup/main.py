@@ -85,6 +85,8 @@ def _snapshot_totals(session: Session) -> tuple[int, int]:
         SQLAlchemyError: If either count query fails. The caller in main() treats
             this step as best-effort and swallows the exception.
     """
+    logger.info("daily_snapshot_started")
+
     total_offers = session.execute(select(func.count()).select_from(Offer)).scalar()
     total_cvs = session.execute(select(func.count()).select_from(CV)).scalar()
     return total_offers, total_cvs
@@ -115,8 +117,10 @@ def main() -> None:
         deleted_matches=deleted_matches,
     )
 
-    # Best-effort: a snapshot failure must never fail the job, since the purge above
-    # already succeeded and Container App Job metrics/alerts key off this exit status.
+    # Best-effort, deliberate deviation from the usual log-and-re-raise pattern: a
+    # snapshot failure must never fail the job, since the purge above already
+    # succeeded and Container App Job metrics/alerts key off this exit status. No
+    # `raise` here on purpose — swallowing is the intended behavior, not an omission.
     try:
         with get_session() as session:
             total_offers, total_cvs = _snapshot_totals(session)

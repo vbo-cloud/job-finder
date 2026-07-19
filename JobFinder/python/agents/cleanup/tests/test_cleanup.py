@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import sqlalchemy as sa
+from pytest_mock import MockerFixture
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -226,13 +227,17 @@ def test_snapshot_totals_counts_both(db_session: Session) -> None:
 
 
 class TestMainDailySnapshot:
-    def _mock_main_deps(self, mocker):
+    """Covers main()'s wiring of the daily_snapshot step, including its best-effort failure path."""
+
+    def _mock_main_deps(self, mocker: MockerFixture) -> None:
+        """Patch main()'s startup/session/cleanup dependencies, leaving _snapshot_totals to the caller."""
         mocker.patch.object(_mod, "configure_telemetry")
         mocker.patch.object(_mod, "run_migrations")
         mocker.patch.object(_mod, "get_session", _session_cm(MagicMock()))
         mocker.patch.object(_mod, "_cleanup", return_value=(0, 0))
 
-    def test_daily_snapshot_logged_after_cleanup(self, mocker):
+    def test_daily_snapshot_logged_after_cleanup(self, mocker: MockerFixture) -> None:
+        """main() logs daily_snapshot with the totals returned by _snapshot_totals."""
         self._mock_main_deps(mocker)
         mocker.patch.object(_mod, "_snapshot_totals", return_value=(42, 7))
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
@@ -241,7 +246,8 @@ class TestMainDailySnapshot:
 
         mock_logger_info.assert_any_call("daily_snapshot", total_offers=42, total_cvs=7)
 
-    def test_snapshot_failure_does_not_raise_or_fail_the_job(self, mocker):
+    def test_snapshot_failure_does_not_raise_or_fail_the_job(self, mocker: MockerFixture) -> None:
+        """A _snapshot_totals failure is swallowed and logged, never propagated to the caller."""
         self._mock_main_deps(mocker)
         mocker.patch.object(
             _mod, "_snapshot_totals", side_effect=SQLAlchemyError("db down")
@@ -252,7 +258,7 @@ class TestMainDailySnapshot:
 
         mock_logger_error.assert_any_call("daily_snapshot_failed", exc_info=True)
 
-    def test_cleanup_still_completes_normally_alongside_snapshot(self, mocker):
+    def test_cleanup_still_completes_normally_alongside_snapshot(self, mocker: MockerFixture) -> None:
         """cleanup_completed keeps logging as before, unaffected by the new snapshot step."""
         self._mock_main_deps(mocker)
         mocker.patch.object(_mod, "_cleanup", return_value=(3, 5))
