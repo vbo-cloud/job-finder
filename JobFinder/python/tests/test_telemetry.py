@@ -14,6 +14,8 @@ from typing import Iterator
 
 import pytest
 import structlog
+from opentelemetry.sdk.resources import SERVICE_NAME
+from pytest_mock import MockerFixture
 
 import shared.telemetry as telemetry
 
@@ -121,6 +123,41 @@ class TestStructlogStdlibBridge:
         assert record.exc_info is not None
         assert record.exc_info[1].args == ("boom",)
         assert not hasattr(record, "event_exc_info")
+
+
+class TestAzureMonitorResourceServiceName:
+    """Regression coverage for the unknown_service AppRoleName bug: configure_azure_monitor
+    in the installed azure-monitor-opentelemetry version silently ignores a service_name=
+    kwarg (see shared/telemetry.py's module docstring), so the exported resource's
+    service.name must be set explicitly via resource=Resource.create(...)."""
+
+    def test_resource_service_name_matches_configured_service_name(
+        self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", "InstrumentationKey=fake")
+        mock_configure_azure_monitor = mocker.patch(
+            "azure.monitor.opentelemetry.configure_azure_monitor"
+        )
+
+        telemetry.configure_telemetry("cleanup")
+
+        resource = mock_configure_azure_monitor.call_args.kwargs["resource"]
+        assert resource.attributes[SERVICE_NAME] == "cleanup"
+
+    def test_configure_azure_monitor_not_called_service_name_kwarg(
+        self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        """service_name is not a recognized keyword on the installed SDK — passing it
+        would be silently swallowed rather than raise, so this must be checked by
+        asserting it is absent, not by expecting a call failure."""
+        monkeypatch.setattr(telemetry, "APPLICATIONINSIGHTS_CONNECTION_STRING", "InstrumentationKey=fake")
+        mock_configure_azure_monitor = mocker.patch(
+            "azure.monitor.opentelemetry.configure_azure_monitor"
+        )
+
+        telemetry.configure_telemetry("cleanup")
+
+        assert "service_name" not in mock_configure_azure_monitor.call_args.kwargs
 
 
 class TestConsoleFormatterColor:

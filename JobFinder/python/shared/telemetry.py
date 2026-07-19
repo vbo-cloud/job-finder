@@ -29,6 +29,24 @@ Design notes for `_configure_structlog`'s processor chain:
   business-event logs (e.g. `offers_upserted`) before they ever reach either
   handler. Noisy third-party loggers (`azure`, `urllib3`) are pinned back to
   WARNING so they don't drown out application events in AppTraces.
+
+The `unknown_service` AppRoleName pitfall (`configure_telemetry`):
+`configure_azure_monitor(**kwargs)` in azure-monitor-opentelemetry==1.8.8 does
+NOT accept a `service_name` keyword — its actual signature only recognizes a
+`resource` keyword taking an `opentelemetry.sdk.resources.Resource` object
+(confirmed by reading `_get_configurations` in the installed package: every
+kwarg is copied into an internal dict, but only recognized keys, `resource`
+among them, are ever read back out). An unrecognized kwarg like `service_name`
+is silently absorbed and has no effect — no error, no warning. Without an
+explicit `resource`, `configure_azure_monitor` falls back internally to
+`Resource.create()` with no attributes, whose default `service.name` is
+exactly `"unknown_service"`
+— which is what Application Insights then shows as `AppRoleName` for every
+event, from every agent (all route through this same function). The fix is
+to build the resource explicitly: `Resource.create({SERVICE_NAME: service_name})`.
+This bug predates the structlog->logging bridge (see above) — it was just
+never observable before, since AppTraces received no events at all until that
+bridge was added.
 """
 
 import logging
@@ -170,8 +188,10 @@ def configure_telemetry(service_name: str) -> None:
     silently disabled without it (local dev).
 
     Args:
-        service_name: Logical name for this agent, used as cloud_role_name in
-            Application Insights (e.g. "cv-analysis", "matching").
+        service_name: Logical name for this agent, exported as the `service.name`
+            resource attribute (Application Insights AppRoleName), e.g. "cv-analysis",
+            "matching". Passed via an explicit `resource=`, not a `service_name=`
+            kwarg — see the module docstring's `unknown_service` pitfall note.
     """
     _configure_structlog()
 
@@ -180,9 +200,10 @@ def configure_telemetry(service_name: str) -> None:
         return
 
     from azure.monitor.opentelemetry import configure_azure_monitor
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
     configure_azure_monitor(
         connection_string=APPLICATIONINSIGHTS_CONNECTION_STRING,
-        service_name=service_name,
+        resource=Resource.create({SERVICE_NAME: service_name}),
     )
     logger.info("telemetry_configured", service=service_name)
