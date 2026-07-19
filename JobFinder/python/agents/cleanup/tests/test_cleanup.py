@@ -1,9 +1,10 @@
-"""Unit tests for cleanup/main.py._cleanup.
+"""Unit tests for cleanup/main.py._cleanup and _snapshot_totals.
 
 Tests use an in-memory SQLite DB created with raw DDL to avoid the pgvector
-Vector type, which SQLite does not support. The _cleanup function only reads
-and deletes on offers.id and offers.collected_at, so omitting the vector
-column is safe here.
+Vector type, which SQLite does not support. _cleanup only reads and deletes on
+offers.id/offers.collected_at, and _snapshot_totals only issues COUNT(*)
+queries with no column references, so omitting the vector column (and the
+rest of the cvs schema beyond `id`) is safe here.
 
 Datetime values are formatted with strftime('%Y-%m-%d %H:%M:%S.%f') to match
 SQLAlchemy's SQLite DateTime bind-parameter representation, ensuring correct
@@ -13,11 +14,15 @@ string-based chronological comparison.
 import importlib.util
 import sys
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import sqlalchemy as sa
+from pytest_mock import MockerFixture
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 _CLEANUP_DIR = Path(__file__).parent.parent
@@ -27,6 +32,15 @@ sys.modules["cleanup_main"] = _mod
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 _cleanup = _mod._cleanup
+_snapshot_totals = _mod._snapshot_totals
+
+
+def _session_cm(session: MagicMock):
+    """Return a contextmanager-compatible callable that yields the given session."""
+    @contextmanager
+    def _cm():
+        yield session
+    return _cm
 
 
 def _utcstr(dt: datetime) -> str:
@@ -65,6 +79,11 @@ def db_session():
                 updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        conn.execute(sa.text("""
+            CREATE TABLE cvs (
+                id          TEXT PRIMARY KEY
+            )
+        """))
     with Session(engine) as session:
         yield session
     engine.dispose()
@@ -92,6 +111,12 @@ def _add_match(session: Session, offer_id: str) -> str:
         {"id": mid, "offer_id": offer_id},
     )
     return mid
+
+
+def _add_cv(session: Session) -> str:
+    cid = str(uuid.uuid4())
+    session.execute(sa.text("INSERT INTO cvs (id) VALUES (:id)"), {"id": cid})
+    return cid
 
 
 def test_stale_offer_deleted(db_session: Session) -> None:
@@ -146,3 +171,102 @@ def test_only_stale_deleted_in_mixed_set(db_session: Session) -> None:
         sa.text("SELECT id FROM offers")
     ).scalars().all()
     assert set(remaining) == {fresh_id}
+
+
+def test_snapshot_totals_empty_database(db_session: Session) -> None:
+    """With no rows in either table, both totals are 0."""
+    total_offers, total_cvs = _snapshot_totals(db_session)
+
+    assert total_offers == 0
+    assert total_cvs == 0
+
+
+def test_snapshot_totals_counts_offers_only(db_session: Session) -> None:
+    """Offers are counted independently of CVs."""
+    now = datetime.now(timezone.utc)
+    _add_offer(db_session, now)
+    _add_offer(db_session, now)
+    db_session.flush()
+
+    total_offers, total_cvs = _snapshot_totals(db_session)
+
+    assert total_offers == 2
+    assert total_cvs == 0
+
+
+def test_snapshot_totals_counts_cvs_only(db_session: Session) -> None:
+    """CVs are counted independently of offers."""
+    _add_cv(db_session)
+    db_session.flush()
+
+    total_offers, total_cvs = _snapshot_totals(db_session)
+
+    assert total_offers == 0
+    assert total_cvs == 1
+
+
+def test_snapshot_totals_counts_both(db_session: Session) -> None:
+    """Offers and CVs are counted together, each against its own table."""
+    now = datetime.now(timezone.utc)
+    _add_offer(db_session, now)
+    _add_offer(db_session, now)
+    _add_offer(db_session, now)
+    _add_cv(db_session)
+    _add_cv(db_session)
+    db_session.flush()
+
+    total_offers, total_cvs = _snapshot_totals(db_session)
+
+    assert total_offers == 3
+    assert total_cvs == 2
+
+
+# ---------------------------------------------------------------------------
+# main() — daily_snapshot best-effort behavior
+# ---------------------------------------------------------------------------
+
+
+class TestMainDailySnapshot:
+    """Covers main()'s wiring of the daily_snapshot step, including its best-effort failure path."""
+
+    def _mock_main_deps(self, mocker: MockerFixture) -> None:
+        """Patch main()'s startup/session/cleanup dependencies, leaving _snapshot_totals to the caller."""
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "get_session", _session_cm(MagicMock()))
+        mocker.patch.object(_mod, "_cleanup", return_value=(0, 0))
+
+    def test_daily_snapshot_logged_after_cleanup(self, mocker: MockerFixture) -> None:
+        """main() logs daily_snapshot with the totals returned by _snapshot_totals."""
+        self._mock_main_deps(mocker)
+        mocker.patch.object(_mod, "_snapshot_totals", return_value=(42, 7))
+        mock_logger_info = mocker.patch.object(_mod.logger, "info")
+
+        _mod.main()
+
+        mock_logger_info.assert_any_call("daily_snapshot", total_offers=42, total_cvs=7)
+
+    def test_snapshot_failure_does_not_raise_or_fail_the_job(self, mocker: MockerFixture) -> None:
+        """A _snapshot_totals failure is swallowed and logged, never propagated to the caller."""
+        self._mock_main_deps(mocker)
+        mocker.patch.object(
+            _mod, "_snapshot_totals", side_effect=SQLAlchemyError("db down")
+        )
+        mock_logger_error = mocker.patch.object(_mod.logger, "error")
+
+        _mod.main()  # must not raise
+
+        mock_logger_error.assert_any_call("daily_snapshot_failed", exc_info=True)
+
+    def test_cleanup_still_completes_normally_alongside_snapshot(self, mocker: MockerFixture) -> None:
+        """cleanup_completed keeps logging as before, unaffected by the new snapshot step."""
+        self._mock_main_deps(mocker)
+        mocker.patch.object(_mod, "_cleanup", return_value=(3, 5))
+        mocker.patch.object(_mod, "_snapshot_totals", return_value=(0, 0))
+        mock_logger_info = mocker.patch.object(_mod.logger, "info")
+
+        _mod.main()
+
+        mock_logger_info.assert_any_call(
+            "cleanup_completed", deleted_offers=3, deleted_matches=5
+        )

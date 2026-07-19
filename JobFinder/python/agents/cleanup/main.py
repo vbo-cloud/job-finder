@@ -1,5 +1,8 @@
 """Cleanup agent — purges stale offers and associated matches from PostgreSQL.
 
+Also logs a daily exact snapshot (`daily_snapshot`) of the total offers and CVs
+currently in the database, for monitoring in Azure Monitor / Application Insights.
+
 Triggered by KEDA timer at 02:00 UTC daily. No queue interaction.
 
 Expected environment variables:
@@ -9,13 +12,13 @@ Expected environment variables:
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.config import CLEANUP_COLLECTED_AGE_DAYS
 from shared.db import get_session, run_migrations
-from shared.models import Match, Offer
+from shared.models import CV, Match, Offer
 from shared.telemetry import configure_telemetry
 
 logger = structlog.get_logger()
@@ -69,8 +72,28 @@ def _cleanup(session: Session) -> tuple[int, int]:
     return offer_result.rowcount, match_result.rowcount
 
 
+def _snapshot_totals(session: Session) -> tuple[int, int]:
+    """Count offers and CVs currently in the database.
+
+    Args:
+        session: Active SQLAlchemy session.
+
+    Returns:
+        Tuple of (total_offers, total_cvs).
+
+    Raises:
+        SQLAlchemyError: If either count query fails. The caller in main() treats
+            this step as best-effort and swallows the exception.
+    """
+    logger.info("daily_snapshot_started")
+
+    total_offers = session.execute(select(func.count()).select_from(Offer)).scalar()
+    total_cvs = session.execute(select(func.count()).select_from(CV)).scalar()
+    return total_offers, total_cvs
+
+
 def main() -> None:
-    """Purge stale offers and orphaned matches."""
+    """Purge stale offers and orphaned matches, then log a daily exact snapshot of totals."""
     configure_telemetry("cleanup")
 
     try:
@@ -93,6 +116,17 @@ def main() -> None:
         deleted_offers=deleted_offers,
         deleted_matches=deleted_matches,
     )
+
+    # Best-effort, deliberate deviation from the usual log-and-re-raise pattern: a
+    # snapshot failure must never fail the job, since the purge above already
+    # succeeded and Container App Job metrics/alerts key off this exit status. No
+    # `raise` here on purpose — swallowing is the intended behavior, not an omission.
+    try:
+        with get_session() as session:
+            total_offers, total_cvs = _snapshot_totals(session)
+        logger.info("daily_snapshot", total_offers=total_offers, total_cvs=total_cvs)
+    except SQLAlchemyError:
+        logger.error("daily_snapshot_failed", exc_info=True)
 
 
 if __name__ == "__main__":
