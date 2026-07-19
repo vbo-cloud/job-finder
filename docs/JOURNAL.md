@@ -6069,6 +6069,16 @@ combinés), et une classe `TestMainDailySnapshot` (3 tests) couvre que `main()` 
 `daily_snapshot_failed`, ne relance pas), et que `cleanup_completed` continue de se loguer
 normalement à côté de la nouvelle étape.
 
+**Retours `reviewer-backend`.** Premier passage : `CHANGEMENTS REQUIS` sur 3 points, tous
+corrigés dans le commit `806cfa1`. (1) `_snapshot_totals` n'avait pas de log d'entrée,
+contrairement à `_cleanup` qui logue `cleanup_started` dès le début — ajouté
+`logger.info("daily_snapshot_started")` en tête de fonction, par cohérence. (2) La classe
+`TestMainDailySnapshot` et ses 4 méthodes n'avaient ni docstring ni annotation `mocker:
+MockerFixture` — ajoutées. (3) Le commentaire au-dessus du `except SQLAlchemyError` best-effort
+de `main()` (~ligne 118-121) a été renforcé pour dire explicitement que l'absence de `raise`
+est un choix délibéré — c'est le premier endroit du repo qui avale une exception DB sans la
+relancer, et le reviewer voulait que ça se lise comme une décision assumée plutôt qu'un oubli.
+
 ### Décisions techniques
 
 - **Nom de l'événement et des champs figés.** `daily_snapshot` / `total_offers` /
