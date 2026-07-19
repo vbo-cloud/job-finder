@@ -18,14 +18,14 @@ from sqlalchemy.orm import Session
 
 from shared.config import CLEANUP_COLLECTED_AGE_DAYS
 from shared.db import get_session, run_migrations
-from shared.models import CV, Match, Offer
+from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
 
 logger = structlog.get_logger()
 
 
-def _cleanup(session: Session) -> tuple[int, int]:
-    """Delete stale offers and their associated matches atomically.
+def _cleanup(session: Session) -> tuple[int, int, int]:
+    """Delete stale offers and their associated matches and match analyses atomically.
 
     An offer is considered stale when collected_at has not been refreshed within
     CLEANUP_COLLECTED_AGE_DAYS. The offer-fetching agent updates collected_at on
@@ -41,14 +41,19 @@ def _cleanup(session: Session) -> tuple[int, int]:
     wiping the offer pool.
 
     Steps:
-        1. Delete matches whose offer_id is in the stale subquery.
-        2. Delete the stale offers.
+        1. Delete match analyses whose match_id is in the stale-match subquery.
+        2. Delete matches whose offer_id is in the stale-offer subquery.
+        3. Delete the stale offers.
+
+    MatchAnalysis.match_id has a NOT NULL foreign key to matches.id without
+    ondelete="CASCADE" — step 1 must run before step 2 while the stale matches
+    still exist, or PostgreSQL rejects the match deletion with a ForeignKeyViolation.
 
     Args:
         session: Active SQLAlchemy session.
 
     Returns:
-        Tuple of (deleted_offers, deleted_matches).
+        Tuple of (deleted_offers, deleted_matches, deleted_analyses).
 
     Note: does not call session.commit() — the caller owns the transaction boundary.
 
@@ -60,6 +65,11 @@ def _cleanup(session: Session) -> tuple[int, int]:
     logger.info("cleanup_started", cutoff=cutoff.isoformat())
 
     stale_subquery = select(Offer.id).where(Offer.collected_at < cutoff)
+    stale_match_subquery = select(Match.id).where(Match.offer_id.in_(stale_subquery))
+
+    analysis_result = session.execute(
+        delete(MatchAnalysis).where(MatchAnalysis.match_id.in_(stale_match_subquery))
+    )
 
     match_result = session.execute(
         delete(Match).where(Match.offer_id.in_(stale_subquery))
@@ -69,7 +79,7 @@ def _cleanup(session: Session) -> tuple[int, int]:
         delete(Offer).where(Offer.id.in_(stale_subquery))
     )
 
-    return offer_result.rowcount, match_result.rowcount
+    return offer_result.rowcount, match_result.rowcount, analysis_result.rowcount
 
 
 def _snapshot_totals(session: Session) -> tuple[int, int]:
@@ -102,10 +112,10 @@ def main() -> None:
         logger.error("migrations_failed", exc_info=True)
         raise
 
-    deleted_offers, deleted_matches = 0, 0
+    deleted_offers, deleted_matches, deleted_analyses = 0, 0, 0
     try:
         with get_session() as session:
-            deleted_offers, deleted_matches = _cleanup(session)
+            deleted_offers, deleted_matches, deleted_analyses = _cleanup(session)
             session.commit()
     except SQLAlchemyError:
         logger.error("cleanup_failed", exc_info=True)
@@ -115,6 +125,7 @@ def main() -> None:
         "cleanup_completed",
         deleted_offers=deleted_offers,
         deleted_matches=deleted_matches,
+        deleted_analyses=deleted_analyses,
     )
 
     # Best-effort, deliberate deviation from the usual log-and-re-raise pattern: a
