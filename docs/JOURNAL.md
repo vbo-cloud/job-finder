@@ -6033,3 +6033,58 @@ confirmation que le `LoggingHandler` OpenTelemetry produit bien des `attributes`
 Azure Monitor. Limite : test manuel contre un vrai workspace Application Insights
 (`AppTraces | take 50` dans le portail) non exécuté depuis cette session — à confirmer par
 Vincent lors d'un run réel d'un agent.
+
+## PR #206 — feat(cleanup): snapshot quotidien exact des totaux offres/CV
+
+**Date :** 2026-07-19
+**Branche :** `feature/cleanup-daily-snapshot-log` → `dev`
+
+### Contexte
+
+Le pont structlog→logging du PR #205 fait que `AppTraces` ne contient que des événements
+delta (offres/matchs supprimés à chaque purge) — aucun historique n'existe avant ce pont, et
+même après, il est impossible de reconstruire un total exact d'offres ou de CV en cours à un
+instant donné à partir de ces seuls deltas. Le workbook/KQL de monitoring a besoin d'un total
+exact, pas d'une somme de deltas potentiellement incomplète.
+
+### Ce qui a été fait
+
+`agents/cleanup/main.py` gagne une seconde responsabilité, en plus de la purge quotidienne
+des offres/matchs obsolètes existante : `_snapshot_totals(session)` exécute un
+`SELECT count(*)` sur les tables `Offer` et `CV` et retourne `(total_offers, total_cvs)`.
+Câblée dans `main()` juste après le log `cleanup_completed` existant, dans une session DB
+distincte de celle utilisée par la purge, avec log `logger.info("daily_snapshot",
+total_offers=..., total_cvs=...)`.
+
+Cette étape est best-effort : encadrée par un `try/except SQLAlchemyError` qui logue
+`daily_snapshot_failed` avec `exc_info=True` et ne relance pas, pour qu'un échec du comptage
+ne fasse jamais échouer le Container App Job ni ne masque le succès déjà acquis de la purge.
+Docstring de module étendue pour mentionner cette seconde responsabilité.
+
+Tests dans `agents/cleanup/tests/test_cleanup.py` : la fixture SQLite en mémoire crée
+désormais aussi une table `cvs` minimale (id seul), avec un helper `_add_cv`. Quatre
+nouveaux tests couvrent `_snapshot_totals` (base vide, offres seules, CV seules, les deux
+combinés), et une classe `TestMainDailySnapshot` (3 tests) couvre que `main()` logue bien
+`daily_snapshot` avec les bons champs, qu'un échec de `_snapshot_totals` est avalé (logue
+`daily_snapshot_failed`, ne relance pas), et que `cleanup_completed` continue de se loguer
+normalement à côté de la nouvelle étape.
+
+### Décisions techniques
+
+- **Nom de l'événement et des champs figés.** `daily_snapshot` / `total_offers` /
+  `total_cvs` ont été pré-convenus avec le consommateur workbook/KQL — ne pas renommer sans
+  prévenir en aval.
+- **Session DB séparée pour le snapshot.** Ouvrir une nouvelle session plutôt que de
+  réutiliser celle de `_cleanup` garde le comptage découplé de la transaction de purge
+  (déjà commit et fermée à ce stade) : un échec du comptage ne peut pas interférer avec la
+  transaction de suppression déjà validée.
+- **`_snapshot_totals` documente désormais `Raises: SQLAlchemyError`** (comme `_cleanup`),
+  pour rester cohérent avec le fait que c'est précisément cette exception que `main()`
+  attrape autour de l'appel.
+
+**Vérification :** revue statique des docstrings (`_snapshot_totals`, docstring de module,
+`main()`) contre `conventions-python` — Google style, complètes, `Raises:` ajouté sur
+`_snapshot_totals` par cohérence avec `_cleanup`. 7 nouveaux tests (4 `_snapshot_totals` +
+3 `TestMainDailySnapshot`) portent le total de `agents/cleanup/tests/test_cleanup.py` à 11
+(en plus des 4 tests `_cleanup` déjà existants) — non ré-exécutés dans cette session de
+documentation, à valider par `pytest` avant ouverture de la PR.

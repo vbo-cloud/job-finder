@@ -80,6 +80,10 @@ def _snapshot_totals(session: Session) -> tuple[int, int]:
 
     Returns:
         Tuple of (total_offers, total_cvs).
+
+    Raises:
+        SQLAlchemyError: If either count query fails. The caller in main() treats
+            this step as best-effort and swallows the exception.
     """
     total_offers = session.execute(select(func.count()).select_from(Offer)).scalar()
     total_cvs = session.execute(select(func.count()).select_from(CV)).scalar()
