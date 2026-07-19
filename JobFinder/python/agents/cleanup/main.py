@@ -1,4 +1,4 @@
-"""Cleanup agent — purges stale offers and associated matches from PostgreSQL.
+"""Cleanup agent — purges stale offers and their associated matches/match analyses from PostgreSQL.
 
 Also logs a daily exact snapshot (`daily_snapshot`) of the total offers and CVs
 currently in the database, for monitoring in Azure Monitor / Application Insights.
@@ -103,7 +103,7 @@ def _snapshot_totals(session: Session) -> tuple[int, int]:
 
 
 def main() -> None:
-    """Purge stale offers and orphaned matches, then log a daily exact snapshot of totals."""
+    """Purge stale offers and their orphaned matches/match analyses, then log a daily exact snapshot of totals."""
     configure_telemetry("cleanup")
 
     try:

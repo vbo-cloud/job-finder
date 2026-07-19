@@ -6098,3 +6098,60 @@ relancer, et le reviewer voulait que ça se lise comme une décision assumée pl
 3 `TestMainDailySnapshot`) portent le total de `agents/cleanup/tests/test_cleanup.py` à 11
 (en plus des 4 tests `_cleanup` déjà existants) — non ré-exécutés dans cette session de
 documentation, à valider par `pytest` avant ouverture de la PR.
+
+## PR #207 — fix(cleanup): supprimer les match_analyses avant les matches obsolètes (FK violation en prod)
+
+**Date :** 2026-07-19
+**Branche :** `fix/cleanup-match-analysis-fk-violation` → `dev`
+
+### Contexte
+
+Le Container App Job `job-jf-dev-frc-cleanup` échouait à chaque exécution en dev (backoff
+limit atteint, toutes les exécutions en erreur) avec
+`sqlalchemy.exc.IntegrityError: ForeignKeyViolation on fk_match_analyses_match_id_ref_matches`.
+Cause racine : `_cleanup()` (`agents/cleanup/main.py`) supprimait les `Match` obsolètes sans
+supprimer au préalable les `MatchAnalysis` qui les référencent, alors que
+`MatchAnalysis.match_id` est une FK NOT NULL vers `matches.id` sans `ondelete="CASCADE"` —
+PostgreSQL refuse la suppression d'un match encore référencé. Effet de bord silencieux :
+`_cleanup()` levait avant que le code du `daily_snapshot` (PR #206) n'ait la moindre chance
+de s'exécuter, donc cette seconde fonctionnalité était elle aussi bloquée sans qu'aucune
+erreur ne le signale directement.
+
+### Ce qui a été fait
+
+`_cleanup()` supprime maintenant les `MatchAnalysis` (via une sous-requête sur les matches
+obsolètes) avant de supprimer les `Match` obsolètes, dans le même ordre que le
+`_delete_cv` existant de `agents/webapp/routers/cv.py` (lignes 817-825), qui gère déjà la
+FK identique correctement. Le type de retour de `_cleanup()` passe de `tuple[int, int]`
+à `tuple[int, int, int]` (ajout de `deleted_analyses`), et `main()` logue désormais
+`deleted_analyses` aux côtés de `deleted_offers`/`deleted_matches` dans l'événement
+`cleanup_completed`. Les tests existants de `_cleanup` dans
+`agents/cleanup/tests/test_cleanup.py` ont été mis à jour pour dépaqueter le 3-tuple.
+
+Un nouveau test de régression, `test_stale_offer_with_analyzed_match_deleted_without_fk_violation`,
+reproduit le scénario réel : offre obsolète → match → match_analysis, et vérifie que les
+trois sont supprimés sans erreur. La fixture `db_session` active désormais
+`PRAGMA foreign_keys=ON` (désactivé par défaut sous SQLite) pour que la FK
+`match_analyses → matches` soit réellement contrainte, comme sous PostgreSQL — sans ce
+pragma le test passerait même sans le fix, ce qui en ferait un faux test de régression.
+Vérifié en revertant temporairement le fix en local : le test échoue alors avec exactement
+la même `IntegrityError` que celle observée en prod.
+
+Docstrings de `_cleanup` (ordre des 3 étapes, raisonnement FK) déjà à jour dans le commit
+de fix — relues contre `conventions-python`, aucune correction nécessaire. Docstring de
+module et docstring de `main()` légèrement complétées pour mentionner explicitement les
+match analyses, pas seulement les matches.
+
+### Décisions techniques
+
+- **Pas de migration `ondelete="CASCADE"` dans cette PR.** Option évaluée puis
+  délibérément écartée du périmètre de ce hotfix urgent : une migration DB nécessiterait
+  l'aval de `reviewer-infra` et touche un schéma destiné à la prod — plus de portée qu'un
+  hotfix urgent ne le justifie. Vérifié par grep que `match_analyses` est la seule FK
+  non-cascade vers `matches.id` et que rien ne référence `match_analyses.id` : le fix
+  applicatif seul suffit, sans laisser d'autre point d'appel non protégé.
+
+**Vérification :** revue statique de la docstring `_cleanup` contre `conventions-python`
+(Google style, complète, déjà à jour dans le commit de fix). Nouveau test de régression
+confirmé par reversion locale du fix (échoue avec l'`IntegrityError` exacte de prod, sans
+le fix). `agents/cleanup/tests/test_cleanup.py` passe de 11 à 12 tests.
