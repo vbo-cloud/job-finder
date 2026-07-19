@@ -6155,3 +6155,59 @@ match analyses, pas seulement les matches.
 (Google style, complète, déjà à jour dans le commit de fix). Nouveau test de régression
 confirmé par reversion locale du fix (échoue avec l'`IntegrityError` exacte de prod, sans
 le fix). `agents/cleanup/tests/test_cleanup.py` passe de 11 à 12 tests.
+
+## PR #208 — fix(telemetry): AppRoleName toujours "unknown_service" dans AppTraces
+
+**Date :** 2026-07-19
+**Branche :** `fix/apptraces-approlename-unknown-service` → `dev`
+
+### Contexte
+
+Depuis que le pont structlog→`logging` (PR #205) a commencé à peupler AppTraces,
+chaque événement y apparaît avec `AppRoleName == "unknown_service"` au lieu du nom réel
+de l'agent (`"cleanup"`, `"matching"`, etc.), alors que `Properties.service` — logué
+explicitement par `configure_telemetry` via `logger.info("telemetry_configured",
+service=service_name)` — est correct. Tâche menée en investigation d'abord : la cause a
+été confirmée en lisant le code réellement installé de `azure-monitor-opentelemetry==1.8.8`
+(`_configure.py` / `_utils/configurations.py`), pas supposée. `configure_azure_monitor(**kwargs)`
+dans cette version n'accepte pas du tout de mot-clé `service_name` — sa signature réelle
+ne reconnaît qu'un `resource=<opentelemetry.sdk.resources.Resource>`. Le kwarg
+`service_name` non reconnu était absorbé silencieusement, sans erreur : `_get_configurations`
+copie chaque kwarg dans un dict interne mais ne relit que les clés qu'elle reconnaît.
+`resource` n'était donc jamais renseigné, et l'appel retombait sur `Resource.create()` sans
+attributs, dont le `service.name` par défaut est exactement `"unknown_service"` — vérifié
+empiriquement dans un shell Python (`Resource.create().attributes[SERVICE_NAME] ==
+"unknown_service"`, `Resource.create({SERVICE_NAME: "cleanup"}).attributes[SERVICE_NAME]
+== "cleanup"`).
+
+Point important : ce bug est indépendant de la PR #205. Vérifié via
+`git log --oneline -S "service_name" -- JobFinder/python/shared/telemetry.py`, qui montre
+que le kwarg `service_name` a été introduit dans un commit antérieur, `58e4d9d` ("feat:
+inject Application Insights into all Container App Jobs"), trois commits avant le début
+des travaux de la PR #205. Il n'était simplement pas observable avant #205, puisqu'AppTraces
+ne recevait aucun événement tant que ce pont n'existait pas. Les 6 agents sont affectés de
+façon identique, puisqu'ils passent tous par cette même fonction partagée
+`configure_telemetry()` (confirmé en grepant chaque site d'appel de `configure_telemetry(...)`).
+
+### Ce qui a été fait
+
+`configure_telemetry` (`shared/telemetry.py`) construit désormais explicitement la
+`resource` attendue par `configure_azure_monitor` :
+`resource=Resource.create({SERVICE_NAME: service_name})`, à la place du kwarg
+`service_name=service_name` invalide. Une nouvelle classe de tests,
+`TestAzureMonitorResourceServiceName` (`tests/test_telemetry.py`), mocke
+`configure_azure_monitor` à son emplacement d'import réel
+(`azure.monitor.opentelemetry.configure_azure_monitor`, importé localement dans la
+fonction) et vérifie que la `resource` passée porte le bon `service.name`, et qu'aucun
+kwarg `service_name` n'est transmis. Les deux tests ont été vérifiés en échec contre le
+code pré-fix (appel exact avec le mauvais kwarg).
+
+Le paragraphe de docstring de module documentant ce piège `unknown_service` (déjà ajouté
+dans un commit précédent de cette branche) et la docstring mise à jour de
+`configure_telemetry` (Args: `service_name`, note sur `resource=` vs `service_name=`) ont
+été relus contre `conventions-python` — Google style, complets, reformulation mineure
+appliquée (référence interne non vérifiable retirée, comportement observable conservé).
+
+**Vérification :** revue statique des docstrings de `shared/telemetry.py` contre
+`conventions-python` (reformulation mineure, voir ci-dessus). Les deux nouveaux tests de
+`TestAzureMonitorResourceServiceName` ont été confirmés en échec contre le code pré-fix.

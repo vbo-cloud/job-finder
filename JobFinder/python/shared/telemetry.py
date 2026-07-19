@@ -38,8 +38,9 @@ NOT accept a `service_name` keyword — its actual signature only recognizes a
 kwarg is copied into an internal dict, but only recognized keys, `resource`
 among them, are ever read back out). An unrecognized kwarg like `service_name`
 is silently absorbed and has no effect — no error, no warning. Without an
-explicit `resource`, `_default_resource` falls back to `Resource.create()`
-with no attributes, whose default `service.name` is exactly `"unknown_service"`
+explicit `resource`, `configure_azure_monitor` falls back internally to
+`Resource.create()` with no attributes, whose default `service.name` is
+exactly `"unknown_service"`
 — which is what Application Insights then shows as `AppRoleName` for every
 event, from every agent (all route through this same function). The fix is
 to build the resource explicitly: `Resource.create({SERVICE_NAME: service_name})`.
