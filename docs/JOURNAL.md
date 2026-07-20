@@ -4263,9 +4263,9 @@ Réécriture du seul bloc « SUGGESTIONS PERSONNALISÉES » (règles 1, 2, 3, 4,
 
 - **Mécanisme explicite et obligatoire** : avant d'écrire `suggestion_concrete`, identifier un élément concret et vérifiable dans l'intention du candidat (projet nommé, certification, technologie mentionnée) ; la suggestion doit citer explicitement cet élément.
 - **Chaîne de repli quand l'intention est vide** : ancrer sur le texte du CV en priorité, puis sur un point précis de l'offre (description ou compétences demandées) en dernier recours — jamais un conseil de carrière générique par défaut.
-- **Exemple entrée→sortie complet** à la place de l'exemple de sortie seule : l'intention en entrée est montrée (« Reconversion Unity vers Cloud/Azure, certification AZ-104 obtenue, projet Terraform personnel en cours »), puis le ❌ (générique, ignore l'intention) et le ✅ (cite l'élément trouvé dans l'intention) — le modèle voit le lien de cause à effet.
+- **Exemple entrée→sortie complet** à la place de l'exemple de sortie seule : l'intention en entrée est montrée (une reconversion vers un domaine technique, une certification obtenue, un projet personnel en cours), puis le ❌ (générique, ignore l'intention) et le ✅ (cite l'élément trouvé dans l'intention) — le modèle voit le lien de cause à effet.
 
-**Vérification :** `pytest tests/test_match_analysis.py -v` — 15 passed sans modification (aucun changement de schéma JSON). Le test manuel reste à faire : rejouer le cas profil Cloud/Azure/AZ-104 vs offre Java/JEE/TensorFlow et vérifier que `suggestion_concrete` référence un élément identifiable du profil.
+**Vérification :** `pytest tests/test_match_analysis.py -v` — 15 passed sans modification (aucun changement de schéma JSON). Le test manuel reste à faire : rejouer un cas de profil en reconversion vs offre technique et vérifier que `suggestion_concrete` référence un élément identifiable du profil.
 
 ### Décisions techniques
 
@@ -4405,7 +4405,7 @@ Implémentation du prompt Claude Cowork `prompt-cv-analysis-qualite-review.md` :
 - **`synthese` distincte des listes, pas un résumé** : la règle du prompt interdit qu'un même fait apparaisse à la fois dans la synthèse et dans un point — la synthèse apporte le fil conducteur du parcours et l'impression globale, les listes le détail actionnable.
 - **Aucun changement dans `_upsert_cv_analysis`** : la persistance passe par `**result`, ajouter la clé au dict retourné par `_analyze_cv_quality` suffit.
 - **Tests webapp : `synthese` posée explicitement sur les MagicMock** — Pydantic rejetterait l'attribut auto-mocké (ni `str` ni `None`) au moment de la validation `from_attributes`.
-- **Test manuel qualitatif en attente de déploiement** : relire une analyse générée sur le CV réel Cloud/Azure/AZ-104 — aucun fait répété entre `synthese`/`points_faibles`/`suggestions`, au moins un point ancré sur un élément nommé du CV, au moins une suggestion appuyée sur l'intention du profil.
+- **Test manuel qualitatif en attente de déploiement** : relire une analyse générée sur un CV réel — aucun fait répété entre `synthese`/`points_faibles`/`suggestions`, au moins un point ancré sur un élément nommé du CV, au moins une suggestion appuyée sur l'intention du profil.
 
 ---
 
@@ -4701,7 +4701,7 @@ Suite du diagnostic mené avec Vincent les 09-10/07 (`docs/prompts/prompt-matchi
 
 ### Contexte
 
-Exécution de `docs/prompts/prompt-matching-remove-lexical-bonus.md`. Décision actée avec Vincent le 09/07 : sur 6 offres réelles diagnostiquées, aucune formule purement statistique sur des mots isolés ne peut distinguer un terme rare-mais-pertinent d'un terme rare-mais-hors-sujet (ex. « sport » d'une offre QA, « jeux » d'un CV avec passé Unity) — le bonus lexical est retiré entièrement, pas juste corrigé. Le score final devient `GREATEST(0, base_score - pénalité_expérience)`.
+Exécution de `docs/prompts/prompt-matching-remove-lexical-bonus.md`. Décision actée avec Vincent le 09/07 : sur 6 offres réelles diagnostiquées, aucune formule purement statistique sur des mots isolés ne peut distinguer un terme rare-mais-pertinent d'un terme rare-mais-hors-sujet (ex. « sport » d'une offre QA, « jeux » d'un CV issu d'un domaine sans lien avec l'offre) — le bonus lexical est retiré entièrement, pas juste corrigé. Le score final devient `GREATEST(0, base_score - pénalité_expérience)`.
 
 ### Ce qui a été fait
 
@@ -4747,7 +4747,7 @@ Demande utilisateur : la barre de recherche de l'onglet Offres ne matchait que t
 
 ### Contexte
 
-Exécution de `docs/prompts/prompt-profile-decouple-experience-intent.md`, suite du retrait du bonus lexical (PR #185) et du pipeline de distillation (PR #184). Diagnostic du 09/07 (Vincent, son propre profil vs l'offre WALLIX `ft_id 3976333`) : `base_score` en production tombait à 0.4971 — juste sous `MATCHING_SCORE_THRESHOLD = 0.5` — alors que la similarité CV↔offre distillée mesurée séparément était de ~0.696. Cause : `_build_intent_text` combinait une phrase générique dérivée d'`experience_level` (ex. « Profil confirmé, 2 à 5 ans d'expérience ») avec `candidate_description` ; quand cette dernière est vide (cas de Vincent), `intent_text` se réduisait à cette seule phrase, quasiment vide de contenu sémantique distinctif une fois embedée, et suffisait à faire chuter un excellent match sous le seuil une fois mélangée à 30 % (`INTENT_EMBEDDING_WEIGHT`) dans le score final.
+Exécution de `docs/prompts/prompt-profile-decouple-experience-intent.md`, suite du retrait du bonus lexical (PR #185) et du pipeline de distillation (PR #184). Diagnostic du 09/07 (Vincent, son propre profil vs une offre réelle `ft_id 3976333`) : `base_score` en production tombait à 0.4971 — juste sous `MATCHING_SCORE_THRESHOLD = 0.5` — alors que la similarité CV↔offre distillée mesurée séparément était de ~0.696. Cause : `_build_intent_text` combinait une phrase générique dérivée d'`experience_level` (ex. « Profil confirmé, 2 à 5 ans d'expérience ») avec `candidate_description` ; quand cette dernière est vide (cas de Vincent), `intent_text` se réduisait à cette seule phrase, quasiment vide de contenu sémantique distinctif une fois embedée, et suffisait à faire chuter un excellent match sous le seuil une fois mélangée à 30 % (`INTENT_EMBEDDING_WEIGHT`) dans le score final.
 
 ### Ce qui a été fait
 
@@ -6211,3 +6211,51 @@ appliquée (référence interne non vérifiable retirée, comportement observabl
 **Vérification :** revue statique des docstrings de `shared/telemetry.py` contre
 `conventions-python` (reformulation mineure, voir ci-dessus). Les deux nouveaux tests de
 `TestAzureMonitorResourceServiceName` ont été confirmés en échec contre le code pré-fix.
+
+## PR #209 — docs: déplacer le contexte personnel de CLAUDE.md, anonymiser une entrée JOURNAL.md
+
+**Date :** 2026-07-20
+**Branche :** `docs/move-personal-context-to-local` → `dev`
+
+### Contexte
+
+Suite à une fouille complète de l'historique git avant passage du repo en public,
+l'utilisateur a repéré qu'une courte section personnelle de `CLAUDE.md` était committée
+depuis le tout premier commit. Un contenu équivalent figure déjà dans `README.md`
+(destiné à être public), mais l'utilisateur ne connaissait pas encore `CLAUDE.local.md` /
+`~/.claude/CLAUDE.md` au moment où il l'a écrit dans `CLAUDE.md`, et préfère désormais
+garder ce fichier purement technique.
+
+En vérifiant que `docs/JOURNAL.md` lui-même ne recontenait rien de comparable, une entrée
+(PR #187) nommait explicitement une entreprise dans le contexte d'un test réel de matching
+sur le profil personnel de l'utilisateur — plus identifiant qu'un simple prénom déjà
+implicite via le compte GitHub, donc anonymisé. Deux autres entrées (PR #166 et PR #170) reprenaient le même récit de
+reconversion que celui retiré de `CLAUDE.md`, l'une comme exemple de prompt few-shot,
+l'autre en référence à un test manuel sur le CV réel de l'utilisateur — génériciées pour
+la même raison. Une passe de vérification supplémentaire a trouvé une cinquième occurrence
+(PR #185) : un exemple diagnostique citait un domaine professionnel antérieur de
+l'utilisateur comme cause d'un faux positif lexical — également généricisé.
+
+### Ce qui a été fait
+
+La section personnelle a été retirée de `CLAUDE.md` et déplacée dans un nouveau
+`CLAUDE.local.md`, ajouté au `.gitignore`. `README.md` n'a pas été modifié. Le nom
+d'entreprise de l'entrée PR #187 dans `JOURNAL.md` a été remplacé par une référence
+anonyme, le reste de l'entrée (score, `ft_id`, diagnostic technique) inchangé. Dans
+l'entrée PR #166, l'exemple de prompt cité — qui reprenait le même récit personnel que
+celui retiré de `CLAUDE.md` — a été généricisé aux deux endroits où il apparaissait, sans
+changer le point technique expliqué (exemple entrée→sortie complet du few-shot). Dans
+l'entrée PR #170, la référence à un CV réel portant ce même récit a été généricisée en
+« un CV réel ». Dans l'entrée PR #185, l'exemple diagnostique nommant ce même domaine
+professionnel antérieur a été reformulé sans en changer le point technique (un terme rare
+mais hors-sujet cause un faux positif lexical). Pas de réécriture d'historique : décision
+explicite de l'utilisateur, seuls les fichiers actuels sont modifiés.
+
+**Vérification :** relecture du diff — seule la section personnelle disparaît de
+`CLAUDE.md`, aucune autre section touchée ; `CLAUDE.local.md` bien ignoré par `git status`
+après `git add` ; dans `JOURNAL.md`, seules l'occurrence du nom d'entreprise (PR #187), les
+trois occurrences du récit de reconversion (PR #166 ×2, PR #170 ×1) et l'exemple
+diagnostique (PR #185) sont modifiées, aucun autre contenu de ces entrées touché ; grep
+final sur les termes identifiants (nom du domaine antérieur, certification, nom
+d'entreprise) ne renvoie plus aucune occurrence hors du mot générique « reconversion »
+seul.

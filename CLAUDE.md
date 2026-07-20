@@ -12,11 +12,6 @@ This project is managed by two Claude instances with distinct roles:
 
 **Claude Code** — execution role. Applies decisions made with Claude Cowork. Owns the full feature lifecycle: branch creation, implementation, PR opening. Has exclusive ownership of Terraform, Python, and PowerShell code.
 
-## Context
-Portfolio project for a Cloud/AI career transition.
-Unity developer transitioning to Azure + AI.
-Az-104 certification obtained.
-
 ## Tech Stack
 - Cloud: Azure
 - IaC: Terraform
