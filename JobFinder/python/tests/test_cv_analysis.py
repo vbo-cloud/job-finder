@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from azure.servicebus.exceptions import ServiceBusError
 from openai import OpenAIError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -237,7 +238,7 @@ class TestMergeRomeCodes:
         mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
-        _merge_rome_codes(
+        new_codes = _merge_rome_codes(
             "user-123",
             "cv-uuid-1",
             [{"code": "M1805", "label": "Dev info"}],
@@ -246,6 +247,7 @@ class TestMergeRomeCodes:
         assert "M1805" in mock_profile.rome_codes
         assert "cv-uuid-1" in mock_profile.rome_codes["M1805"]["cv_ids"]
         mock_session.commit.assert_called_once()
+        assert new_codes == ["M1805"]
 
     def test_does_not_duplicate_cv_id_on_second_call(self, mocker):
         mock_profile = MagicMock()
@@ -256,13 +258,14 @@ class TestMergeRomeCodes:
         mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
-        _merge_rome_codes(
+        new_codes = _merge_rome_codes(
             "user-123",
             "cv-uuid-1",
             [{"code": "M1805", "label": "Dev info"}],
         )
 
         assert mock_profile.rome_codes["M1805"]["cv_ids"].count("cv-uuid-1") == 1
+        assert new_codes == []
 
     def test_appends_new_cv_id_to_existing_code(self, mocker):
         mock_profile = MagicMock()
@@ -273,7 +276,7 @@ class TestMergeRomeCodes:
         mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
-        _merge_rome_codes(
+        new_codes = _merge_rome_codes(
             "user-123",
             "cv-uuid-2",
             [{"code": "M1805", "label": "Dev info"}],
@@ -281,6 +284,27 @@ class TestMergeRomeCodes:
 
         assert "cv-uuid-2" in mock_profile.rome_codes["M1805"]["cv_ids"]
         assert "cv-uuid-1" in mock_profile.rome_codes["M1805"]["cv_ids"]
+        assert new_codes == []
+
+    def test_returns_new_codes_only(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [
+                {"code": "M1805", "label": "Dev info"},
+                {"code": "M1502", "label": "Chargé de recrutement"},
+            ],
+        )
+
+        assert new_codes == ["M1502"]
 
     def test_calls_flag_modified_for_jsonb_dirty_tracking(self, mocker):
         mock_profile = MagicMock()
@@ -615,3 +639,58 @@ class TestMainRetryQualityOnly:
         _mod.main()  # must not raise
 
         mock_run_quality.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# main() — offer-fetch-request dispatch on newly-merged ROME codes
+# ---------------------------------------------------------------------------
+
+
+class TestMainOfferFetchDispatch:
+    def _run_main_for_new_cv(self, mocker, merge_return_value: list[str]):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(
+            _mod, "receive_message", _receive_message_cm({"cv_id": "cv-uuid-1"})
+        )
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
+        mocker.patch.object(_mod, "_set_cv_status")
+        mocker.patch.object(_mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}])
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=merge_return_value)
+        mocker.patch.object(_mod, "_run_quality_analysis")
+        return mocker.patch.object(_mod, "send_message")
+
+    def test_dispatches_targeted_request_when_new_codes_present(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, ["M1502"])
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert len(offer_fetch_calls) == 1
+        assert offer_fetch_calls[0].args[1] == {
+            "trigger": "cv_analysis",
+            "rome_codes": ["M1502"],
+        }
+
+    def test_does_not_dispatch_when_no_new_codes(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, [])
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert offer_fetch_calls == []
+
+    def test_logs_but_does_not_raise_on_servicebus_error_for_offer_fetch_dispatch(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, ["M1502"])
+
+        def _send_side_effect(queue_name, _body):
+            if queue_name == _mod.OFFER_FETCH_REQUEST_QUEUE:
+                raise ServiceBusError("boom")
+
+        mock_send.side_effect = _send_side_effect
+
+        _mod.main()  # must not raise despite the offer-fetch-request send failing
