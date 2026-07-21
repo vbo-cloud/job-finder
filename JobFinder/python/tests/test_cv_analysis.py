@@ -150,6 +150,19 @@ class TestExtractRomeCodes:
         assert len(result) == 1
         assert result[0]["code"] == "M1805"
 
+    def test_pins_temperature_and_seed_for_determinism(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text")
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
+        assert kwargs["seed"] == _mod.ANALYSIS_SEED
+
 
 # ---------------------------------------------------------------------------
 # _get_cv_text

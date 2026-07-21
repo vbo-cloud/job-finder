@@ -6497,3 +6497,72 @@ d'exclusion documentée jusqu'ici.
 **Vérification :** `pytest tests/test_offer_fetching.py -v` (29/29 passent). Grep
 `FALLBACK_ROME_CODES` sur tout le repo : plus aucune occurrence dans le code source
 (seule cette entrée de journal nomme encore la constante retirée, à titre descriptif).
+
+## PR #213 — fix(cv-analysis): déterminisme + précision de l'extraction ROME depuis le CV
+
+**Date :** 2026-07-21
+**Branche :** `feature/cv-analysis-rome-determinism-and-precision` → `dev`
+
+### Contexte
+
+Suite du diagnostic ROME (`prompt-cv-analysis-rome-code-determinism-and-precision.md`,
+même série que `prompt-matching-rome-code-hard-filter.md` et
+`prompt-offer-fetching-remove-dev-fallback-rome-codes.md`, PR #211/#212) : un même CV
+uploadé deux fois de suite produisait deux jeux de codes ROME totalement disjoints dans
+`_extract_rome_codes` (`agents/cv_analysis/main.py`). Deux causes cumulées identifiées :
+(1) aucun `temperature`/`seed` fixé sur l'appel OpenAI de cette fonction — contrairement
+à `_analyze_cv_quality` dans le même fichier et `_analyze_match` de
+`agents/match_analysis/main.py`, qui pinnaient déjà `ANALYSIS_TEMPERATURE`/`ANALYSIS_SEED` ;
+(2) le prompt système ne distinguait pas le métier propre du candidat du
+secteur/produits/outils qu'il mentionne, et imposait un plancher de 3 codes minimum qui
+poussait le modèle à ajouter du bruit sur des CV mono-métier.
+
+### Ce qui a été fait
+
+Dans `_extract_rome_codes` : ajout de `temperature=ANALYSIS_TEMPERATURE,
+seed=ANALYSIS_SEED` à l'appel `_openai_client.chat.completions.create(...)`, alignant
+cette fonction sur le reste du fichier. Prompt système réécrit : "3 à 5 codes ROME
+pertinents" devient "1 à 5 codes ROME pertinents", avec deux règles explicites ajoutées —
+le code doit refléter le métier ou la fonction réellement exercée par le candidat
+lui-même, jamais le secteur d'activité, les produits/outils vendus ou utilisés, ou le
+métier des personnes/clients mentionnés dans le CV (exemple fourni : un commercial qui
+vend des solutions informatiques reste un métier commercial, pas un métier de
+développeur) ; et la liste n'est plus jamais complétée artificiellement pour atteindre un
+minimum — un CV clairement mono-métier peut n'avoir qu'un seul code pertinent. Docstring
+de `_extract_rome_codes` mise à jour en conséquence : section dédiée aux deux invariants
+(déterminisme, précision occupation-candidat) avec renvoi vers le prompt pour le
+diagnostic complet, et `Returns:` corrigé de "3–5 dicts" à "1–5 dicts".
+
+`tests/test_cv_analysis.py` : nouveau test
+`test_pins_temperature_and_seed_for_determinism` dans `TestExtractRomeCodes`, calqué sur
+le test du même nom déjà présent dans `TestAnalyzeCvQuality` — vérifie que `temperature`
+et `seed` sont bien passés en kwargs à l'appel `chat.completions.create`.
+
+Suite à une remarque non-bloquante de `reviewer-backend` (le prompt système allongé
+faisait dépasser `_extract_rome_codes` du seuil de 40 lignes recommandé par le skill),
+le prompt système a été extrait en constante de module `ROME_EXTRACTION_SYSTEM_PROMPT`,
+sur le modèle de `CV_QUALITY_SYSTEM_PROMPT` déjà présent dans ce même fichier.
+
+### Décisions techniques
+
+Limite connue et volontairement hors scope : `_merge_rome_codes` ne fait qu'une union des
+codes ROME dans `user_profiles.rome_codes` (ajout de `cv_id` aux `cv_ids` existants,
+rafraîchissement du label) — il ne retire jamais rétroactivement un code qui aurait été
+extrait par erreur avant ce fix. Un profil déjà contaminé par du bruit ROME issu de
+l'ancien comportement (plancher à 3, absence de déterminisme) le reste tant que ce CV
+n'est pas ré-analysé ; ce fix corrige l'extraction pour les nouvelles analyses, pas les
+profils existants.
+
+### Tests
+
+Grep de "3 à 5 codes"/"3-5" sur `agents/cv_analysis/main.py` : plus aucune occurrence
+liée au prompt d'extraction ROME (la seule mention restante de "3 à 5" dans le fichier
+est "3 à 5 phrases" dans `CV_QUALITY_SYSTEM_PROMPT`, qui borne la longueur de la
+`synthese` — sans rapport avec le nombre de codes ROME). `docs/BACKLOG.md` conserve à la
+ligne 37 la formulation historique "3 à 5 codes ROME" dans la section `[M4 — PR 1]` —
+c'est la spec de planification d'origine de PR #86 (déjà mergée), non une doc vivante du
+comportement actuel ; laissée telle quelle par cohérence avec les autres sections
+`[M4 — PR N]` non annotées de ce fichier.
+
+**Vérification :** `pytest tests/test_cv_analysis.py -v` (35/35 passent) et la suite
+complète (280/280) passent.

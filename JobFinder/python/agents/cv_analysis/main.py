@@ -123,6 +123,25 @@ def _set_cv_status(cv_id: str, status: str) -> None:
 # ROME extraction
 # ==============================================================================
 
+ROME_EXTRACTION_SYSTEM_PROMPT = (
+    "Tu es un expert en classification des métiers français selon le référentiel ROME. "
+    "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide "
+    'de la forme {"rome_codes": ["M1805", "M1802", ...]} '
+    "contenant entre 1 et 5 codes ROME pertinents "
+    "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
+    "RÈGLE — le code doit refléter le métier ou la fonction réellement exercée par LE "
+    "CANDIDAT lui-même, jamais le secteur d'activité, les produits ou outils "
+    "vendus/utilisés, ou le métier des personnes ou clients mentionnés dans le CV. "
+    "Exemple : un commercial qui vend des solutions informatiques reste un métier "
+    "commercial (codes de la famille vente/administration des ventes), pas un métier "
+    "de développeur ou d'administrateur système, même si le CV contient beaucoup de "
+    "vocabulaire technique. "
+    "RÈGLE — ne complète jamais la liste avec un code supplémentaire seulement pour "
+    "atteindre un nombre minimal : un CV clairement mono-métier peut n'avoir qu'un "
+    "seul code pertinent. "
+    "Ne retourne rien d'autre que le JSON."
+)
+
 
 def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
     """Extract ROME occupation codes from CV text using GPT-4o-mini.
@@ -132,6 +151,16 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
     from the referential are silently rejected (hallucination protection). The
     label is always sourced from the referential, never from GPT output.
 
+    Two invariants, both required after the same CV produced two disjoint code
+    sets on consecutive uploads (see docs/prompts/prompt-cv-analysis-rome-code-
+    determinism-and-precision.md for the full diagnostic):
+    - Determinism: temperature/seed pinned to ANALYSIS_TEMPERATURE/ANALYSIS_SEED,
+      same as _analyze_cv_quality and match_analysis's _analyze_match.
+    - Precision: the system prompt requires codes to reflect the candidate's own
+      occupation, never the sector/products/tools they work with or the
+      occupation of people mentioned in the CV — and no longer pads the result
+      to a 3-code floor when the CV is genuinely mono-occupation.
+
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
 
@@ -139,7 +168,7 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
         raw_text: Plain text content of the CV.
 
     Returns:
-        A list of 3–5 dicts, each with "code" and "label" keys,
+        A list of 1–5 dicts, each with "code" and "label" keys,
         e.g. [{"code": "M1805", "label": "Études et développement informatique"}].
 
     Raises:
@@ -153,18 +182,10 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
+                temperature=ANALYSIS_TEMPERATURE,
+                seed=ANALYSIS_SEED,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Tu es un expert en classification des métiers français. "
-                            "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide "
-                            'de la forme {"rome_codes": ["M1805", "M1802", ...]} '
-                            "contenant entre 3 et 5 codes ROME pertinents "
-                            "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
-                            "Ne retourne rien d'autre que le JSON."
-                        ),
-                    },
+                    {"role": "system", "content": ROME_EXTRACTION_SYSTEM_PROMPT},
                     {
                         "role": "user",
                         "content": f"CV :\n\n{raw_text[:8000]}",
