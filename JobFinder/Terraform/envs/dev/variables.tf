@@ -79,6 +79,20 @@ variable "frontend_custom_domain" {
   }
 }
 
+variable "budget_amount" {
+  type = number
+  # Azure bills in the subscription's billing currency (check the portal —
+  # commonly EUR, not USD, for a France-based subscription). This value is a
+  # bare number in whatever that currency is; it is not converted.
+  default     = 40
+  description = "Monthly budget amount for the rg_app resource group, in the subscription's billing currency, that triggers a cost-drift alert at 100% (see monitoring.tf's azurerm_consumption_budget_resource_group)."
+
+  validation {
+    condition     = var.budget_amount > 0
+    error_message = "budget_amount must be greater than 0."
+  }
+}
+
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000

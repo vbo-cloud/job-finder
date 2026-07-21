@@ -6260,7 +6260,7 @@ final sur les termes identifiants (nom du domaine antérieur, certification, nom
 d'entreprise) ne renvoie plus aucune occurrence hors du mot générique « reconversion »
 seul.
 
-## PR #210 — chore(terraform): min_replicas = 1 sur le frontend et le webapp
+## PR #210 — chore(terraform): min_replicas = 1 (frontend/webapp) + budget alert sur rg_app
 
 **Date :** 2026-07-21
 **Branche :** `feature/min-replicas-frontend-backend` → `dev`
@@ -6309,3 +6309,37 @@ seul `min_replicas` change (`0` → `1`) dans `module.frontend` et `module.webap
 touché. Aucun commentaire préexistant des deux fichiers ne référençait le scale-to-zero ou
 `min_replicas = 0` : rien n'était devenu obsolète suite au changement. `terraform fmt -check`
 et `terraform validate` passent après ajout du commentaire WHY et réalignement des blocs.
+
+### Budget alert sur rg_app (ajout à la même PR)
+
+**Contexte :** suite à l'estimation ci-dessus, l'utilisateur a demandé une alerte de
+budget Azure sur `rg-jf-dev-frc-app` (le resource group qui porte le frontend et le
+webapp) avec un seuil à ~40 $/mois, pour détecter une dérive de coût sans surveillance
+manuelle.
+
+**Ce qui a été fait :** ajout de `azurerm_consumption_budget_resource_group.app`
+(`envs/dev/monitoring.tf`, nouvelle section « Cost Alerting ») ciblant
+`data.azurerm_resource_group.rg_app.id`, `time_grain = "Monthly"`, deux notifications
+(`operator = "GreaterThanOrEqualTo"`, `threshold_type = "Actual"`) à 80% et 100% du
+montant, routées vers `azurerm_monitor_action_group.owner` déjà utilisé par les autres
+alertes (pas de duplication d'email). Le montant est exposé via une nouvelle variable
+`budget_amount` (`envs/dev/variables.tf`, défaut `40`, validation `> 0`) plutôt que
+codé en dur, pour rester ajustable par environnement. `time_period.start_date` est fixé
+au premier jour du mois courant (`2026-07-01T00:00:00Z`) ; cet attribut n'est pas
+force-new, donc il n'a pas besoin d'être maintenu à jour à chaque mois.
+
+Suite à la remarque non-bloquante de `reviewer-infra` (un seuil unique à 100% Actual ne
+déclenche qu'une fois le budget déjà entièrement consommé, ce qui contredit l'objectif de
+détection précoce affiché en commentaire de section), un second seuil à 80% Actual a été
+ajouté comme alerte précoce, en plus du seuil à 100% qui confirme le dépassement réel.
+
+**Point d'attention signalé à l'utilisateur :** Azure facture dans la devise de
+l'abonnement (souvent EUR pour un abonnement basé en France), pas nécessairement en USD.
+Le montant `40` est un nombre brut dans cette devise-là, sans conversion — un commentaire
+WHY dans `variables.tf` documente cette nuance pour éviter une confusion future entre
+l'estimation en $ de la section précédente et le seuil réel appliqué en €.
+
+**Vérification :** `terraform fmt -check` et `terraform validate` passent. Ce type de
+ressource (`azurerm_consumption_budget_resource_group`) ne figure pas dans la liste des
+ressources critiques du skill `conventions-terraform` (pas de tags supportés par le
+provider sur ce type, donc pas de bloc `tags` ni de `prevent_destroy`/`protect` requis).
