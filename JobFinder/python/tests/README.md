@@ -24,7 +24,7 @@ pytest tests/test_cv_analysis.py -v
 | `test_ft_client.py` | `agents/offer_fetching/ft_client.py` | `get_access_token`, `fetch_offers` |
 | `test_offer_fetching.py` | `agents/offer_fetching/main.py` | `_parse_experience_min_years`, `_upsert_offers` (values wiring) |
 | `test_match_analysis.py` | `agents/match_analysis/main.py` | `_get_match_context`, `_analyze_match`, `_update_match_analysis` |
-| `test_matching.py` | `agents/matching/main.py` | `_upsert_matches` |
+| `test_matching.py` | `agents/matching/main.py` | `_upsert_matches`, `_purge_stale_matches` (call order + returned count only) |
 | `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}`, `POST /matches/{cv_id}/offers/{offer_id}/analyze` |
 | `test_webapp_profile.py` | `agents/webapp/routers/profile.py` | `GET /profile`, `PUT /profile` |
 | `test_webapp_cv.py` | `agents/webapp/routers/cv.py` | `POST /upload` (validation), `GET /cv/`, `GET /cv/{cv_id}/analysis`, `POST /cv/{cv_id}/analysis/retry`, thumbnail/pdf (404), `PATCH mark-all-seen`, `DELETE` (404) |
@@ -41,5 +41,7 @@ pytest tests/test_cv_analysis.py -v
 - `POST /cv/upload` happy path: requires simultaneous mocking of `pdfplumber`, the embedding model (`shared/embedder`), Azure Blob Storage upload, and Service Bus `send_message`. Covered by manual integration tests.
 - `_enqueue_top_n_analyses` (`agents/matching/main.py`): uses PostgreSQL-specific SQL (`text()` with `ROW_NUMBER() OVER`) — incompatible with SQLite, same exclusion as `_get_all_matches`. Validated manually (see the verification steps in the implementing PR).
 - `_get_all_matches` experience penalty (`agents/matching/main.py`): lives in a PostgreSQL-specific query (CTEs, `GREATEST`/`LEAST`/`NULLIF`) — covered by the existing `_get_all_matches` exclusion. Validated manually against a throwaway Postgres 16 + pgvector with offers of known `experience_min_years` (see the implementing PRs).
+- `_get_all_matches` ROME-code hard filter (`agents/matching/main.py`): same PostgreSQL-specific SQL exclusion as above (`jsonb_each`, `CROSS JOIN LATERAL`, the `?` JSONB containment operator) — incompatible with SQLite, no unit test. Validated manually against a throwaway Postgres 16 + pgvector (see prompt-matching-rome-code-hard-filter.md and the implementing PR).
+- `_purge_stale_matches` stale-match SQL predicate (`agents/matching/main.py`): same PostgreSQL-specific SQL exclusion as above — incompatible with SQLite. `test_matching.py::TestPurgeStaleMatches` covers call order (match_analyses deleted before matches) and the returned count with a mocked session, not the predicate itself. Validated manually against the same throwaway Postgres 16 + pgvector setup (see prompt-matching-rome-code-hard-filter.md and the implementing PR).
 - `GET /cv/{id}/thumbnail` and `GET /cv/{id}/pdf` happy paths: require mocking the blob download client. The 404 paths are covered.
 - `DELETE /cv/{id}` happy path: requires mocking blob delete + multi-step DB session. The 404 path is covered.
