@@ -282,6 +282,45 @@ class TestMergeRomeCodes:
         assert "cv-uuid-2" in mock_profile.rome_codes["M1805"]["cv_ids"]
         assert "cv-uuid-1" in mock_profile.rome_codes["M1805"]["cv_ids"]
 
+    def test_calls_flag_modified_for_jsonb_dirty_tracking(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+        mock_flag_modified = mocker.patch.object(_mod, "flag_modified")
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        mock_flag_modified.assert_called_once_with(mock_profile, "rome_codes")
+
+    def test_deep_copies_so_original_nested_dict_is_left_untouched(self, mocker):
+        original_m1805 = {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {"M1805": original_m1805}
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        # A shallow dict(profile.rome_codes) would share this nested dict, so mutating
+        # the merged copy's cv_ids would also mutate original_m1805 in place — which
+        # defeats SQLAlchemy's old/new equality check at flush and silently drops the
+        # write (the bug this fix addresses). With a real copy.deepcopy, original_m1805
+        # must stay exactly as it was before the call.
+        assert original_m1805["cv_ids"] == ["cv-uuid-1"]
+
     def test_raises_value_error_when_profile_not_found(self, mocker):
         mock_session = MagicMock()
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
