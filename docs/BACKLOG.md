@@ -771,11 +771,13 @@ discriminant n'est exclu sur le corpus de prod :
 réévaluer la valeur plutôt que de l'accepter telle quelle.
 
 ### [recommandé] Valider le classement sur de vraies offres d'un secteur non-tech
-Le corpus réel est probablement mono-sectoriel (repli `FALLBACK_ROME_CODES`, tous
-informatique). Dès qu'un profil non-tech existe en base (ex. infirmier, code ROME
-santé type J1506), déclencher offer_fetching pour ce code et vérifier que le bonus
-produit un classement sensé sur de vraies offres — la généralisation reste une
-hypothèse validée en synthétique tant que ce test n'a pas eu lieu.
+Sans fallback ROME codé en dur (retiré, voir prompt-offer-fetching-remove-dev-fallback-rome-codes.md),
+le corpus réel restera vide tant qu'aucun profil n'a de code ROME actif, puis
+mono-sectoriel selon les premiers profils réels enregistrés. Dès qu'un profil
+non-tech existe en base (ex. infirmier, code ROME santé type J1506), déclencher
+offer_fetching pour ce code et vérifier que le bonus produit un classement sensé
+sur de vraies offres — la généralisation reste une hypothèse validée en
+synthétique tant que ce test n'a pas eu lieu.
 
 ### [optional] Colonne `tsvector` précalculée + index GIN si le corpus grossit
 Les `to_tsvector('french', ...)` sont recalculés à chaque requête de matching

@@ -6427,3 +6427,73 @@ dépasserait le seuil ; (b) le faux positif pré-existant est supprimé
 (`purged_matches == 1`) ; (c) un CV sans entrée `cv_ids` (extraction ROME
 échouée) n'obtient toujours aucun match. `pytest tests/test_matching.py -v`
 (6/6) et la suite complète (279/279) passent.
+
+## PR #212 — fix(offer-fetching): retrait du fallback ROME 100% dev
+
+**Date :** 2026-07-21
+**Branche :** `fix/offer-fetching-remove-dev-fallback-rome-codes` → `dev`
+
+### Contexte
+
+Suite du diagnostic matching (`prompt-matching-rome-code-hard-filter.md`,
+`prompt-cv-analysis-rome-code-determinism-and-precision.md`) : `FALLBACK_ROME_CODES`
+(`agents/offer_fetching/main.py`, `["M1805", "M1802", "M1806", "M1810", "M1811"]`) était
+utilisé par `_get_active_rome_codes` quand aucun profil n'a de `rome_codes` non vide —
+et il était 100% développement/informatique. Ça allait à l'encontre du principe déjà
+acté à plusieurs reprises sur ce projet (retrait du bonus lexical `term_stats`, retrait
+de `tech_keywords` — voir `prompt-matching-remove-lexical-bonus.md`) : un mécanisme de
+matching générique, valable pour tous les métiers, pas biaisé tech par construction.
+Décision actée avec Vincent (21/07) : retirer `FALLBACK_ROME_CODES` entièrement, sans
+le remplacer par un autre jeu de codes codé en dur — un fallback « équilibré »
+réintroduirait le même biais sous une autre forme.
+
+### Ce qui a été fait
+
+`FALLBACK_ROME_CODES` supprimé. `_get_active_rome_codes` retourne désormais une liste
+vide quand aucun profil n'a de code ROME actif (log `rome_codes_none_active` au lieu de
+`rome_codes_using_fallback`), documenté en docstring comme un état normal — en attendant
+qu'un premier profil réel ait des codes — pas une erreur. Dans `main()`, l'appel à
+`get_access_token()` et la boucle de fetch France Travail sont maintenant sautés quand
+`rome_codes` est vide (évite un aller-retour OAuth inutile), sans court-circuiter
+`_embed_pending_offers()` qui doit continuer à traiter les offres déjà en base
+indépendamment du cycle de fetch courant. Suite à une remarque non-bloquante de
+`reviewer-backend` (le nouveau garde faisait grandir `main()`), le token +
+cutoff + boucle de fetch/upsert ont été extraits dans une nouvelle fonction
+`_fetch_and_upsert_new_offers(rome_codes) -> int`, appelée depuis `main()`
+uniquement quand `rome_codes` est non vide.
+
+Suite à un verdict `CHANGEMENTS REQUIS` de `reviewer-backend` sur un `except
+Exception:` nu pré-existant autour de `run_migrations()` (ligne 397 avant fix,
+règle "jamais de `except Exception` nu" du skill `conventions-python`, sans
+exception documentée y compris pour un commentaire justificatif) : remplacé par
+`except (SQLAlchemyError, CommandError):`, qui correspond exactement au
+`Raises:` documenté par `run_migrations()` (`shared/db.py`). Comportement
+inchangé (`raise` nu identique), simple resserrement du type capturé.
+
+Même passe, second `CHANGEMENTS REQUIS` de `reviewer-backend` : `_upsert_offers`
+(pré-existante, non touchée par ce fix jusque-là) exécute un appel DB direct
+sans logger son entrée avant le `try` — manquant vis-à-vis de la règle
+"Logging" du skill (`conventions-python`, ligne 31 : toute fonction avec appel
+externe DB/API/réseau direct doit logger son entrée). Ajout d'un
+`logger.info("offers_upsert_started", rome_code=rome_code, count=...)` juste
+avant le `try`, cohérent avec le pattern déjà en place pour
+`_get_active_rome_codes` dans ce même fichier.
+
+Référence stale mise à jour dans `docs/BACKLOG.md` (section corpus mono-sectoriel) :
+la cause n'est plus le fallback dev mais l'absence de fetch tant qu'aucun profil n'a de
+code actif.
+
+### Tests
+
+`_get_active_rome_codes` mocke systématiquement son retour dans `test_offer_fetching.py`
+— aucun test n'exerçait le comportement SQL/fallback réel, donc aucun test n'asserte sur
+la valeur du fallback lui-même. Le test existant avec `_get_active_rome_codes` mocké à
+`[]` (`TestMainSchedulingGuard::test_proceeds_when_within_scheduled_local_hour`) reste
+valide tel quel — il ne vérifie pas l'appel à `get_access_token`. Entrée ajoutée dans
+`tests/README.md` (« Intentionally excluded ») pour `_get_active_rome_codes`
+(`jsonb_object_keys`, PostgreSQL-spécifique, incompatible SQLite), même absence
+d'exclusion documentée jusqu'ici.
+
+**Vérification :** `pytest tests/test_offer_fetching.py -v` (29/29 passent). Grep
+`FALLBACK_ROME_CODES` sur tout le repo : plus aucune occurrence dans le code source
+(seule cette entrée de journal nomme encore la constante retirée, à titre descriptif).
