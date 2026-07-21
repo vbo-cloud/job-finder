@@ -152,6 +152,69 @@ def _get_all_matches(session: Session) -> list[dict]:
     ]
 
 
+def _purge_stale_matches(session: Session) -> int:
+    """Delete matches (and their match_analyses) whose offer.rome_code no longer belongs to
+    the CV's own ROME codes.
+
+    Self-healing companion to the ROME-code hard filter in _get_all_matches: matches
+    inserted before this filter existed (or left over if a CV's rome_codes changed)
+    are removed here every run, so the pipeline recovers without a separate backfill
+    script.
+
+    match_analyses are deleted first — matches.id has no CASCADE from
+    fk_match_analyses_match_id_ref_matches (see routers/cv.py::_delete_cv for the same
+    ordering). Deliberately does not refund analysis_credits_remaining for any
+    manually-triggered analysis being purged — the analysis was genuinely delivered
+    against a match that existed at the time; treated the same as other accepted
+    trade-offs in this codebase (e.g. the blob-then-commit ordering in
+    routers/cv.py::_delete_cv).
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit).
+
+    Returns:
+        Number of matches deleted.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("matching_purge_started")
+    stale_predicate = """
+        NOT EXISTS (
+            SELECT 1
+            FROM user_profiles up
+            CROSS JOIN LATERAL jsonb_each(up.rome_codes) AS code_entry(key, value)
+            WHERE up.user_id = c.user_id
+              AND code_entry.key = o.rome_code
+              AND code_entry.value -> 'cv_ids' ? c.id::text
+        )
+    """
+    session.execute(
+        text(f"""
+            DELETE FROM match_analyses
+            WHERE match_id IN (
+                SELECT m.id
+                FROM matches m
+                JOIN cvs c ON c.id = m.cv_id
+                JOIN offers o ON o.id = m.offer_id
+                WHERE c.embedding IS NOT NULL AND {stale_predicate}
+            )
+        """)
+    )
+    result = session.execute(
+        text(f"""
+            DELETE FROM matches m
+            USING cvs c, offers o
+            WHERE m.cv_id = c.id
+              AND m.offer_id = o.id
+              AND c.embedding IS NOT NULL
+              AND {stale_predicate}
+            RETURNING m.id
+        """)
+    )
+    return len(result.fetchall())
+
+
 def _upsert_matches(matches: list[dict], session: Session) -> int:
     """Upsert matches into the matches table.
 
@@ -259,6 +322,7 @@ def main() -> None:
             all_matches: list[dict] = []
             new_matches = 0
             offers_available: int = 0
+            purged_matches = 0
             newly_enqueued: list[uuid.UUID] = []
             try:
                 with get_session() as session:
@@ -268,6 +332,9 @@ def main() -> None:
                     all_matches = _get_all_matches(session)
                     if all_matches:
                         new_matches = _upsert_matches(all_matches, session)
+                    # Must run before _enqueue_top_n_analyses: an obsolete match must
+                    # never be enqueued for GPT-4o-mini analysis right before deletion.
+                    purged_matches = _purge_stale_matches(session)
                     newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
                     # Advance CVs whose analysis is complete ("done") to "matched" so the
                     # frontend can distinguish "matching in progress" from "0 real results".
@@ -309,6 +376,7 @@ def main() -> None:
                 cvs_processed=cvs_processed,
                 new_matches=new_matches,
                 offers_available=offers_available,
+                purged_matches=purged_matches,
             )
 
     except RuntimeError:
