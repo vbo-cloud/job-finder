@@ -231,6 +231,7 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
     if not matches:
         return 0
 
+    logger.info("matching_upsert_started", match_count=len(matches))
     now = datetime.now(timezone.utc)
     values = [
         {
@@ -268,6 +269,7 @@ def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
     Returns:
         List of match IDs newly enqueued for analysis.
     """
+    logger.info("matching_enqueue_top_n_started", top_n=top_n)
     now = datetime.now(timezone.utc)
     ranked = session.execute(
         text("""
@@ -300,6 +302,25 @@ def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
         constraint="uq_match_analyses_match_id"
     ).returning(MatchAnalysis.match_id)
     return [row.match_id for row in session.execute(insert_stmt)]
+
+
+def _advance_analyzed_cvs_to_matched(session: Session) -> int:
+    """Advance CVs whose analysis is complete ("done") to "matched".
+
+    Lets the frontend distinguish "matching in progress" from "0 real results" —
+    a CV only reaches "matched" once at least one matching run has considered it.
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit).
+
+    Returns:
+        Number of CVs advanced.
+    """
+    logger.info("matching_advance_status_started")
+    result = session.execute(
+        update(CV).where(CV.status == "done").values(status="matched")
+    )
+    return result.rowcount
 
 
 def main() -> None:
@@ -336,11 +357,7 @@ def main() -> None:
                     # never be enqueued for GPT-4o-mini analysis right before deletion.
                     purged_matches = _purge_stale_matches(session)
                     newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
-                    # Advance CVs whose analysis is complete ("done") to "matched" so the
-                    # frontend can distinguish "matching in progress" from "0 real results".
-                    session.execute(
-                        update(CV).where(CV.status == "done").values(status="matched")
-                    )
+                    _advance_analyzed_cvs_to_matched(session)
                     session.commit()
             except SQLAlchemyError:
                 logger.error("matching_failed", exc_info=True)
