@@ -1,7 +1,14 @@
 """Tests for agents/offer_fetching/main.py.
 
 Covers: _parse_experience_min_years, _upsert_offers (values wiring),
-_embed_pending_offers, _dispatch_start_matching, _is_scheduled_local_hour.
+_embed_pending_offers, _dispatch_start_matching, the advisory-lock coordination
+helpers (_mark_full_refresh_pending, _mark_rome_codes_pending,
+_drain_pending_signal, _handle_fetch_request).
+
+_is_scheduled_local_hour and main()'s scheduling guard moved to
+agents/offer_fetch_scheduler (see test_offer_fetch_scheduler.py) when
+offer_fetching became purely event-driven — see
+docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
 
 The module is loaded via importlib under the unique name 'offer_fetching_main'
 to avoid sys.modules collision with the other agents' main.py. The
@@ -11,7 +18,6 @@ offer_fetching directory is added to sys.path first so the module's plain
 import importlib.util
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -33,7 +39,23 @@ _parse_experience_min_years = _mod._parse_experience_min_years
 _upsert_offers = _mod._upsert_offers
 _embed_pending_offers = _mod._embed_pending_offers
 _dispatch_start_matching = _mod._dispatch_start_matching
-_is_scheduled_local_hour = _mod._is_scheduled_local_hour
+_mark_full_refresh_pending = _mod._mark_full_refresh_pending
+_mark_rome_codes_pending = _mod._mark_rome_codes_pending
+_drain_pending_signal = _mod._drain_pending_signal
+_handle_fetch_request = _mod._handle_fetch_request
+
+
+def _patched_connection(mocker, conn: MagicMock) -> MagicMock:
+    """Wire a mocked AUTOCOMMIT connection the way _handle_fetch_request expects it —
+    same helper as tests/test_db.py's TestRunMigrations for the identical
+    get_engine().connect().execution_options(...) as conn pattern."""
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = False
+    conn.execution_options.return_value = conn
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value = conn
+    mocker.patch.object(_mod, "get_engine", return_value=mock_engine)
+    return conn
 
 
 def _session_cm(session: MagicMock):
@@ -224,71 +246,127 @@ class TestDispatchStartMatching:
 
 
 # ---------------------------------------------------------------------------
-# _is_scheduled_local_hour
+# _mark_full_refresh_pending / _mark_rome_codes_pending / _drain_pending_signal
+# ---------------------------------------------------------------------------
+# Real pg_try_advisory_lock/JSONB-equivalent SQL behavior is PostgreSQL-specific and not
+# simulable with a mocked session — same class of exclusion already documented for
+# _get_active_rome_codes (see tests/README.md, "Intentionally excluded"). These tests only
+# cover the Python-level call wiring (statements executed, commit called), not that Postgres
+# actually serializes/dedupes as intended — validated manually against a real instance instead.
+
+
+class TestMarkFullRefreshPending:
+    def test_updates_signal_row_and_commits(self, mocker):
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _mark_full_refresh_pending()
+
+        mock_session.execute.assert_called_once()
+        mock_session.commit.assert_called_once()
+
+
+class TestMarkRomeCodesPending:
+    def test_no_op_on_empty_list(self, mocker):
+        mock_get_session = mocker.patch.object(_mod, "get_session")
+
+        _mark_rome_codes_pending([])
+
+        mock_get_session.assert_not_called()
+
+    def test_inserts_rows_and_commits_on_non_empty_list(self, mocker):
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _mark_rome_codes_pending(["M1805", "M1502"])
+
+        mock_session.execute.assert_called_once()
+        mock_session.commit.assert_called_once()
+
+
+class TestDrainPendingSignal:
+    def test_returns_full_pending_true_and_codes_when_both_present(self, mocker):
+        mock_session = MagicMock()
+        update_result = MagicMock()
+        update_result.first.return_value = MagicMock()  # a row -- the guarded UPDATE matched
+        delete_result = [MagicMock(rome_code="M1502"), MagicMock(rome_code="M1703")]
+        mock_session.execute.side_effect = [update_result, delete_result]
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        full_pending, pending_codes = _drain_pending_signal()
+
+        assert full_pending is True
+        assert pending_codes == ["M1502", "M1703"]
+        mock_session.commit.assert_called_once()
+
+    def test_returns_false_and_empty_list_when_nothing_pending(self, mocker):
+        mock_session = MagicMock()
+        update_result = MagicMock()
+        update_result.first.return_value = None  # no row matched -- nothing was pending
+        mock_session.execute.side_effect = [update_result, []]
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        full_pending, pending_codes = _drain_pending_signal()
+
+        assert full_pending is False
+        assert pending_codes == []
+
+
+# ---------------------------------------------------------------------------
+# _handle_fetch_request
 # ---------------------------------------------------------------------------
 
 
-class TestIsScheduledLocalHour:
-    @pytest.mark.parametrize(
-        ("utc_hour", "expected"),
-        [
-            (10, True),   # CEST (UTC+2): 10:00 UTC -> 12:00 Europe/Paris
-            (18, True),   # CEST (UTC+2): 18:00 UTC -> 20:00 Europe/Paris
-            (11, False),  # CEST: would be 13:00 local -- the CET-only firing
-            (19, False),  # CEST: would be 21:00 local -- the CET-only firing
-        ],
-    )
-    def test_matches_cest_offset_in_july(self, utc_hour: int, expected: bool):
-        # 2026-07-16 falls under CEST (Europe/Paris observes DST from late March to
-        # late October) -- UTC+2.
-        now_utc = datetime(2026, 7, 16, utc_hour, 0, tzinfo=timezone.utc)
-        assert _is_scheduled_local_hour(now_utc) is expected
+class TestHandleFetchRequest:
+    def test_defers_full_refresh_when_lock_busy(self, mocker):
+        conn = _patched_connection(mocker, MagicMock())
+        conn.execute.return_value.scalar.return_value = False  # lock not acquired
+        mock_mark_full = mocker.patch.object(_mod, "_mark_full_refresh_pending")
+        mock_mark_codes = mocker.patch.object(_mod, "_mark_rome_codes_pending")
+        mock_run_cycle = mocker.patch.object(_mod, "_run_fetch_cycle")
 
-    @pytest.mark.parametrize(
-        ("utc_hour", "expected"),
-        [
-            (11, True),   # CET (UTC+1): 11:00 UTC -> 12:00 Europe/Paris
-            (19, True),   # CET (UTC+1): 19:00 UTC -> 20:00 Europe/Paris
-            (10, False),  # CET: would be 11:00 local -- the CEST-only firing
-            (18, False),  # CET: would be 19:00 local -- the CEST-only firing
-        ],
-    )
-    def test_matches_cet_offset_in_january(self, utc_hour: int, expected: bool):
-        # 2026-01-16 falls outside the DST window -- UTC+1.
-        now_utc = datetime(2026, 1, 16, utc_hour, 0, tzinfo=timezone.utc)
-        assert _is_scheduled_local_hour(now_utc) is expected
+        _handle_fetch_request({})
 
-    def test_rejects_an_hour_outside_any_terraform_trigger(self):
-        now_utc = datetime(2026, 7, 16, 3, 0, tzinfo=timezone.utc)
-        assert _is_scheduled_local_hour(now_utc) is False
+        mock_mark_full.assert_called_once()
+        mock_mark_codes.assert_not_called()
+        mock_run_cycle.assert_not_called()
 
+    def test_defers_targeted_codes_when_lock_busy(self, mocker):
+        conn = _patched_connection(mocker, MagicMock())
+        conn.execute.return_value.scalar.return_value = False  # lock not acquired
+        mock_mark_full = mocker.patch.object(_mod, "_mark_full_refresh_pending")
+        mock_mark_codes = mocker.patch.object(_mod, "_mark_rome_codes_pending")
+        mock_run_cycle = mocker.patch.object(_mod, "_run_fetch_cycle")
 
-# ---------------------------------------------------------------------------
-# main() — scheduling guard
-# ---------------------------------------------------------------------------
+        _handle_fetch_request({"rome_codes": ["M1805"]})
 
+        mock_mark_codes.assert_called_once_with(["M1805"])
+        mock_mark_full.assert_not_called()
+        mock_run_cycle.assert_not_called()
 
-class TestMainSchedulingGuard:
-    def test_skips_entirely_outside_scheduled_local_hour(self, mocker):
-        mocker.patch.object(_mod, "configure_telemetry")
-        mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=False)
-        mock_run_migrations = mocker.patch.object(_mod, "run_migrations")
-        mock_get_rome_codes = mocker.patch.object(_mod, "_get_active_rome_codes")
+    def test_runs_cycle_and_drains_until_empty_when_lock_acquired(self, mocker):
+        conn = _patched_connection(mocker, MagicMock())
+        conn.execute.return_value.scalar.return_value = True  # lock acquired
+        mock_run_cycle = mocker.patch.object(_mod, "_run_fetch_cycle")
+        mock_drain = mocker.patch.object(
+            _mod, "_drain_pending_signal", side_effect=[(True, []), (False, [])]
+        )
 
-        _mod.main()
+        _handle_fetch_request({"rome_codes": ["M1805"]})
 
-        mock_run_migrations.assert_not_called()
-        mock_get_rome_codes.assert_not_called()
+        assert mock_run_cycle.call_args_list == [
+            mocker.call(["M1805"]),
+            mocker.call(None),
+        ]
+        assert mock_drain.call_count == 2
 
-    def test_proceeds_when_within_scheduled_local_hour(self, mocker):
-        mocker.patch.object(_mod, "configure_telemetry")
-        mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=True)
-        mock_run_migrations = mocker.patch.object(_mod, "run_migrations")
-        mocker.patch.object(_mod, "_get_active_rome_codes", return_value=[])
-        mocker.patch.object(_mod, "get_access_token", return_value="token")
-        mock_embed = mocker.patch.object(_mod, "_embed_pending_offers", return_value=0)
+    def test_releases_lock_even_when_run_cycle_raises(self, mocker):
+        conn = _patched_connection(mocker, MagicMock())
+        conn.execute.return_value.scalar.return_value = True  # lock acquired
+        mocker.patch.object(_mod, "_run_fetch_cycle", side_effect=RuntimeError("boom"))
 
-        _mod.main()
+        with pytest.raises(RuntimeError):
+            _handle_fetch_request({})
 
-        mock_run_migrations.assert_called_once()
-        mock_embed.assert_called_once()
+        unlock_calls = [c for c in conn.execute.call_args_list if "pg_advisory_unlock" in str(c.args[0])]
+        assert len(unlock_calls) == 1
