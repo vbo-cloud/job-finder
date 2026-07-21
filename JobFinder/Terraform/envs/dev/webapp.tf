@@ -26,14 +26,16 @@ module "webapp" {
   image               = "${module.container_registry.login_server}/agents/webapp:latest"
   cpu                 = 0.5
   memory              = "1Gi"
-  min_replicas        = 0
-  max_replicas        = 1
-  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server     = module.container_registry.login_server
-  registry_identity   = data.azurerm_user_assigned_identity.caj.id
-  environment         = var.env
-  project             = var.project
-  owner               = var.owner
+  # min_replicas = 1 trades scale-to-zero for no cold start; accepted idle-rate
+  # cost is ~$0.000008/vCPU-s + $0.000001/GiB-s (see docs/JOURNAL.md, PR #210).
+  min_replicas      = 1
+  max_replicas      = 1
+  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server   = module.container_registry.login_server
+  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  environment       = var.env
+  project           = var.project
+  owner             = var.owner
 
   secrets = [
     {
