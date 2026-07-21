@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
+from alembic.util.exc import CommandError
 from azure.servicebus.exceptions import ServiceBusError
 from sqlalchemy import case, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import Insert, insert as pg_insert
@@ -45,7 +46,6 @@ from shared.geo import parse_department_from_location, parse_region_from_locatio
 from shared.models import Offer
 from shared.telemetry import configure_telemetry
 
-FALLBACK_ROME_CODES = ["M1805", "M1802", "M1806", "M1810", "M1811"]
 START_MATCHING_QUEUE = "start-matching"
 PARIS_TZ = ZoneInfo("Europe/Paris")
 # Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
@@ -93,10 +93,13 @@ def _parse_experience_min_years(libelle: str | None) -> int | None:
 def _get_active_rome_codes() -> list[str]:
     """Query distinct ROME codes across all user profiles.
 
-    Falls back to FALLBACK_ROME_CODES if the user_profiles table is empty.
+    Returns an empty list if no profile has an active ROME code — a normal state
+    (e.g. before any real profile exists yet), not an error, and not something to
+    paper over with a hardcoded default: any fixed fallback set would bias the
+    offer pool toward whatever jobs it lists.
 
     Returns:
-        List of ROME code strings to fetch.
+        List of ROME code strings to fetch. Empty if no profile has one.
 
     Raises:
         SQLAlchemyError: If the database query fails.
@@ -118,8 +121,8 @@ def _get_active_rome_codes() -> list[str]:
         logger.error("rome_codes_query_failed", exc_info=True)
         raise
     if not codes:
-        logger.info("rome_codes_using_fallback", codes=FALLBACK_ROME_CODES)
-        return FALLBACK_ROME_CODES
+        logger.info("rome_codes_none_active")
+        return codes
     logger.info("rome_codes_loaded", count=len(codes), codes=codes)
     return codes
 
@@ -237,6 +240,7 @@ def _upsert_offers(raw_offers: list[dict], rome_code: str) -> int:
     now = datetime.now(timezone.utc)
     values = [_build_offer_values(raw, rome_code, now) for raw in raw_offers]
 
+    logger.info("offers_upsert_started", rome_code=rome_code, count=len(raw_offers))
     try:
         with get_session() as session:
             result = session.execute(_build_upsert_statement(values))
@@ -336,6 +340,27 @@ def _dispatch_start_matching(run_date: str, rome_codes: list[str], new_offers_co
         logger.error("offer_fetching_start_matching_failed", run_date=run_date, exc_info=True)
 
 
+def _fetch_and_upsert_new_offers(rome_codes: list[str]) -> int:
+    """Fetch offers from France Travail for each active ROME code and upsert them.
+
+    Args:
+        rome_codes: ROME codes to fetch, one France Travail API call per code.
+
+    Returns:
+        Total number of new offers upserted across all codes.
+    """
+    token = get_access_token()
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=OFFER_MAX_AGE_DAYS)
+    min_date = cutoff.strftime("%Y-%m-%d")
+
+    total_new = 0
+    for rome_code in rome_codes:
+        raw_offers = fetch_offers(token, rome_code, min_date=min_date)
+        total_new += _upsert_offers(raw_offers, rome_code)
+    return total_new
+
+
 def _is_scheduled_local_hour(now_utc: datetime) -> bool:
     """Check whether now_utc falls on one of this job's intended Europe/Paris run hours.
 
@@ -371,20 +396,18 @@ def main() -> None:
 
     try:
         run_migrations()
-    except Exception:  # intentional: any migration error must halt the agent
+    except (SQLAlchemyError, CommandError):  # matches run_migrations()'s documented Raises
         logger.error("migrations_failed", exc_info=True)
         raise
 
     rome_codes = _get_active_rome_codes()
-    token = get_access_token()
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=OFFER_MAX_AGE_DAYS)
-    min_date = cutoff.strftime("%Y-%m-%d")
-
-    total_new = 0
-    for rome_code in rome_codes:
-        raw_offers = fetch_offers(token, rome_code, min_date=min_date)
-        total_new += _upsert_offers(raw_offers, rome_code)
+    # Empty rome_codes means no profile has one yet (see _get_active_rome_codes) —
+    # skip the OAuth round-trip and the France Travail fetch entirely rather than
+    # fetching nothing with a freshly-obtained token. _embed_pending_offers below
+    # still runs unconditionally: offers already in DB from a prior run must keep
+    # getting embedded regardless of whether this run found anything new to fetch.
+    total_new = _fetch_and_upsert_new_offers(rome_codes) if rome_codes else 0
 
     embedded_count = _embed_pending_offers()
 
