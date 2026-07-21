@@ -28,9 +28,10 @@ module "container_app_environment" {
 # ==============================================================================
 # Agent 1 — Matching (queue: start-matching)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
-# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 Europe/Paris local time — see module below)
+# Agent 3 — Offer Fetching (queue: offer-fetch-request — event-driven, see module below)
 # Agent 4 — CV Analysis (queue: cv-analysis)
 # Agent 5 — Match Analysis (queue: match-analysis)
+# Agent 6 — Offer Fetch Scheduler (timer: 12:00 and 20:00 Europe/Paris local time — see module below)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -182,17 +183,20 @@ module "job_cleanup" {
   ]
 }
 
-# Agent 3 — Offer Fetching (timer: meant to run at 12:00 and 20:00 Europe/Paris local time)
+# Agent 3 — Offer Fetching (queue: offer-fetch-request)
 # Replaces offerFetch.yml GitHub Actions workflow.
 # Embeds pending offers directly (shared/embedder.py) after upsert — no distillation
 # step, hence the openai-api-key secret and AZURE_OPENAI_* env vars below (see
 # docs/prompts/prompt-remove-offer-distillation.md).
-# Azure Container Apps' schedule trigger only supports UTC cron expressions, with no
-# timezone/DST support — so this fires at every UTC hour that could map to 12:00/20:00
-# Europe/Paris under either CET (UTC+1: 11,19 UTC) or CEST (UTC+2: 10,18 UTC). The agent's
-# own _is_scheduled_local_hour() (agents/offer_fetching/main.py) no-ops the two firings that
-# don't match the current DST state, so the job runs exactly twice a day, always in sync with
-# French local time, with no manual Terraform change needed at each DST transition.
+# Event-driven since docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md:
+# this agent no longer knows the time of day at all. The DST-safe 12:00/20:00 Europe/Paris
+# full-refresh trigger (Azure Container Apps' schedule trigger only supports UTC cron
+# expressions with no timezone/DST awareness) now lives entirely in the separate
+# job_offer_fetch_scheduler below, which just publishes a message on this queue — see that
+# module's comment for the DST mechanics. A message with "rome_codes" is a targeted fetch
+# (cv_analysis, a CV's newly-merged code); one without is a full refresh (the scheduler, or a
+# manual "Run now" — which, being purely event-driven now, always runs immediately instead of
+# risking a silent no-op outside the old fixed window).
 module "job_offer_fetching" {
   source = "../../modules/container_app_job"
 
@@ -200,8 +204,9 @@ module "job_offer_fetching" {
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   environment_id             = module.container_app_environment.id
-  trigger_type               = "timer"
-  cron_expression            = "0 10,11,18,19 * * *"
+  trigger_type               = "queue"
+  queue_name                 = "offer-fetch-request"
+  servicebus_namespace       = module.servicebus.name
   replica_timeout_in_seconds = 3600
   image                      = "${module.container_registry.login_server}/agents/offer-fetching:latest"
   identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
@@ -231,6 +236,10 @@ module "job_offer_fetching" {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
   ]
   env_vars = [
     {
@@ -257,8 +266,54 @@ module "job_offer_fetching" {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
-    # Used by DefaultAzureCredential (bus.py) to select the right UAMI.
-    # No KEDA auth here — this job is timer-triggered, not queue-triggered.
+    # Used by DefaultAzureCredential (bus.py) to select the right UAMI,
+    # and by KEDA (uami_client_id) to authenticate the Service Bus scaler.
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# Agent 6 — Offer Fetch Scheduler (timer: 12:00 and 20:00 Europe/Paris local time)
+# Relais planifié pour offer_fetching, désormais purement événementiel (voir job_offer_fetching
+# ci-dessus). Azure Container Apps' schedule trigger only supports UTC cron expressions with no
+# timezone/DST awareness — this fires at every UTC hour that could map to 12:00/20:00 Europe/Paris
+# under either CET (11,19 UTC) or CEST (10,18 UTC); the agent's own _is_scheduled_local_hour()
+# (agents/offer_fetch_scheduler/main.py) no-ops the two firings that don't match the current DST
+# state. See docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
+module "job_offer_fetch_scheduler" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-fetch-sched"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 10,11,18,19 * * *"
+  replica_timeout_in_seconds = 60
+  image                      = "${module.container_registry.login_server}/agents/offer-fetch-scheduler:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  secrets = [
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
