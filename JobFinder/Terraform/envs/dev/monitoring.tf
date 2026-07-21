@@ -184,3 +184,46 @@ resource "azurerm_monitor_metric_alert" "servicebus_active_messages_stale" {
     owner       = var.owner
   }
 }
+
+# ==============================================================================
+# Cost Alerting
+# ==============================================================================
+# Catches cost drift on rg_app (Container Apps, ACR, Service Bus, etc.) without
+# manual monitoring -- e.g. min_replicas = 1 on the frontend/webapp (PR #210)
+# turned scale-to-zero apps into a small standing charge; this budget flags if
+# that estimate turns out wrong. Reuses the same action group as the metric
+# alerts above rather than duplicating the notification email.
+
+resource "azurerm_consumption_budget_resource_group" "app" {
+  name              = "budget-${var.project}-${var.env}-${var.location_short}-app"
+  resource_group_id = data.azurerm_resource_group.rg_app.id
+
+  amount     = var.budget_amount
+  time_grain = "Monthly"
+
+  time_period {
+    # Consumption budgets require the first day of a month; not force-new, so
+    # this only needs to be a valid anchor in the past, not kept in sync.
+    start_date = "2026-07-01T00:00:00Z"
+  }
+
+  # Two thresholds: 80% gives an early warning while there's still time to act
+  # within the month, 100% confirms the budget was actually exceeded. A single
+  # 100%-Actual threshold alone would only fire once the month is already
+  # over budget, defeating the "catch drift early" purpose above.
+  notification {
+    enabled        = true
+    operator       = "GreaterThanOrEqualTo"
+    threshold      = 80
+    threshold_type = "Actual"
+    contact_groups = [azurerm_monitor_action_group.owner.id]
+  }
+
+  notification {
+    enabled        = true
+    operator       = "GreaterThanOrEqualTo"
+    threshold      = 100
+    threshold_type = "Actual"
+    contact_groups = [azurerm_monitor_action_group.owner.id]
+  }
+}

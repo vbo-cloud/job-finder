@@ -15,8 +15,10 @@ module "frontend" {
   target_port         = 3000
   cpu                 = 0.5
   memory              = "1Gi"
-  min_replicas        = 0
-  max_replicas        = 1
+  # min_replicas = 1 trades scale-to-zero for no cold start; accepted idle-rate
+  # cost is ~$0.000008/vCPU-s + $0.000001/GiB-s (see docs/JOURNAL.md, PR #210).
+  min_replicas = 1
+  max_replicas = 1
   # Reuses the Container App Jobs' shared identity purely for ACR pull (its only
   # permission that's relevant here) rather than provisioning a dedicated identity.
   # The frontend never calls Azure services directly, so it implicitly inherits

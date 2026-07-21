@@ -6259,3 +6259,87 @@ diagnostique (PR #185) sont modifiées, aucun autre contenu de ces entrées touc
 final sur les termes identifiants (nom du domaine antérieur, certification, nom
 d'entreprise) ne renvoie plus aucune occurrence hors du mot générique « reconversion »
 seul.
+
+## PR #210 — chore(terraform): min_replicas = 1 (frontend/webapp) + budget alert sur rg_app
+
+**Date :** 2026-07-21
+**Branche :** `feature/min-replicas-frontend-backend` → `dev`
+
+### Contexte
+
+Le frontend Next.js (`envs/dev/frontend.tf`) et le backend FastAPI (`envs/dev/webapp.tf`)
+tournaient avec `min_replicas = 0` : scale-to-zero, donc un cold start (démarrage complet
+du conteneur) sur la première requête après une période d'inactivité. L'utilisateur a
+demandé une réplique minimum sur les deux pour éliminer ce cold start, en échange d'un
+coût récurrent à connaître avant de merger.
+
+### Ce qui a été fait
+
+`min_replicas` passé de `0` à `1` dans `module.frontend` et `module.webapp`
+(`max_replicas` inchangé à `1`). Aucun autre paramètre touché — les deux apps restent à
+0.5 vCPU / 1Gi. Suite à la remarque non-bloquante de `reviewer-infra` (absence de
+justification locale pour un écart volontaire par rapport à la valeur par défaut du
+module, documentée comme scale-to-zero dans `variables.tf`), un commentaire WHY de deux
+lignes a été ajouté au-dessus de `min_replicas = 1` dans les deux fichiers, renvoyant vers
+cette entrée de journal pour le détail du calcul.
+
+### Estimation de coût
+
+Tarification Consumption plan Azure Container Apps : $0.000024/vCPU-s et $0.000003/GiB-s
+en actif, $0.000008/vCPU-s et $0.000001/GiB-s en idle (~1/3 du tarif actif) ; franchise
+gratuite mensuelle de 180 000 vCPU-s / 360 000 GiB-s / 2M requêtes, **par abonnement**
+(déjà partiellement consommée par les Container App Jobs existants).
+
+Avec `min_replicas = 1`, une réplique quasi inactive (peu de trafic, un projet portfolio)
+est facturée au tarif idle plutôt qu'au tarif actif — écart d'un facteur ~3 par rapport à
+une estimation qui ignorerait ce détail. Pour les deux apps (0.5 vCPU / 1Gi chacune,
+730h/mois, quasi 100% idle) :
+- vCPU-s idle : 2 × 0,5 × 2 628 000 = 2 628 000 vCPU-s/mois → ≈ 21 $
+- GiB-s idle : 2 × 1 × 2 628 000 = 5 256 000 GiB-s/mois → ≈ 5,3 $
+
+Soit **≈ 24 à 26 $/mois (≈ 22-24 €/mois) pour les deux apps combinées**, franchise
+gratuite non déduite par prudence (elle est probablement déjà consommée par les jobs
+existants). Estimation basse : trafic réel occasionnel facturé au tarif actif sur de
+courtes fenêtres, négligeable à ce volume de requêtes. Coût uniquement effectif après
+merge vers `dev` (déclenche l'apply CI).
+
+**Vérification :** relecture du diff sur `envs/dev/frontend.tf` et `envs/dev/webapp.tf` —
+seul `min_replicas` change (`0` → `1`) dans `module.frontend` et `module.webapp`,
+`max_replicas` reste à `1`, aucun autre argument (cpu, memory, secrets, env_vars, identity)
+touché. Aucun commentaire préexistant des deux fichiers ne référençait le scale-to-zero ou
+`min_replicas = 0` : rien n'était devenu obsolète suite au changement. `terraform fmt -check`
+et `terraform validate` passent après ajout du commentaire WHY et réalignement des blocs.
+
+### Budget alert sur rg_app (ajout à la même PR)
+
+**Contexte :** suite à l'estimation ci-dessus, l'utilisateur a demandé une alerte de
+budget Azure sur `rg-jf-dev-frc-app` (le resource group qui porte le frontend et le
+webapp) avec un seuil à ~40 $/mois, pour détecter une dérive de coût sans surveillance
+manuelle.
+
+**Ce qui a été fait :** ajout de `azurerm_consumption_budget_resource_group.app`
+(`envs/dev/monitoring.tf`, nouvelle section « Cost Alerting ») ciblant
+`data.azurerm_resource_group.rg_app.id`, `time_grain = "Monthly"`, deux notifications
+(`operator = "GreaterThanOrEqualTo"`, `threshold_type = "Actual"`) à 80% et 100% du
+montant, routées vers `azurerm_monitor_action_group.owner` déjà utilisé par les autres
+alertes (pas de duplication d'email). Le montant est exposé via une nouvelle variable
+`budget_amount` (`envs/dev/variables.tf`, défaut `40`, validation `> 0`) plutôt que
+codé en dur, pour rester ajustable par environnement. `time_period.start_date` est fixé
+au premier jour du mois courant (`2026-07-01T00:00:00Z`) ; cet attribut n'est pas
+force-new, donc il n'a pas besoin d'être maintenu à jour à chaque mois.
+
+Suite à la remarque non-bloquante de `reviewer-infra` (un seuil unique à 100% Actual ne
+déclenche qu'une fois le budget déjà entièrement consommé, ce qui contredit l'objectif de
+détection précoce affiché en commentaire de section), un second seuil à 80% Actual a été
+ajouté comme alerte précoce, en plus du seuil à 100% qui confirme le dépassement réel.
+
+**Point d'attention signalé à l'utilisateur :** Azure facture dans la devise de
+l'abonnement (souvent EUR pour un abonnement basé en France), pas nécessairement en USD.
+Le montant `40` est un nombre brut dans cette devise-là, sans conversion — un commentaire
+WHY dans `variables.tf` documente cette nuance pour éviter une confusion future entre
+l'estimation en $ de la section précédente et le seuil réel appliqué en €.
+
+**Vérification :** `terraform fmt -check` et `terraform validate` passent. Ce type de
+ressource (`azurerm_consumption_budget_resource_group`) ne figure pas dans la liste des
+ressources critiques du skill `conventions-terraform` (pas de tags supportés par le
+provider sur ce type, donc pas de bloc `tags` ni de `prevent_destroy`/`protect` requis).
