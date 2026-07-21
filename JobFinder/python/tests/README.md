@@ -20,9 +20,10 @@ pytest tests/test_cv_analysis.py -v
 
 | Test file | Module under test | Functions covered |
 |---|---|---|
-| `test_cv_analysis.py` | `agents/cv_analysis/main.py` | `_extract_rome_codes`, `_get_cv_text`, `_set_cv_status`, `_merge_rome_codes`, `_get_profile_intent`, `_analyze_cv_quality`, `_upsert_cv_analysis`, `_run_quality_analysis`, `main()` retry_quality_only branch |
+| `test_cv_analysis.py` | `agents/cv_analysis/main.py` | `_extract_rome_codes`, `_get_cv_text`, `_set_cv_status`, `_merge_rome_codes` (incl. its `new_codes` return value), `_get_profile_intent`, `_analyze_cv_quality`, `_upsert_cv_analysis`, `_run_quality_analysis`, `main()` retry_quality_only branch, `main()` offer-fetch-request dispatch branch |
 | `test_ft_client.py` | `agents/offer_fetching/ft_client.py` | `get_access_token`, `fetch_offers` |
-| `test_offer_fetching.py` | `agents/offer_fetching/main.py` | `_parse_experience_min_years`, `_upsert_offers` (values wiring) |
+| `test_offer_fetching.py` | `agents/offer_fetching/main.py` | `_parse_experience_min_years`, `_upsert_offers` (values wiring), `_mark_full_refresh_pending`, `_mark_rome_codes_pending`, `_drain_pending_signal`, `_handle_fetch_request` (call wiring, not real Postgres locking — see Intentionally excluded) |
+| `test_offer_fetch_scheduler.py` | `agents/offer_fetch_scheduler/main.py` | `_is_scheduled_local_hour`, `main()` |
 | `test_match_analysis.py` | `agents/match_analysis/main.py` | `_get_match_context`, `_analyze_match`, `_update_match_analysis` |
 | `test_matching.py` | `agents/matching/main.py` | `_upsert_matches`, `_purge_stale_matches` (call order + returned count only) |
 | `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}`, `POST /matches/{cv_id}/offers/{offer_id}/analyze` |
@@ -46,3 +47,4 @@ pytest tests/test_cv_analysis.py -v
 - `GET /cv/{id}/thumbnail` and `GET /cv/{id}/pdf` happy paths: require mocking the blob download client. The 404 paths are covered.
 - `DELETE /cv/{id}` happy path: requires mocking blob delete + multi-step DB session. The 404 path is covered.
 - `_get_active_rome_codes` (`agents/offer_fetching/main.py`): uses PostgreSQL-specific SQL (`jsonb_object_keys`) — incompatible with SQLite, same class of exclusion as the `agents/matching/main.py` entries above. `_get_active_rome_codes` itself is always mocked in `test_offer_fetching.py`.
+- `_handle_fetch_request`'s advisory-lock coordination (`agents/offer_fetching/main.py`): `pg_try_advisory_lock`/`pg_advisory_lock` is real PostgreSQL session-level locking behavior — no SQLite equivalent, and a mocked connection can't reproduce actual cross-process serialization. `test_offer_fetching.py`'s `TestHandleFetchRequest`/`TestMarkFullRefreshPending`/`TestMarkRomeCodesPending`/`TestDrainPendingSignal` only cover the Python-level call wiring (statements executed, commit called, control flow on acquired/busy) — not that Postgres actually serializes concurrent fetch cycles as intended. Validated manually against a throwaway Postgres 16 instance (see prompt-offer-fetching-event-driven-and-new-code-fetch.md and the implementing PR).

@@ -6649,3 +6649,176 @@ c'est précisément ce qui a masqué le bug en premier lieu.
 Décisions techniques) : ces tests ne remplacent pas la vérification décisive contre une
 vraie base PostgreSQL (requête `user_profiles.rome_codes` après un second upload
 partageant un code ROME).
+
+## PR #215 — feat(offer-fetching): passage en purement événementiel + fetch immédiat sur nouveau code ROME
+
+**Date :** 2026-07-22
+**Branche :** `feature/offer-fetching-event-driven-new-code-fetch` → `dev`
+
+### Contexte
+
+Suite du prompt local `prompt-offer-fetching-event-driven-and-new-code-fetch.md` (non
+versionné dans `docs/prompts/`). `offer_fetching` ne tournait jusqu'ici que sur un timer fixe
+12:00/20:00 Europe/Paris : un profil qui gagnait un nouveau code ROME entre deux exécutions
+planifiées attendait jusqu'à ~16h avant qu'une offre pertinente ne soit fetchée. Un "Run now"
+manuel en dehors de la fenêtre horaire exacte était par ailleurs un no-op silencieux, puisque
+l'agent lui-même vérifiait l'heure locale avant de faire quoi que ce soit.
+
+### Ce qui a été fait
+
+`offer_fetching` devient un Container App Job purement événementiel (trigger `queue`, plus
+`timer`). Un nouvel agent minimal `offer_fetch_scheduler` reprend l'ancien cron UTC DST-safe
+12:00/20:00 Europe/Paris (`_is_scheduled_local_hour`, déplacé tel quel depuis
+`offer_fetching`) et se contente de publier un message de refresh complet — il ne parle jamais
+à France Travail, OpenAI ni à la base. `cv_analysis` publie désormais en plus un message ciblé
+(avec des `rome_codes` explicites) chaque fois qu'un CV apporte au moins un code ROME
+réellement nouveau au profil (`_merge_rome_codes` retourne maintenant `list[str]` au lieu de
+`None` — les codes qui n'étaient pas déjà des clés du profil avant l'appel).
+
+Les deux types de déclenchement partagent une seule queue (`offer-fetch-request`, nouvelle
+dans `servicebus.tf`) et un seul consommateur (`_handle_fetch_request`, nouveau dans
+`offer_fetching/main.py`). L'ancien corps de `main()` devient `_run_fetch_cycle(requested_codes:
+list[str] | None)` : `None` déclenche un passage complet (recalcul de tous les codes ROME
+actifs via `_get_active_rome_codes`), une liste déclenche un passage ciblé sur exactement ces
+codes.
+
+Terraform (`container_apps.tf`) : `job_offer_fetching` passe de `trigger_type = "timer"` à
+`"queue"` (ajout `queue_name`, `servicebus_namespace`, secret de connexion Service Bus ;
+suppression de `cron_expression`) ; nouveau module `job_offer_fetch_scheduler`, déclenché par
+timer, avec un jeu d'env/secrets minimal (il n'appelle jamais que `send_message`).
+`buildAgents.yml` : nouvelle étape build/push pour l'image `agents/offer-fetch-scheduler`,
+ligne de résumé, étape `az containerapp job update` pour `job-jf-dev-frc-fetch-sched`.
+
+Nouvel agent `agents/offer_fetch_scheduler/main.py` + `Dockerfile`, sur le modèle du
+`Dockerfile` minimal d'`agents/cleanup` (partage le `requirements.txt` racine, pas de fichier
+dédié).
+
+Migration `030_add_offer_fetch_coordination.py` : deux nouvelles tables de coordination,
+`offer_fetch_signal` (ligne unique `id=1`, flag `full_refresh_pending`) et
+`offer_fetch_pending_codes` (une ligne par code ROME en attente), plus les classes ORM
+`OfferFetchSignal`/`OfferFetchPendingCode` dans `shared/models.py` (import de `Boolean`,
+`CheckConstraint`, `SmallInteger` ajoutés à l'en-tête).
+
+### Décisions techniques
+
+**Lock advisory Postgres.** `_handle_fetch_request` sérialise les cycles de fetch via
+`pg_try_advisory_lock` (clé `OFFER_FETCH_LOCK_ID = 592034871`, distincte de
+`shared.db.ALEMBIC_MIGRATION_LOCK_ID`). Ce lock n'est **pas redondant** avec
+`max_executions = 1` (valeur par défaut du module `container_app_job`, qui sérialise
+effectivement les runs en dev aujourd'hui) : la description de cette variable Terraform dit
+explicitement "Increase for prod under load" — dès que cette valeur est relevée en prod, des
+instances peuvent tourner en parallèle, et deux upserts complets touchant les mêmes lignes
+`ft_id` dans un ordre de verrou différent peuvent deadlocker. Le lock doit être conservé même
+si "un seul run a lieu aujourd'hui" ne semble pas le justifier dans l'état actuel de la config
+dev.
+
+**Pourquoi deux tables plutôt qu'une.** `offer_fetch_signal` porte un simple flag booléen (un
+refresh complet est en attente ou non) ; `offer_fetch_pending_codes` porte une liste de valeurs
+(quels codes ROME précis sont en attente). Un cycle qui ne peut pas acquérir le lock enregistre
+ce dont il avait besoin (`_mark_full_refresh_pending` / `_mark_rome_codes_pending`) au lieu de
+laisser tomber silencieusement le déclenchement ; le cycle qui détient le lock draine et
+rejoue exactement ce qui a été accumulé (`_drain_pending_signal`, en boucle jusqu'à ce qu'un
+passage revienne vide) avant de relâcher le lock — aucune perte sous contention.
+
+**Clés primaires — deux versions.** Une première version donnait aux deux tables une clé
+primaire non-UUID (`offer_fetch_signal` sur `id=1` fixe, `offer_fetch_pending_codes` sur le
+code ROME lui-même). `reviewer-infra` a rejeté cette version : l'exception cache/stats de
+`conventions-sql` est explicitement bornée à une table "recalculée et remplacée en bloc, pas
+d'`ON CONFLICT`" — exactement l'inverse d'`offer_fetch_pending_codes` (dédupliquée
+incrémentalement via `ON CONFLICT DO NOTHING`), et `offer_fetch_signal` est mise à jour en
+place, jamais remplacée. Le reviewer a aussi montré que le codebase a déjà le pattern qu'il faut
+pour ce cas précis : `Offer.id` (UUID) + `uq_offers_ft_id` (contrainte d'unicité séparée sur la
+clé naturelle) — `on_conflict_do_update(constraint="uq_offers_ft_id")` cible déjà cette
+contrainte, pas la PK. Les deux tables suivent maintenant ce même pattern : `id` UUID v4
+standard sur les deux, `offer_fetch_pending_codes.rome_code` unique via
+`uq_offer_fetch_pending_codes_rome_code` (la déduplication `ON CONFLICT DO NOTHING` cible cette
+contrainte, comportement inchangé), `offer_fetch_signal` garde sa garantie de ligne unique via
+une colonne séparée `singleton_key` (`UniqueConstraint` + `CHECK singleton_key = 1`) plutôt que
+sur la PK elle-même. `agents/offer_fetching/main.py` mis à jour en conséquence
+(`OfferFetchSignal.id == 1` → `OfferFetchSignal.singleton_key == 1` dans
+`_mark_full_refresh_pending`/`_drain_pending_signal`). Les deux tables ont aussi gagné une
+colonne `created_at` NOT NULL (`reviewer-infra` : règle inconditionnelle de `conventions-sql`,
+indépendante de l'exception de clé primaire — `term_stats`, l'exemple même de cette exception,
+garde un `created_at` malgré sa PK naturelle).
+
+**Logs d'entrée manquants sur les nouvelles fonctions DB.** `reviewer-backend` a bloqué une
+première passe : `_mark_full_refresh_pending`, `_mark_rome_codes_pending`, `_drain_pending_signal`
+et la section lock/unlock de `_handle_fetch_request` appelaient `get_session()`/
+`get_engine().connect()` sans logger leur entrée ni encadrer l'appel d'un `try/except
+SQLAlchemyError` — contrairement à toutes les autres fonctions DB de ce même fichier
+(`_upsert_offers`, `_get_active_rome_codes`, `_embed_pending_offers`) et au précédent quasi
+identique de `shared/db.py::run_migrations` (même connexion AUTOCOMMIT, même paire lock/unlock).
+Corrigé en reprenant ce même patron sur les quatre points.
+
+**Compromis best-effort assumé.** Le dispatch de `cv_analysis` vers `offer-fetch-request` est
+volontairement "best-effort" (loggé sur `ServiceBusError`, jamais relancé), contrairement au
+dispatch `start-matching` juste au-dessus dans le même `main()` qui, lui, relance. Raison : sur
+une redelivery du message `cv-analysis`, `_merge_rome_codes` retrouverait ces codes déjà
+fusionnés par la première tentative réussie et retournerait `new_rome_codes=[]` — relancer ici
+déclencherait un retry qui ne pourrait jamais renvoyer ce message précis. Le prochain refresh
+planifié d'`offer_fetching` couvre de toute façon ces codes, indépendamment de l'issue de cet
+envoi.
+
+### Tests
+
+`test_offer_fetching.py` perd `TestIsScheduledLocalHour`/`TestMainSchedulingGuard` (déplacées
+telles quelles vers le nouveau `test_offer_fetch_scheduler.py`, qui couvre aussi `main()` du
+nouvel agent) et gagne `TestMarkFullRefreshPending`, `TestMarkRomeCodesPending`,
+`TestDrainPendingSignal`, `TestHandleFetchRequest`. `test_cv_analysis.py::TestMergeRomeCodes`
+mis à jour pour asserter la nouvelle valeur de retour, plus un nouveau
+`test_returns_new_codes_only` ; nouvelle classe `TestMainOfferFetchDispatch` (envoi quand des
+codes nouveaux sont présents, pas d'envoi si vide, loggé-et-non-relancé sur `ServiceBusError`).
+`tests/README.md` : nouvelle entrée "Intentionally excluded" pour la coordination par lock
+advisory (comportement réel de `pg_try_advisory_lock` non simulable avec une session
+mockée/SQLite) ; table "Modules covered" mise à jour (nouvelle ligne
+`test_offer_fetch_scheduler.py`, fonctions de coordination ajoutées à la ligne
+`test_offer_fetching.py`, dispatch offer-fetch-request ajouté à la ligne `test_cv_analysis.py`)
+— corrigé pendant cette revue de documentation, ce n'était pas encore fait au moment de la
+revue.
+
+Deux dernières remarques non-bloquantes de `reviewer-infra` sur la même relecture, corrigées
+avant merge puisque la migration n'a encore jamais été appliquée nulle part (renommage sans
+risque) : la table `offer_fetch_signal` renommée `offer_fetch_signals` (seule table du schéma
+qui aurait été au singulier — `uq_offer_fetch_signal_singleton_key`/
+`ck_offer_fetch_signal_single_row` renommées en conséquence) ; `on_conflict_do_nothing` dans
+`_mark_rome_codes_pending` cible désormais nommément `constraint=
+"uq_offer_fetch_pending_codes_rome_code"` plutôt que `index_elements=["rome_code"]`, par
+cohérence avec le précédent `on_conflict_do_update(constraint="uq_offers_ft_id")` déjà cité dans
+le docstring de la migration.
+
+**Découpage de `cv_analysis::main()` (`reviewer-backend`, bloquant).** Une relecture ciblée
+`cv_analysis/main.py` a d'abord classé trois points préexistants (`except Exception` nu dans
+`main()`, `main()` largement au-dessus de 40 lignes, `_upsert_cv_analysis` sans log d'entrée) en
+remarque non-bloquante hors scope, puis — sur ma propre demande de reconsidération, calquée sur
+un précédent posé plus tôt dans cette série sur des branches sœurs — a explicitement refusé de
+les déclasser : le mandat du reviewer interdit de reclasser une règle "jamais/toujours" du skill
+en remarque simplement parce qu'elle est ancienne, et son périmètre de revue est le *fichier*
+modifié, pas seulement le hunk du diff (`main()` avait d'ailleurs été concrètement allongée par
+le nouveau bloc de dispatch de cette feature). Verdict remonté à `CHANGEMENTS REQUIS`. Les trois
+points ont été corrigés plutôt que de rouvrir la discussion une troisième fois :
+- `except Exception:` autour de `run_migrations()` resserré en `except (SQLAlchemyError,
+  CommandError):`, même correction et même import ajouté que sur `offer_fetching/main.py` en
+  PR #212.
+- `_upsert_cv_analysis` : `logger.info("cv_analysis_upsert_started", cv_id=cv_id,
+  status=status)` ajouté avant son `try`, même pattern que `_get_cv_text`/`_set_cv_status`.
+- `main()` découpée en quatre fonctions dédiées : `_handle_retry_quality_only` (branche retry),
+  `_dispatch_start_matching`/`_dispatch_offer_fetch_request` (les deux envois Service Bus, avec
+  chacune leur propre `Raises:` documentant le contraste relance/best-effort), et
+  `_handle_new_cv_analysis` (flux nominal complet). `main()` ne fait plus qu'orchestrer
+  `run_migrations()` + `receive_message` + délégation à l'une des deux poignées ; corps
+  d'exécution ramené à ~20 lignes, `_handle_new_cv_analysis` à ~24.
+
+**Vérification :** `pytest JobFinder/python` (295/295, découpage de `main()` inclus — les tests
+existants mockent par nom de fonction sur le module, donc restent verts sans modification) et
+`python -m alembic -c migrations/alembic.ini heads` (un seul head, `030`) repassés après toutes
+les corrections de revue ci-dessus (clés primaires, logs d'entrée, renommage de table,
+découpage de `main()`) ; `terraform fmt -check`/`terraform validate` propres sur `envs/dev`
+(aucun changement Terraform dans cette dernière passe). `reviewer-infra` et `reviewer-backend`
+tous deux APPROUVÉ (aucune remarque non-bloquante restante) sur leurs relectures finales
+respectives. Limite
+connue, identique à celle déjà documentée pour `_handle_fetch_request` dans `tests/README.md` :
+la sérialisation réelle par `pg_try_advisory_lock` sous contention n'est validée que manuellement
+contre un Postgres 16 jetable, jamais par la suite de tests automatisée. Un `terraform plan`
+authentifié (nécessite le backend state + auth Azure, indisponible dans cette session) reste
+recommandé avant merge pour confirmer que la conversion `job_offer_fetching` de `timer` à
+`queue` ne déclenche pas un destroy/replace plutôt qu'une mise à jour en place.
