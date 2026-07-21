@@ -6343,3 +6343,87 @@ l'estimation en $ de la section précédente et le seuil réel appliqué en €.
 ressource (`azurerm_consumption_budget_resource_group`) ne figure pas dans la liste des
 ressources critiques du skill `conventions-terraform` (pas de tags supportés par le
 provider sur ce type, donc pas de bloc `tags` ni de `prevent_destroy`/`protect` requis).
+
+## PR #211 — fix(matching): filtre dur par code ROME + purge des matches obsolètes
+
+**Date :** 2026-07-21
+**Branche :** `feature/matching-rome-code-hard-filter` → `dev`
+
+### Contexte
+
+Un testeur externe (CV bâtiment) a vu apparaître des annonces développeur / analyste
+financier dans ses correspondances. Diagnostic : aucun filtre de métier/domaine
+n'existait dans le pipeline de matching — `_get_all_matches`
+(`agents/matching/main.py`) comparait chaque CV à **toutes** les offres du pool
+partagé via cosinus (`o.embedding <=> c.embedding`), sans jointure ni clause sur
+`offers.rome_code`. Le seul filtre appliqué à l'affichage était géographique
+(`routers/matches.py::commune_zone_condition`). Le bonus lexical qui aurait pu
+partiellement rattraper ça avait déjà été retiré le 2026-07-10 sans filtre de
+remplacement (`prompt-matching-remove-lexical-bonus.md`).
+
+### Ce qui a été fait
+
+`_get_all_matches` restreint désormais les offres candidates, pour chaque CV, à
+celles dont `rome_code` appartient à l'ensemble des codes ROME de ce CV précis —
+via une nouvelle CTE `cv_rome_codes` qui teste, pour chaque code du profil
+(`user_profiles.rome_codes`, JSONB `{code: {"cv_ids": [...], "label": ...}}`),
+que le `cv_id` figure dans `cv_ids` (`jsonb_each` + opérateur `?` de containment
+JSONB). Portée volontairement **par CV, pas par utilisateur** : un compte avec un
+CV dev et un CV bâtiment (cas explicitement supporté, cf. commentaire
+`routers/cv.py:263-265`) ne doit jamais voir le CV bâtiment matcher sur les offres
+dev de l'autre CV du même compte.
+
+Nouvelle fonction `_purge_stale_matches` : supprime les `matches` (et leurs
+`match_analyses`, même ordre que `_delete_cv` dans `routers/cv.py` — FK sans
+CASCADE) qui ne respectent plus ce filtre, pour nettoyer les faux positifs déjà en
+base (dont ceux vus par le testeur), pas seulement empêcher les nouveaux. Branchée
+dans `main()` après `_upsert_matches` mais avant `_enqueue_top_n_analyses` — sinon
+un match obsolète pourrait être enqueue pour analyse GPT-4o-mini juste avant d'être
+supprimé. Le compte purgé est logué dans `matching_run_completed`
+(`purged_matches`).
+
+Un CV dont l'extraction ROME a échoué après épuisement des tentatives
+(`CV.status = "error"`, déjà géré par `agents/cv_analysis/main.py:583-594`) n'a par
+construction aucune entrée `cv_ids` le référençant : il est naturellement exclu de
+tout match par le nouveau filtre, sans code supplémentaire — vérifié.
+
+Docstring de `_get_all_matches` complétée avec l'invariant du filtre (quel CV voit
+quelle offre, et pourquoi).
+
+### Décisions techniques
+
+- **Limite acceptée, pas corrigée ici :** `offers.rome_code` est une colonne
+  simple (pas un tableau), et `_build_offer_values`/`_build_upsert_statement`
+  (`agents/offer_fetching/main.py:127-206`) écrasent sans condition `rome_code` à
+  chaque upsert avec le code de la dernière recherche qui a retourné l'offre. Une
+  offre réellement pertinente pour plusieurs codes ROME mais dont le dernier
+  upsert ne l'a taguée qu'avec un seul reste invisible aux CV dont c'est un des
+  *autres* codes pertinents. Documenté en commentaire SQL dans `cv_rome_codes` ;
+  corriger nécessiterait de passer `rome_code` en tableau, hors scope de ce fix.
+- **Pas de migration Alembic** : le filtre s'appuie uniquement sur des colonnes
+  déjà existantes (`user_profiles.rome_codes` JSONB, `offers.rome_code`).
+- **Pas de refund de crédit d'analyse** pour une `match_analysis` purgée
+  déclenchée manuellement — l'analyse a été réellement livrée contre un match qui
+  existait à l'époque, même trade-off que l'ordre blob-puis-commit de
+  `routers/cv.py::_delete_cv`.
+
+### Tests
+
+`_get_all_matches` et `_purge_stale_matches` reposent sur du SQL PostgreSQL
+spécifique (`jsonb_each`, `CROSS JOIN LATERAL`, opérateur `?`) incompatible
+SQLite — même exclusion documentée que le reste de `_get_all_matches`
+(`tests/README.md`, section "Intentionally excluded"). Un test unitaire minimal
+(`test_matching.py::TestPurgeStaleMatches`) vérifie, avec une session mockée,
+l'ordre des deux `DELETE` (match_analyses avant matches) et que le compte retourné
+correspond aux lignes mockées — pas la logique SQL elle-même.
+
+**Vérification :** contre un throwaway Postgres 16 + pgvector (conteneur Docker
+local, `run_migrations()` exécuté dessus) : deux profils/CV distincts (codes
+M1805 et F1106), une offre par code, un faux positif inséré manuellement
+(offre M1805 associée au CV F1106) pour simuler l'état bogué observé par le
+testeur. Après exécution de `_get_all_matches` + `_purge_stale_matches` : (a) le
+CV F1106 ne matche que sur l'offre F1106, jamais sur M1805 même si le cosinus
+dépasserait le seuil ; (b) le faux positif pré-existant est supprimé
+(`purged_matches == 1`) ; (c) un CV sans entrée `cv_ids` (extraction ROME
+échouée) n'obtient toujours aucun match. `pytest tests/test_matching.py -v`
+(6/6) et la suite complète (279/279) passent.

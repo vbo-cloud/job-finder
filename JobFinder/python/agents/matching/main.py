@@ -41,6 +41,17 @@ def _get_all_matches(session: Session) -> list[dict]:
     Returns:
         List of dicts with cv_id, offer_id, score.
 
+    Note: an offer is only a candidate for a CV if the offer's rome_code is a key of
+    rome_codes on the CV owner's profile, with this specific cv_id present in that
+    key's cv_ids list — not just any code anywhere on the profile. This matters for
+    an account with e.g. one dev CV and one BTP CV (explicitly supported, see
+    routers/cv.py CV upload comment): each CV must only ever match offers tagged
+    with a ROME code it was itself analysed into, never a code that only came from
+    a sibling CV on the same account. Before this filter, matching ran with zero
+    domain/profession restriction — a single shared offer pool scored by cosine
+    similarity alone let e.g. a construction CV surface developer or financial-
+    analyst offers. See prompt-matching-rome-code-hard-filter.md for the diagnostic.
+
     Note: base scores are computed as (1 - cosine_distance) between the CV and
     offer embeddings, blended with (1 - cosine_distance) against the profile's
     intent_embedding (candidate_description only — experience_level feeds the
@@ -64,13 +75,29 @@ def _get_all_matches(session: Session) -> list[dict]:
     judgment that no purely statistical measure over isolated words can make —
     see prompt-matching-remove-lexical-bonus.md for the diagnostic behind this.
 
+    Args:
+        session: Active SQLAlchemy session.
+
     Raises:
         SQLAlchemyError: If the database query fails.
     """
     logger.info("matching_batch_query_started", threshold=MATCHING_SCORE_THRESHOLD)
     result = session.execute(
         text("""
-            WITH scored AS (
+            WITH cv_rome_codes AS (
+                -- offers.rome_code is a single column (not an array); an offer that is
+                -- genuinely relevant to several ROME codes but was last upserted under only
+                -- one of them stays invisible to CVs for which it's a *different* relevant
+                -- code. Accepted trade-off for this filter — see
+                -- prompt-matching-rome-code-hard-filter.md; fixing it needs offers.rome_code
+                -- to become an array, out of scope here.
+                SELECT c.id AS cv_id, code_entry.key AS rome_code
+                FROM cvs c
+                JOIN user_profiles up ON up.user_id = c.user_id
+                CROSS JOIN LATERAL jsonb_each(up.rome_codes) AS code_entry(key, value)
+                WHERE code_entry.value -> 'cv_ids' ? c.id::text
+            ),
+            scored AS (
                 SELECT
                     c.id AS cv_id,
                     o.id AS offer_id,
@@ -88,7 +115,8 @@ def _get_all_matches(session: Session) -> list[dict]:
                     END AS candidate_years_ceiling,
                     o.experience_min_years
                 FROM cvs c
-                JOIN offers o ON o.embedding IS NOT NULL
+                JOIN cv_rome_codes crc ON crc.cv_id = c.id
+                JOIN offers o ON o.rome_code = crc.rome_code AND o.embedding IS NOT NULL
                 LEFT JOIN user_profiles up ON up.user_id = c.user_id
                 WHERE c.embedding IS NOT NULL
             ),
@@ -124,6 +152,69 @@ def _get_all_matches(session: Session) -> list[dict]:
     ]
 
 
+def _purge_stale_matches(session: Session) -> int:
+    """Delete matches (and their match_analyses) whose offer.rome_code no longer belongs to
+    the CV's own ROME codes.
+
+    Self-healing companion to the ROME-code hard filter in _get_all_matches: matches
+    inserted before this filter existed (or left over if a CV's rome_codes changed)
+    are removed here every run, so the pipeline recovers without a separate backfill
+    script.
+
+    match_analyses are deleted first — matches.id has no CASCADE from
+    fk_match_analyses_match_id_ref_matches (see routers/cv.py::_delete_cv for the same
+    ordering). Deliberately does not refund analysis_credits_remaining for any
+    manually-triggered analysis being purged — the analysis was genuinely delivered
+    against a match that existed at the time; treated the same as other accepted
+    trade-offs in this codebase (e.g. the blob-then-commit ordering in
+    routers/cv.py::_delete_cv).
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit).
+
+    Returns:
+        Number of matches deleted.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("matching_purge_started")
+    stale_predicate = """
+        NOT EXISTS (
+            SELECT 1
+            FROM user_profiles up
+            CROSS JOIN LATERAL jsonb_each(up.rome_codes) AS code_entry(key, value)
+            WHERE up.user_id = c.user_id
+              AND code_entry.key = o.rome_code
+              AND code_entry.value -> 'cv_ids' ? c.id::text
+        )
+    """
+    session.execute(
+        text(f"""
+            DELETE FROM match_analyses
+            WHERE match_id IN (
+                SELECT m.id
+                FROM matches m
+                JOIN cvs c ON c.id = m.cv_id
+                JOIN offers o ON o.id = m.offer_id
+                WHERE c.embedding IS NOT NULL AND {stale_predicate}
+            )
+        """)
+    )
+    result = session.execute(
+        text(f"""
+            DELETE FROM matches m
+            USING cvs c, offers o
+            WHERE m.cv_id = c.id
+              AND m.offer_id = o.id
+              AND c.embedding IS NOT NULL
+              AND {stale_predicate}
+            RETURNING m.id
+        """)
+    )
+    return len(result.fetchall())
+
+
 def _upsert_matches(matches: list[dict], session: Session) -> int:
     """Upsert matches into the matches table.
 
@@ -140,6 +231,7 @@ def _upsert_matches(matches: list[dict], session: Session) -> int:
     if not matches:
         return 0
 
+    logger.info("matching_upsert_started", match_count=len(matches))
     now = datetime.now(timezone.utc)
     values = [
         {
@@ -177,6 +269,7 @@ def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
     Returns:
         List of match IDs newly enqueued for analysis.
     """
+    logger.info("matching_enqueue_top_n_started", top_n=top_n)
     now = datetime.now(timezone.utc)
     ranked = session.execute(
         text("""
@@ -211,6 +304,25 @@ def _enqueue_top_n_analyses(session: Session, top_n: int) -> list[uuid.UUID]:
     return [row.match_id for row in session.execute(insert_stmt)]
 
 
+def _advance_analyzed_cvs_to_matched(session: Session) -> int:
+    """Advance CVs whose analysis is complete ("done") to "matched".
+
+    Lets the frontend distinguish "matching in progress" from "0 real results" —
+    a CV only reaches "matched" once at least one matching run has considered it.
+
+    Args:
+        session: Active SQLAlchemy session (caller owns commit).
+
+    Returns:
+        Number of CVs advanced.
+    """
+    logger.info("matching_advance_status_started")
+    result = session.execute(
+        update(CV).where(CV.status == "done").values(status="matched")
+    )
+    return result.rowcount
+
+
 def main() -> None:
     """Consume one start-matching message and run matching for all CVs."""
     configure_telemetry("matching")
@@ -231,6 +343,7 @@ def main() -> None:
             all_matches: list[dict] = []
             new_matches = 0
             offers_available: int = 0
+            purged_matches = 0
             newly_enqueued: list[uuid.UUID] = []
             try:
                 with get_session() as session:
@@ -240,12 +353,11 @@ def main() -> None:
                     all_matches = _get_all_matches(session)
                     if all_matches:
                         new_matches = _upsert_matches(all_matches, session)
+                    # Must run before _enqueue_top_n_analyses: an obsolete match must
+                    # never be enqueued for GPT-4o-mini analysis right before deletion.
+                    purged_matches = _purge_stale_matches(session)
                     newly_enqueued = _enqueue_top_n_analyses(session, MATCH_ANALYSIS_AUTO_TOP_N)
-                    # Advance CVs whose analysis is complete ("done") to "matched" so the
-                    # frontend can distinguish "matching in progress" from "0 real results".
-                    session.execute(
-                        update(CV).where(CV.status == "done").values(status="matched")
-                    )
+                    _advance_analyzed_cvs_to_matched(session)
                     session.commit()
             except SQLAlchemyError:
                 logger.error("matching_failed", exc_info=True)
@@ -281,6 +393,7 @@ def main() -> None:
                 cvs_processed=cvs_processed,
                 new_matches=new_matches,
                 offers_available=offers_available,
+                purged_matches=purged_matches,
             )
 
     except RuntimeError:
