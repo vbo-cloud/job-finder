@@ -1,5 +1,6 @@
 """CV analysis agent — ROME code extraction and CV quality analysis via GPT-4o-mini."""
 
+import copy
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from openai import OpenAIError
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm.attributes import flag_modified
 
 from azure.servicebus.exceptions import ServiceBusError
 
@@ -235,6 +237,15 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
     Uses SELECT ... FOR UPDATE to prevent concurrent analyses from overwriting
     each other's data.
 
+    Important: `profile.rome_codes` is a JSONB column mutated in place. A plain
+    shallow copy (`dict(profile.rome_codes)`) is not enough — the nested
+    per-code dicts stay shared with the value SQLAlchemy already tracks, so
+    mutating them also mutates the tracked value, which defeats change
+    detection at flush and silently drops the write for any code that already
+    existed. Hence `copy.deepcopy` (a genuinely independent copy) and
+    `flag_modified` (explicit marking, robust even against a future regression
+    on this point).
+
     Args:
         user_id: The user whose profile to update.
         cv_id: UUID string of the CV being analysed.
@@ -256,7 +267,7 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
             if profile is None:
                 raise ValueError(f"UserProfile not found for user_id={user_id}")
 
-            current: dict = dict(profile.rome_codes or {})
+            current: dict = copy.deepcopy(profile.rome_codes or {})
             for item in rome_items:
                 code = item["code"]
                 label = item["label"]
@@ -267,6 +278,9 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
                 current[code]["label"] = label
 
             profile.rome_codes = current
+            # Defensive, not strictly required given the deepcopy above (see docstring):
+            # guards against a future regression that reintroduces shared nested references.
+            flag_modified(profile, "rome_codes")
             profile.updated_at = datetime.now(timezone.utc)
             session.commit()
     except SQLAlchemyError:

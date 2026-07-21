@@ -6566,3 +6566,86 @@ comportement actuel ; laissée telle quelle par cohérence avec les autres secti
 
 **Vérification :** `pytest tests/test_cv_analysis.py -v` (35/35 passent) et la suite
 complète (280/280) passent.
+
+## PR #214 — fix(cv-analysis): deepcopy + flag_modified sur la fusion JSONB des codes ROME
+
+**Date :** 2026-07-21
+**Branche :** `fix/cv-analysis-rome-merge-shallow-copy` → `dev`
+
+### Contexte
+
+Suite du prompt local `prompt-cv-analysis-rome-merge-shallow-copy-bug.md` (non versionné
+dans `docs/prompts/`) : `_merge_rome_codes` (`agents/cv_analysis/main.py`) perdait
+silencieusement le `cv_id` d'un CV pour tout code ROME déjà présent dans le profil. Cause :
+`current: dict = dict(profile.rome_codes or {})` (l.259 avant fix) ne fait qu'une copie
+superficielle — les dicts imbriqués par code ROME restent le même objet que celui déjà
+tracké par SQLAlchemy sur `profile.rome_codes`. Muter `current[code]["cv_ids"]` pour un
+code existant mutait donc aussi la valeur trackée, ce qui faisait échouer la détection de
+changement JSONB de SQLAlchemy au flush : l'écriture était perdue sans aucune erreur, et le
+log `rome_merge_done` apparaissait normalement malgré tout. Seul le tout premier CV créant
+des codes inédits pour un profil fonctionnait ; tout CV suivant retombant sur un code déjà
+créé perdait silencieusement son `cv_id`.
+
+### Ce qui a été fait
+
+Dans `_merge_rome_codes` : `dict(profile.rome_codes or {})` remplacé par
+`copy.deepcopy(profile.rome_codes or {})` (copie réellement indépendante des dicts
+imbriqués), et ajout de `flag_modified(profile, "rome_codes")` juste après
+`profile.rome_codes = current`, avant `profile.updated_at = ...` — marquage explicite de la
+colonne comme modifiée, indépendant de la détection automatique de SQLAlchemy. Import
+`copy` ajouté en tête de fichier, `flag_modified` importé depuis
+`sqlalchemy.orm.attributes` à côté des autres imports SQLAlchemy. Docstring de
+`_merge_rome_codes` complétée d'un paragraphe dédié expliquant l'invariant : colonne JSONB
+mutable en place, `deepcopy` est le correctif réel (il restaure une copie dont le contenu
+diffère effectivement de la valeur trackée, ce qui permet à SQLAlchemy de détecter le
+changement normalement au flush) ; `flag_modified` est un garde défensif, pas strictement
+requis vu le `deepcopy`, contre un refactor futur qui réintroduirait un partage de
+références imbriquées. Un commentaire WHY dans ce sens a été ajouté au site d'appel de
+`flag_modified` (l.280-282) : c'est l'endroit qu'un futur éditeur serait le plus
+susceptible de retirer en le croyant redondant avec le `deepcopy`.
+
+`tests/test_cv_analysis.py`, `TestMergeRomeCodes` : nouveau test
+`test_calls_flag_modified_for_jsonb_dirty_tracking`, qui mocke `_mod.flag_modified` et
+vérifie `assert_called_once_with(mock_profile, "rome_codes")`. Suite à une remarque de
+`reviewer-backend` (ce test ne prouvait que la moitié `flag_modified` du fix — un
+`dict()` superficiel aurait laissé passer ce même test, puisque le sous-dict partagé
+n'aurait jamais été distingué par une simple réassignation d'attribut sur un
+`MagicMock`), second test ajouté :
+`test_deep_copies_so_original_nested_dict_is_left_untouched` — conserve une référence au
+dict imbriqué d'origine avant l'appel, puis vérifie qu'il n'a pas été muté en place.
+Vérifié manuellement que ce nouveau test échoue bien si `copy.deepcopy` est remplacé par
+`dict()` (`AssertionError: ['cv-uuid-1', 'cv-uuid-2'] == ['cv-uuid-1']`), avant de
+restaurer le fix — preuve qu'il attrape réellement une régression vers la copie
+superficielle, contrairement au premier test.
+
+### Décisions techniques
+
+Limite connue, non corrigée par ce fix : la fusion reste additive (elle n'ajoute que le
+`cv_id` du CV en cours d'analyse, jamais de retrait). Un profil qui a déjà silencieusement
+perdu un `cv_id` sous l'ancien bug ne se répare pas rétroactivement — la paire (CV, code)
+manquante le reste tant que ce CV précis n'est pas ré-analysé. Conséquence concrète en
+aval via le filtre dur par code ROME de PR #211 : un CV dont le `cv_id` manque sous un code
+donné ne matchera aucune offre de ce code tant qu'il n'a pas été ré-analysé, même après ce
+fix — même limite de non-réparation rétroactive que celle déjà documentée en PR #213 pour
+le bruit ROME issu de l'ancien comportement d'extraction.
+
+### Tests
+
+Ce nouveau test est un garde-fou de régression sur l'appel lui-même (que
+`flag_modified(profile, "rome_codes")` soit bien invoqué), pas une preuve que la
+persistance fonctionne réellement : sous `MagicMock`, `profile.rome_codes` est un simple
+attribut sans instrumentation SQLAlchemy — ni le bug de copie superficielle ni son fix ne
+changent l'issue d'un test mocké de cette façon. Même limite déjà documentée pour d'autres
+chemins dépendant du comportement réel de SQLAlchemy/PostgreSQL (par exemple les tests de
+`_get_active_rome_codes`, qui n'assertent que sur une valeur de retour mockée, jamais sur
+le comportement SQL réel — voir PR #212). La vérification décisive pour ce bug précis ne
+peut se faire qu'en interrogeant directement `user_profiles.rome_codes` en base après un
+second upload de CV partageant un code ROME déjà présent sur le profil — le log
+`rome_merge_done` seul ne suffit pas : il apparaissait déjà normalement avant le fix,
+c'est précisément ce qui a masqué le bug en premier lieu.
+
+**Vérification :** `pytest tests/test_cv_analysis.py -v` (37/37) et la suite complète
+(282/282) passent, incluant les deux nouveaux tests de `TestMergeRomeCodes`. Rappel (voir
+Décisions techniques) : ces tests ne remplacent pas la vérification décisive contre une
+vraie base PostgreSQL (requête `user_profiles.rome_codes` après un second upload
+partageant un code ROME).
