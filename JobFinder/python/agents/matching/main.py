@@ -41,6 +41,17 @@ def _get_all_matches(session: Session) -> list[dict]:
     Returns:
         List of dicts with cv_id, offer_id, score.
 
+    Note: an offer is only a candidate for a CV if the offer's rome_code is a key of
+    rome_codes on the CV owner's profile, with this specific cv_id present in that
+    key's cv_ids list — not just any code anywhere on the profile. This matters for
+    an account with e.g. one dev CV and one BTP CV (explicitly supported, see
+    routers/cv.py CV upload comment): each CV must only ever match offers tagged
+    with a ROME code it was itself analysed into, never a code that only came from
+    a sibling CV on the same account. Before this filter, matching ran with zero
+    domain/profession restriction — a single shared offer pool scored by cosine
+    similarity alone let e.g. a construction CV surface developer or financial-
+    analyst offers. See prompt-matching-rome-code-hard-filter.md for the diagnostic.
+
     Note: base scores are computed as (1 - cosine_distance) between the CV and
     offer embeddings, blended with (1 - cosine_distance) against the profile's
     intent_embedding (candidate_description only — experience_level feeds the
@@ -64,13 +75,29 @@ def _get_all_matches(session: Session) -> list[dict]:
     judgment that no purely statistical measure over isolated words can make —
     see prompt-matching-remove-lexical-bonus.md for the diagnostic behind this.
 
+    Args:
+        session: Active SQLAlchemy session.
+
     Raises:
         SQLAlchemyError: If the database query fails.
     """
     logger.info("matching_batch_query_started", threshold=MATCHING_SCORE_THRESHOLD)
     result = session.execute(
         text("""
-            WITH scored AS (
+            WITH cv_rome_codes AS (
+                -- offers.rome_code is a single column (not an array); an offer that is
+                -- genuinely relevant to several ROME codes but was last upserted under only
+                -- one of them stays invisible to CVs for which it's a *different* relevant
+                -- code. Accepted trade-off for this filter — see
+                -- prompt-matching-rome-code-hard-filter.md; fixing it needs offers.rome_code
+                -- to become an array, out of scope here.
+                SELECT c.id AS cv_id, code_entry.key AS rome_code
+                FROM cvs c
+                JOIN user_profiles up ON up.user_id = c.user_id
+                CROSS JOIN LATERAL jsonb_each(up.rome_codes) AS code_entry(key, value)
+                WHERE code_entry.value -> 'cv_ids' ? c.id::text
+            ),
+            scored AS (
                 SELECT
                     c.id AS cv_id,
                     o.id AS offer_id,
@@ -88,7 +115,8 @@ def _get_all_matches(session: Session) -> list[dict]:
                     END AS candidate_years_ceiling,
                     o.experience_min_years
                 FROM cvs c
-                JOIN offers o ON o.embedding IS NOT NULL
+                JOIN cv_rome_codes crc ON crc.cv_id = c.id
+                JOIN offers o ON o.rome_code = crc.rome_code AND o.embedding IS NOT NULL
                 LEFT JOIN user_profiles up ON up.user_id = c.user_id
                 WHERE c.embedding IS NOT NULL
             ),
