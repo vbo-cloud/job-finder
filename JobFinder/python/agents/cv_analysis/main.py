@@ -224,6 +224,9 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
         OpenAIError: If the API call fails.
         ValueError: If all retry attempts fail to produce valid ROME codes.
     """
+    # The 8000-char cap covers only raw_text — candidate_description is appended
+    # uncapped below. Negligible in practice (a profile description is at most a
+    # few hundred chars, far under GPT-4o-mini's 128k-token context window).
     user_content = f"CV :\n\n{raw_text[:8000]}"
     if candidate_description and candidate_description.strip():
         user_content += (

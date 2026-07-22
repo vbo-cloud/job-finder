@@ -397,6 +397,27 @@ class TestPutProfile:
         set_clause = dict(stmt._post_values_clause.update_values_to_set)
         assert set_clause["description_updated_at"] is not None
 
+    def test_first_time_description_stamps_description_updated_at_on_insert_path(
+        self, test_client, mock_session
+    ):
+        """No existing profile row (existing = None, the brand-new-user path):
+        description_changed is computed against that None fallback, so the
+        INSERT .values() clause must carry description_updated_at too — not
+        just the ON CONFLICT UPDATE set_ clause covered by the test above."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        insert_values = stmt.compile().params
+        assert insert_values["description_updated_at"] is not None
+
     def test_experience_level_alone_does_not_stamp_description_updated_at(
         self, test_client, mock_session
     ):
