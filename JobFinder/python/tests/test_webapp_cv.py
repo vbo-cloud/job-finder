@@ -68,6 +68,169 @@ def test_client(mock_session) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
+# Column-aware PDF text extraction (_detect_column_gap, _words_to_lines,
+# _extract_page_text) — pure functions tested directly against constructed
+# pdfplumber-shaped word dicts, no PDF bytes involved. Consistent with this
+# file's existing convention (see TestRemoveCvFromRomeCodes below and the
+# module docstring): the upload endpoint's happy path stays out of unit tests
+# because it needs pdfplumber + embed() + blob + send_message all mocked
+# together, and is verified manually via integration testing instead. These
+# tests validate the split/reconstitution *algorithm* against a known word
+# schema; they say nothing about whether real uploaded PDFs produce word
+# coordinates the thresholds below actually separate correctly — that is a
+# production-observation question, tracked via the columns_detected field
+# logged in cv_upload_text_extracted (see _MIN_COLUMN_GAP_WIDTH /
+# _MIN_GAP_ROW_COVERAGE's docstrings for the same caveat).
+# ---------------------------------------------------------------------------
+
+
+def _word(text: str, x0: float, x1: float, top: float, bottom: float | None = None) -> dict:
+    """Build a pdfplumber-shaped word dict for column-detection tests."""
+    return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": bottom or top + 10}
+
+
+class TestGroupWordsIntoRows:
+    def test_groups_close_top_values_into_one_row(self):
+        words = [_word("A", 10, 20, 100.0), _word("B", 30, 40, 101.5)]
+
+        rows = cv_router_module._group_words_into_rows(words)
+
+        assert len(rows) == 1
+        assert {w["text"] for w in rows[0]} == {"A", "B"}
+
+    def test_separates_distant_top_values_into_different_rows(self):
+        words = [_word("A", 10, 20, 100.0), _word("B", 10, 20, 140.0)]
+
+        rows = cv_router_module._group_words_into_rows(words)
+
+        assert len(rows) == 2
+
+    def test_rows_are_ordered_top_to_bottom(self):
+        words = [_word("Second", 10, 20, 140.0), _word("First", 10, 20, 100.0)]
+
+        rows = cv_router_module._group_words_into_rows(words)
+
+        assert rows[0][0]["text"] == "First"
+        assert rows[1][0]["text"] == "Second"
+
+
+class TestWordsToLines:
+    def test_orders_words_left_to_right_within_a_row_regardless_of_input_order(self):
+        words = [_word("World", 60, 100, 100.0), _word("Hello", 10, 50, 100.0)]
+
+        assert cv_router_module._words_to_lines(words) == "Hello World"
+
+    def test_orders_rows_top_to_bottom_regardless_of_input_order(self):
+        words = [_word("Second", 10, 50, 140.0), _word("First", 10, 50, 100.0)]
+
+        assert cv_router_module._words_to_lines(words) == "First\nSecond"
+
+
+class TestDetectColumnGap:
+    def test_returns_none_for_empty_word_list(self):
+        assert cv_router_module._detect_column_gap([], 600, 800) is None
+
+    def test_returns_none_for_single_full_width_paragraph(self):
+        # One continuous run of text per row, no internal whitespace band wide enough
+        # to be a column gutter — the dominant real-world case.
+        words = [_word(f"line{i}", 50, 450, 100.0 + i * 20) for i in range(10)]
+
+        assert cv_router_module._detect_column_gap(words, 600, 800) is None
+
+    def test_returns_none_when_gap_narrower_than_minimum_width(self):
+        # Two words on the same row with a small, ordinary inter-word space (5pt),
+        # well under _MIN_COLUMN_GAP_WIDTH (14pt) — must not be mistaken for a column gutter.
+        words = [_word("Hello", 50, 100, 100.0), _word("World", 105, 150, 100.0)]
+
+        assert cv_router_module._detect_column_gap(words, 600, 800) is None
+
+    def test_rejects_gap_from_indented_bullet_list_in_single_column_cv(self):
+        # 15 full-width paragraph rows plus 3 rows indented as a bullet list (starting
+        # at x=130 instead of x=50). The indent only "clears" 3 of 18 rows — well under
+        # _MIN_GAP_ROW_COVERAGE (0.6) — so this must NOT be detected as a column break.
+        full_width_rows = [_word(f"para{i}", 50, 450, 100.0 + i * 20) for i in range(15)]
+        bullet_rows = [_word(f"bullet{i}", 130, 450, 400.0 + i * 20) for i in range(3)]
+
+        gap = cv_router_module._detect_column_gap(full_width_rows + bullet_rows, 600, 800)
+
+        assert gap is None
+
+    def test_detects_gap_for_two_column_layout_with_full_width_header(self):
+        # A sidebar column (x 50-150) and a main column (x 200-500) running in parallel
+        # down the page, plus one full-width header row (x 50-500) — the header must not
+        # prevent detection since most rows (10 of 11) are still clean for the real gutter.
+        sidebar_rows = [_word(f"side{i}", 50, 150, 100.0 + i * 20) for i in range(10)]
+        main_rows = [_word(f"main{i}", 200, 500, 100.0 + i * 20) for i in range(10)]
+        header = [_word("HEADER", 50, 500, 80.0)]
+
+        gap = cv_router_module._detect_column_gap(sidebar_rows + main_rows + header, 600, 800)
+
+        assert gap == pytest.approx(175.0)
+
+
+class TestExtractPageText:
+    def test_falls_back_to_default_extract_text_when_no_words(self):
+        page = MagicMock()
+        page.extract_words.return_value = []
+        page.extract_text.return_value = "some text"
+
+        text, columns = cv_router_module._extract_page_text(page)
+
+        assert text == "some text"
+        assert columns == 1
+
+    def test_falls_back_to_default_extract_text_when_no_gap_detected(self):
+        # Byte-identical to the previous behavior, not just "equivalent" — the single-column
+        # non-regression guarantee for the dominant real-world case.
+        page = MagicMock()
+        page.width = 600
+        page.height = 800
+        page.extract_words.return_value = [
+            _word(f"line{i}", 50, 450, 100.0 + i * 20) for i in range(5)
+        ]
+        page.extract_text.return_value = "unchanged single-column text"
+
+        text, columns = cv_router_module._extract_page_text(page)
+
+        assert text == "unchanged single-column text"
+        assert columns == 1
+        page.extract_text.assert_called_once()
+
+    def test_reconstitutes_left_column_then_right_column_when_gap_detected(self):
+        page = MagicMock()
+        page.width = 600
+        page.height = 800
+        sidebar_rows = [_word(f"side{i}", 50, 150, 100.0 + i * 20) for i in range(10)]
+        main_rows = [_word(f"main{i}", 200, 500, 100.0 + i * 20) for i in range(10)]
+        page.extract_words.return_value = sidebar_rows + main_rows
+
+        text, columns = cv_router_module._extract_page_text(page)
+
+        assert columns == 2
+        left_text, _, right_text = text.partition("\n\n")
+        assert all(f"side{i}" in left_text for i in range(10))
+        assert all(f"main{i}" in right_text for i in range(10))
+        page.extract_text.assert_not_called()
+
+    def test_full_width_word_lands_on_one_side_without_being_dropped_or_duplicated(self):
+        # A name/title banner spanning the whole page width above an otherwise two-column
+        # body straddles the detected gap — exercises the straddling branch in
+        # _extract_page_text, not just _detect_column_gap's tolerance for it.
+        page = MagicMock()
+        page.width = 600
+        page.height = 800
+        sidebar_rows = [_word(f"side{i}", 50, 150, 100.0 + i * 20) for i in range(10)]
+        main_rows = [_word(f"main{i}", 200, 500, 100.0 + i * 20) for i in range(10)]
+        header = [_word("HEADER", 50, 500, 80.0)]
+        page.extract_words.return_value = sidebar_rows + main_rows + header
+
+        text, columns = cv_router_module._extract_page_text(page)
+
+        assert columns == 2
+        assert text.count("HEADER") == 1
+
+
+# ---------------------------------------------------------------------------
 # POST /cv/upload
 # ---------------------------------------------------------------------------
 

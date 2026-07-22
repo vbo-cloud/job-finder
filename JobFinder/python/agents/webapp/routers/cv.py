@@ -39,6 +39,18 @@ CV_ANALYSIS_QUEUE = "cv-analysis"
 CV_BLOB_CONTAINER = "cvs"
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
 
+# Minimum width (points) of a horizontal whitespace band to be considered a column gutter
+# rather than ordinary inter-word spacing. Provisional — calibrated against synthetic word
+# layouts covering typical CV font sizes (10-11pt body text, ~2-6pt inter-word space) and
+# typical two-column gutter widths (15-40pt), not against real uploaded PDFs. Tune via the
+# columns_detected field logged below once real upload data is observable (see the diagnostic
+# referenced in _extract_page_text's docstring).
+_MIN_COLUMN_GAP_WIDTH = 14.0
+# Minimum fraction of text rows that must be undisturbed by a candidate gap for it to count as
+# a real column break, not just an indented list or bullet block spanning a few lines. Same
+# calibration caveat as above.
+_MIN_GAP_ROW_COVERAGE = 0.6
+
 AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
 if not AZURE_STORAGE_ACCOUNT_URL:
     raise ValueError("AZURE_STORAGE_ACCOUNT_URL environment variable is not set")
@@ -193,6 +205,179 @@ def _delete_blob(blob_url: str, container: str) -> None:
         raise
 
 
+def _group_words_into_rows(words: list[dict], tolerance: float = 3.0) -> list[list[dict]]:
+    """Cluster pdfplumber words into text rows by their 'top' coordinate.
+
+    Words on the same printed line rarely share the exact same 'top' value (sub-pixel
+    rendering differences), so rows are formed by grouping words whose 'top' falls within
+    `tolerance` points of the row's first word.
+
+    Args:
+        words: pdfplumber word dicts (each with 'x0', 'x1', 'top', 'bottom', 'text').
+        tolerance: Maximum 'top' distance (points) for a word to join the current row.
+
+    Returns:
+        Rows in top-to-bottom order, each a list of words in arbitrary horizontal order.
+    """
+    rows: list[list[dict]] = []
+    for word in sorted(words, key=lambda w: w["top"]):
+        if rows and abs(word["top"] - rows[-1][0]["top"]) <= tolerance:
+            rows[-1].append(word)
+        else:
+            rows.append([word])
+    return rows
+
+
+def _words_to_lines(words: list[dict]) -> str:
+    """Reconstitute reading-order text from a word list, independent of input order.
+
+    Words are grouped into rows (see _group_words_into_rows) then, within each row, ordered
+    left to right — so callers do not need to pre-sort the input.
+
+    Args:
+        words: pdfplumber word dicts.
+
+    Returns:
+        Newline-joined text, one row per line, words within a row space-joined.
+    """
+    rows = _group_words_into_rows(words)
+    lines = [
+        " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"]))
+        for row in rows
+    ]
+    return "\n".join(lines)
+
+
+def _gap_row_coverage(rows: list[list[dict]], gap_left: float, gap_right: float) -> float:
+    """Fraction of rows whose words are entirely outside the [gap_left, gap_right] band.
+
+    A row counts as clean even if it belongs entirely to one side of the gap (the normal case
+    for a two-column layout, where a given row is either sidebar or main-block content, not
+    both) — it only fails if some word actually straddles or crosses the band.
+
+    Args:
+        rows: Rows as returned by _group_words_into_rows.
+        gap_left: Left edge of the candidate gap band.
+        gap_right: Right edge of the candidate gap band.
+
+    Returns:
+        clean_rows / total_rows, or 0.0 if there are no rows.
+    """
+    if not rows:
+        return 0.0
+    clean_rows = sum(
+        1
+        for row in rows
+        if all(w["x1"] <= gap_left or w["x0"] >= gap_right for w in row)
+    )
+    return clean_rows / len(rows)
+
+
+def _detect_column_gap(words: list[dict], page_width: float, page_height: float) -> float | None:
+    """Detect the x-coordinate of a vertical whitespace band splitting the page into two columns.
+
+    Candidate gaps are the whitespace bands between consecutive distinct word x0/x1 boundaries
+    (cheap to enumerate, and guaranteed to include the true column gutter if one exists). A
+    candidate only counts as a real column break if both hold:
+    - its width exceeds _MIN_COLUMN_GAP_WIDTH — comfortably wider than normal inter-word
+      spacing, so a single wide space within one column's own text is never mistaken for a
+      column break;
+    - at least _MIN_GAP_ROW_COVERAGE of the page's text rows have no word crossing it — measured
+      per row (not against total page height), so a header or footer line that happens to span
+      the full page width doesn't kill an otherwise-real gap, while an indented bullet list in
+      an actually single-column CV (whose indentation only clears a handful of rows, not most of
+      them) does not reach the coverage threshold and is correctly rejected.
+
+    3+ column layouts and grid/table layouts are out of scope: only the single widest qualifying
+    gap is ever considered, so this never attempts to split a page into more than two columns —
+    a page that doesn't fit the two-column model falls back to the default single-column
+    behavior in _extract_page_text rather than producing a wrong split silently.
+
+    Args:
+        words: pdfplumber word dicts for the page.
+        page_width: Page width in points (unused directly — kept for signature parity with the
+            page context callers naturally have on hand, and for future width-relative tuning).
+        page_height: Page height in points (unused directly, same rationale).
+
+    Returns:
+        The x-coordinate at the midpoint of the widest qualifying gap, or None if no candidate
+        satisfies both thresholds.
+    """
+    if not words:
+        return None
+
+    rows = _group_words_into_rows(words)
+    if len(rows) < 2:
+        return None
+
+    boundaries = sorted({w["x0"] for w in words} | {w["x1"] for w in words})
+
+    best_gap: tuple[float, float] | None = None
+    best_width = 0.0
+    for left, right in zip(boundaries, boundaries[1:]):
+        width = right - left
+        if width <= _MIN_COLUMN_GAP_WIDTH:
+            continue
+        if _gap_row_coverage(rows, left, right) < _MIN_GAP_ROW_COVERAGE:
+            continue
+        if width > best_width:
+            best_width = width
+            best_gap = (left, right)
+
+    if best_gap is None:
+        return None
+    return (best_gap[0] + best_gap[1]) / 2
+
+
+def _extract_page_text(page: pdfplumber.page.Page) -> tuple[str, int]:
+    """Extract a page's text, reconstituting reading order if a column layout is detected.
+
+    Falls back to pdfplumber's default page.extract_text() — unchanged behavior — whenever no
+    word is found, or no candidate gap in _detect_column_gap satisfies both thresholds. This is
+    the dominant case (single-column CVs), and the fallback is byte-identical to the previous
+    extraction, not just "equivalent" — see the diagnostic in
+    docs/prompts/prompt-cv-analysis-referentiel-model-upgrade-column-parsing.md for why a CV with
+    a two-column layout (sidebar + main block) previously produced raw_text with both blocks
+    interleaved, corrupting downstream ROME extraction and quality analysis.
+
+    When a gap is detected, words are split into a left and right group by the gap's x
+    boundaries, each reconstituted independently via _words_to_lines, and concatenated left
+    column first then right column. A word spanning the gap entirely (a full-width banner or
+    section rule above an otherwise two-column body — routine, not rare) is assigned whole to
+    whichever side it's closer to, never split or dropped. Only ever splits into at most two
+    columns — see _detect_column_gap's docstring for why 3+ column and grid layouts are
+    explicitly out of scope and fall back to the default single-column path instead of guessing.
+
+    Args:
+        page: A pdfplumber Page.
+
+    Returns:
+        A tuple of (extracted text, number of columns detected — 1 or 2).
+    """
+    words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    if not words:
+        return page.extract_text() or "", 1
+
+    gap = _detect_column_gap(words, page.width, page.height)
+    if gap is None:
+        return page.extract_text() or "", 1
+
+    left_words = [w for w in words if w["x1"] <= gap]
+    right_words = [w for w in words if w["x0"] >= gap]
+    # Words that span the gap entirely (e.g. a full-width name banner or section rule above a
+    # two-column body) land in neither group above — routine, not an edge case. Each such word
+    # is assigned to whichever side its center is closer to (here, the left/sidebar column,
+    # since such a word usually starts near the page's left margin) rather than dropped or
+    # duplicated.
+    straddling = [w for w in words if w not in left_words and w not in right_words]
+    for w in straddling:
+        (left_words if abs(w["x0"] - gap) < abs(w["x1"] - gap) else right_words).append(w)
+
+    left_text = _words_to_lines(left_words)
+    right_text = _words_to_lines(right_words)
+    return f"{left_text}\n\n{right_text}", 2
+
+
 @router.post("/upload", response_model=CVUploadOut)
 async def upload_cv(
     file: UploadFile,
@@ -240,14 +425,23 @@ async def upload_cv(
         )
     try:
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
-            raw_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            page_results = [_extract_page_text(page) for page in pdf.pages]
+        raw_text = "\n".join(text for text, _ in page_results)
+        # Max across pages, not the last page's value — a single two-column page anywhere in
+        # the document is enough to warrant the ATS-risk note in quality analysis.
+        columns_detected = max((n for _, n in page_results), default=1)
     except PDFSyntaxError as e:
         logger.error("cv_upload_pdf_invalid", user_id=user_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="File is not a valid PDF",
         ) from e
-    logger.info("cv_upload_text_extracted", user_id=user_id, chars=len(raw_text))
+    logger.info(
+        "cv_upload_text_extracted",
+        user_id=user_id,
+        chars=len(raw_text),
+        columns_detected=columns_detected,
+    )
 
     try:
         blob_url = _upload_cv_blob(contents, user_id)
@@ -297,6 +491,7 @@ async def upload_cv(
             embedding=embedding,
             uploaded_at=now,
             created_at=now,
+            layout_columns_detected=columns_detected,
         ))
         logger.info("cv_upload_cv_inserted", user_id=user_id, cv_id=str(cv_id))
 
