@@ -34,6 +34,7 @@ const baseCvs: CVData[] = [
     match_count: 3,
     unseen_count: 0,
     has_thumbnail: false,
+    rome_reanalysis_available: false,
   },
 ];
 

@@ -109,6 +109,7 @@ class TestListCvs:
         cv.status = "done"
         cv.uploaded_at = "2024-01-15T10:00:00+00:00"
         cv.thumbnail_url = None
+        cv.rome_analyzed_at = None
         # execute().all() returns list of (cv, match_count, unseen_count) tuples
         mock_session.execute.return_value.all.return_value = [(cv, 3, 1)]
 
@@ -138,6 +139,7 @@ class TestListCvs:
         cv.status = "done"
         cv.uploaded_at = "2024-01-15T10:00:00+00:00"
         cv.thumbnail_url = None
+        cv.rome_analyzed_at = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": profile}),
             MagicMock(**{"all.return_value": [(cv, 3, 1)]}),
@@ -165,6 +167,7 @@ class TestListCvs:
         cv.status = "done"
         cv.uploaded_at = "2024-01-15T10:00:00+00:00"
         cv.thumbnail_url = None
+        cv.rome_analyzed_at = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": profile}),
             MagicMock(**{"all.return_value": [(cv, 3, 3)]}),
@@ -183,6 +186,7 @@ class TestListCvs:
         cv.status = "done"
         cv.uploaded_at = "2024-01-15T10:00:00+00:00"
         cv.thumbnail_url = None
+        cv.rome_analyzed_at = None
         mock_session.execute.side_effect = [
             MagicMock(**{"scalar_one_or_none.return_value": None}),
             MagicMock(**{"all.return_value": [(cv, 3, 3)]}),
@@ -193,6 +197,90 @@ class TestListCvs:
         assert resp.status_code == 200
         stmt = str(mock_session.execute.call_args_list[1].args[0])
         assert "offers.commune" not in stmt
+
+
+# ---------------------------------------------------------------------------
+# GET /cv/ — rome_reanalysis_available
+# ---------------------------------------------------------------------------
+
+
+class TestListCvsRomeReanalysisAvailable:
+    def _make_cv(self, rome_analyzed_at) -> MagicMock:
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        cv.name = "Mon CV.pdf"
+        cv.status = "done"
+        cv.uploaded_at = "2024-01-15T10:00:00+00:00"
+        cv.thumbnail_url = None
+        cv.rome_analyzed_at = rome_analyzed_at
+        return cv
+
+    def test_false_when_no_profile(self, test_client, mock_session):
+        cv = self._make_cv(rome_analyzed_at=None)
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": None}),
+            MagicMock(**{"all.return_value": [(cv, 0, 0)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.json()[0]["rome_reanalysis_available"] is False
+
+    def test_false_when_description_updated_at_is_none(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = []
+        profile.description_updated_at = None
+        cv = self._make_cv(rome_analyzed_at="2024-01-01T00:00:00+00:00")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 0, 0)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.json()[0]["rome_reanalysis_available"] is False
+
+    def test_true_when_description_updated_after_rome_analyzed(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = []
+        profile.description_updated_at = "2024-02-01T00:00:00+00:00"
+        cv = self._make_cv(rome_analyzed_at="2024-01-01T00:00:00+00:00")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 0, 0)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.json()[0]["rome_reanalysis_available"] is True
+
+    def test_true_when_never_rome_analyzed_but_description_set(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = []
+        profile.description_updated_at = "2024-02-01T00:00:00+00:00"
+        cv = self._make_cv(rome_analyzed_at=None)
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 0, 0)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.json()[0]["rome_reanalysis_available"] is True
+
+    def test_false_when_description_updated_before_rome_analyzed(self, test_client, mock_session):
+        profile = MagicMock()
+        profile.commune_codes = []
+        profile.description_updated_at = "2024-01-01T00:00:00+00:00"
+        cv = self._make_cv(rome_analyzed_at="2024-02-01T00:00:00+00:00")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"all.return_value": [(cv, 0, 0)]}),
+        ]
+
+        resp = test_client.get("/cv/")
+
+        assert resp.json()[0]["rome_reanalysis_available"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +498,54 @@ class TestRetryCvAnalysis:
         mock_session.execute.side_effect = SQLAlchemyError("DB error")
 
         resp = test_client.post(f"/cv/{TEST_CV_ID}/analysis/retry")
+
+        assert resp.status_code == 500
+        mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# POST /cv/{cv_id}/rome/retry
+# ---------------------------------------------------------------------------
+
+
+class TestRetryRomeAnalysis:
+    def test_returns_404_when_cv_not_found(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        resp = test_client.post(f"/cv/{uuid.uuid4()}/rome/retry")
+
+        assert resp.status_code == 404
+        mock_send.assert_not_called()
+
+    def test_dispatches_retry_message_and_returns_202(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/rome/retry")
+
+        assert resp.status_code == 202
+        mock_send.assert_called_once_with(
+            "cv-analysis", {"cv_id": str(TEST_CV_ID), "retry_rome_only": True}
+        )
+
+    def test_returns_202_even_if_dispatch_fails(self, test_client, mock_session, mocker):
+        from azure.servicebus.exceptions import ServiceBusError
+
+        mocker.patch.object(cv_router_module, "send_message", side_effect=ServiceBusError("boom"))
+        cv = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = cv
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/rome/retry")
+
+        assert resp.status_code == 202
+
+    def test_returns_500_on_db_error(self, test_client, mock_session, mocker):
+        mock_send = mocker.patch.object(cv_router_module, "send_message")
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post(f"/cv/{TEST_CV_ID}/rome/retry")
 
         assert resp.status_code == 500
         mock_send.assert_not_called()

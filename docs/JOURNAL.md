@@ -6856,3 +6856,124 @@ Limite acceptée, signalée par le reviewer et non corrigée (hors du scope réa
 la vérification d'existence et l'`UPDATE` gardé dans `_drain_pending_signal` sont deux requêtes
 séparées sans `FOR UPDATE` — une suppression concurrente de la ligne singleton atterrissant
 exactement entre les deux resterait un angle mort théorique.
+
+## PR #216 — feat(cv-analysis): extraction ROME sensible à l'intention déclarée + bouton de ré-analyse manuel
+
+**Date :** 2026-07-22
+**Branche :** `feature/cv-analysis-rome-intent-aware-and-reanalysis` → `dev`
+
+### Contexte
+
+Suite d'un échange avec Vincent (22/07, `prompt-cv-analysis-rome-reanalysis-button.md`) sur un
+cas concret : un CV mêlant plusieurs expériences clairement disjointes (formation/objectif
+développeur, plus des jobs alimentaires/saisonniers sans lien — serveur, manutention, coaching
+sportif). Deux lacunes réelles dans `_extract_rome_codes`, distinctes du travail déjà fait en
+PR #213 : (1) le prompt système interdisait la confusion secteur/métier mais ne disait rien sur
+la priorisation quand plusieurs métiers réellement exercés cohabitent dans le même CV — serveur/
+manutention/coaching sont de vrais métiers exercés, la règle existante ne les exclut donc pas ;
+(2) la fonction ne recevait jamais `UserProfile.candidate_description` (l'intention déclarée sur
+la plateforme), déjà utilisée ailleurs (`_analyze_cv_quality`, l'embedding d'intention côté
+matching) mais jamais pour guider l'extraction ROME elle-même.
+
+### Ce qui a été fait
+
+`ROME_EXTRACTION_SYSTEM_PROMPT` : nouvelle règle de priorisation — un objectif de poste explicite
+(intitulé en tête de CV ou intention transmise séparément) l'emporte sur des expériences annexes
+disjointes ; un job alimentaire/saisonnier sans lien avec la direction de carrière ne doit plus
+être représenté à égalité avec l'objectif réel. `_extract_rome_codes` accepte désormais
+`candidate_description: str | None = None` et l'ajoute au message utilisateur quand elle est non
+vide (même garde que `_build_intent_text`/`intent_text` ailleurs dans ce fichier).
+
+`_merge_rome_codes` corrigé d'une limite documentée deux fois auparavant (JOURNAL, PR #213, fix
+du shallow copy) : elle ne faisait qu'ajouter, jamais retirer un code devenu obsolète pour un
+`cv_id` donné. Elle réconcilie maintenant — retire ce `cv_id` de tout code que l'extraction
+fraîche ne produit plus, purge le code entièrement si sa liste de `cv_ids` devient vide — sur le
+modèle de l'idiome déjà utilisé par `routers/cv.py::_remove_cv_from_rome_codes` à la suppression
+d'un CV.
+
+Nouvelle colonne `cvs.rome_analyzed_at` (migration `031_add_rome_reanalysis_tracking.py`),
+stampée par la nouvelle fonction `_mark_rome_analyzed` (calquée sur `_set_cv_status`) chaque fois
+qu'une extraction ROME complète — chemin d'upload normal et nouveau chemin de retry. Nouvelle
+colonne `user_profiles.description_updated_at`, stampée dans `routers/profile.py::put_profile`
+uniquement quand `candidate_description` change réellement (pas sur un PUT qui ne touche que
+`experience_level`, ni sur une valeur identique) — distincte de `updated_at`, que
+`_merge_rome_codes` touche aussi sur chaque analyse CV et qui est donc inutilisable comme signal
+de "la description a-t-elle changé".
+
+Gestion du changement d'intention après coup : bouton de ré-analyse manuel par CV plutôt qu'une
+ré-analyse automatique en masse (coût de contrôle, transparence) ou un statu quo silencieux.
+`GET /cv/` expose `rome_reanalysis_available` (calculé depuis `profile.description_updated_at` vs
+`cv.rome_analyzed_at`, `profile` déjà chargé pour `zone_condition` — pas de requête
+supplémentaire). Nouvel endpoint `POST /cv/{id}/rome/retry`, sur le modèle de
+`POST /cv/{id}/analysis/retry`, qui publie `{"cv_id": ..., "retry_rome_only": True}` sur
+`cv-analysis`. Nouvelle branche `main()` + fonction `_handle_retry_rome_only` (sur le modèle de
+`_handle_retry_quality_only`, refactorée en PR #215) : ré-extrait les codes ROME avec l'intention
+courante, réconcilie, stampe `rome_analyzed_at`, puis redispatche `start-matching` (trigger
+`cv_analysis_rome_retry`, pour distinguer ce déclencheur en télémétrie) et `offer-fetch-request`
+best-effort sur les codes réellement nouveaux — `_dispatch_start_matching` prend maintenant un
+paramètre `trigger` pour ça. Contrairement au chemin d'upload normal, un échec de ré-extraction
+ne fait pas basculer le CV en `status="error"` : le CV a déjà terminé son analyse initiale avec
+succès, et le repasser en erreur masquerait le CV fonctionnel et ses correspondances existantes
+derrière un état d'erreur au lieu de simplement laisser le bouton disponible pour un nouvel essai.
+
+Frontend : nouveau composant `RomeReanalysisButton.tsx` (bulle d'explication au survol du bouton
+lui-même, demandée explicitement par Vincent — pas un icône "?" séparé comme `InfoTooltip`), sur
+le modèle du bouton de retry de `CvAnalysisCard.tsx`. Rendu dans `CVDetailSection.tsx`,
+conditionné sur `currentCv?.rome_reanalysis_available`, avec un nouveau prop `onRomeReanalyzed`
+branché dans `HomeClient.tsx` sur le même mécanisme de refetch (`libraryRefreshTrigger`) que
+`onMatchSeen` — pas de nouveau mécanisme de rafraîchissement inventé.
+
+### Décisions techniques
+
+Pas de backfill sur la migration : les deux colonnes démarrent à `NULL` pour tous les
+profils/CV existants, ce qui désactive naturellement le bouton pour tout le monde jusqu'au
+premier changement de `candidate_description` après ce déploiement — comportement correct par
+construction.
+
+Pas d'index sur `description_updated_at` ni `rome_analyzed_at` : les deux colonnes ne sont
+jamais lues que comme comparaison sur une ligne déjà chargée par clé primaire (`GET /cv/`, sur
+un profil/CV déjà récupéré pour `zone_condition`) — jamais filtrées ni jointes en SQL — un
+index apporterait un coût d'écriture sans requête à accélérer.
+
+Ripples de test repérés en cours de relecture, au-delà de la liste du prompt d'origine (qui ne
+couvrait que les nouveaux tests) : `TestListCvs` construisait des `CV`/`UserProfile` mockés sans
+`rome_analyzed_at`/`description_updated_at` explicites — deux `MagicMock` par défaut comparés par
+`>` lèvent `TypeError` (`__gt__` renvoie `NotImplemented` des deux côtés), ce qui aurait fait
+planter ces quatre tests existants en 500 dès l'ajout de la comparaison dans `list_cvs`. Corrigé
+en fixant `cv.rome_analyzed_at = None` sur chacun. `TestMainOfferFetchDispatch` ne mockait ni
+`_get_profile_intent` ni `_mark_rome_analyzed`, désormais appelées par `_handle_new_cv_analysis`
+— les trois tests auraient tenté une vraie connexion DB. Et `CVData.rome_reanalysis_available`
+étant un champ obligatoire (pas de `?`), chaque littéral `CVData` existant dans les tests
+frontend (`CVCard.test.tsx`, `CVDetailSection.test.tsx`, `LibrarySection.test.tsx`) devait le
+recevoir pour rester valide au typecheck.
+
+### Tests
+
+Backend : `TestExtractRomeCodes` (présence/absence de l'intention dans le message utilisateur,
+y compris chaîne vide/espaces) ; `TestMergeRomeCodes` (retrait d'un code devenu obsolète pour ce
+`cv_id`, non-retrait quand un autre `cv_id` partage encore le code) ; `TestMarkRomeAnalyzed` ;
+`TestMainRetryRomeOnly` (branche `retry_rome_only` isolée de la branche qualité, trigger
+`cv_analysis_rome_retry` sur `start-matching`, dispatch conditionnel d'`offer-fetch-request`) ;
+`TestListCvsRomeReanalysisAvailable` (les trois cas — pas de profil, `description_updated_at`
+`None`, avant/après `rome_analyzed_at`) ; `TestRetryRomeAnalysis` (dispatch, 404, 500). Profile :
+trois tests sur le stamping conditionnel de `description_updated_at`. Frontend :
+`RomeReanalysisButton.test.tsx` (rendu, tooltip au survol **et** au focus clavier, association
+`aria-describedby`, appel POST, état d'erreur) et deux tests ajoutés à `CVDetailSection.test.tsx`
+(rendu conditionnel, branchement `onRomeReanalyzed`).
+
+**Vérification :** `pytest JobFinder/python` (321/321) ; `npm test` (15 suites, 147 tests) et
+`npx tsc --noEmit` propres côté frontend. Test manuel décisif (CV multi-métiers avec/sans
+intention déclarée, disparition du bouton après ré-analyse réussie) non exécuté dans cette
+session — nécessite l'infra Azure/OpenAI/DB réelle, indisponible ici ; à faire avant merge.
+
+### Limites connues (acceptées, non corrigées dans cette PR)
+
+`_merge_rome_codes` et `_mark_rome_analyzed` (comme, déjà avant cette PR, `_merge_rome_codes` et
+`_set_cv_status`) s'exécutent dans deux transactions/sessions DB séparées — remarque non-bloquante
+de `reviewer-backend`. Un crash exactement entre les deux laisserait `rome_analyzed_at` non
+rafraîchi alors que la fusion des codes a déjà eu lieu, ce qui garderait
+`rome_reanalysis_available` à `True` alors que ce n'est plus nécessaire. Effet borné à un bouton
+qui reste affiché à tort jusqu'au prochain déclenchement réussi — pas de corruption de données, le
+comportement est auto-cicatrisant. Accepté tel quel : c'est un pattern préexistant que cette PR
+étend plutôt qu'elle n'introduit, et unifier les deux écritures dans une seule session toucherait
+aussi le chemin d'upload normal — hors périmètre de cette PR.

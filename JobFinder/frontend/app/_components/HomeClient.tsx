@@ -22,8 +22,9 @@ const sectionScrollBehavior = (): ScrollBehavior =>
     : "auto";
 
 export default function HomeClient() {
-  // Bumped on upload, zone save, and marking a match seen — anything that can
-  // change a CV's unseen_count badge in the library.
+  // Bumped on upload, zone save, marking a match seen, and a manual ROME
+  // reanalysis — anything that can change a CV's unseen_count badge or its
+  // rome_reanalysis_available flag in the library.
   const [libraryRefreshTrigger, setLibraryRefreshTrigger] = useState(0);
   const [libraryAccessible, setLibraryAccessible] = useState(false);
   const [optimisticUpload, setOptimisticUpload]   = useState<OptimisticUpload | null>(null);
@@ -119,6 +120,12 @@ export default function HomeClient() {
     setLibraryRefreshTrigger((n) => n + 1);
   }, []);
 
+  // A manual ROME reanalysis just completed — refetch the CV list so
+  // rome_reanalysis_available flips back to false once cvs.rome_analyzed_at updates.
+  const handleRomeReanalyzed = useCallback(() => {
+    setLibraryRefreshTrigger((n) => n + 1);
+  }, []);
+
   return (
     // Below md the swipe/scroll navigation between the full-screen sections
     // is disabled (overflow-hidden): moving around goes through the pinned
@@ -155,6 +162,7 @@ export default function HomeClient() {
           onClose={handleCloseDetail}
           zoneVersion={zoneVersion}
           onMatchSeen={handleMatchSeen}
+          onRomeReanalyzed={handleRomeReanalyzed}
         />
       )}
     </main>

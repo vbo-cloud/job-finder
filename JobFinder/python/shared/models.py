@@ -121,6 +121,10 @@ class CV(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    # Set by cv_analysis whenever ROME extraction completes (upload or manual reanalyze).
+    # Compared against UserProfile.description_updated_at to decide whether GET /cv/ should
+    # advertise a reanalysis as available.
+    rome_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     matches: Mapped[list["Match"]] = relationship("Match", back_populates="cv")
     analysis: Mapped["CvAnalysis | None"] = relationship(
@@ -182,6 +186,12 @@ class UserProfile(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    # Set only in PUT /profile when candidate_description itself changes — distinct from
+    # updated_at above, which _merge_rome_codes also touches on every CV analysis and is
+    # therefore unusable to detect "did the candidate's stated intent change".
+    description_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 

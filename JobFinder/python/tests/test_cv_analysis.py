@@ -28,6 +28,7 @@ _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 _extract_rome_codes = _mod._extract_rome_codes
 _get_cv_text = _mod._get_cv_text
 _set_cv_status = _mod._set_cv_status
+_mark_rome_analyzed = _mod._mark_rome_analyzed
 _merge_rome_codes = _mod._merge_rome_codes
 _get_profile_intent = _mod._get_profile_intent
 _analyze_cv_quality = _mod._analyze_cv_quality
@@ -164,6 +165,31 @@ class TestExtractRomeCodes:
         assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
         assert kwargs["seed"] == _mod.ANALYSIS_SEED
 
+    def test_includes_candidate_description_in_user_message_when_provided(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text", "Recherche un poste de développeur")
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Recherche un poste de développeur" in user_message
+
+    @pytest.mark.parametrize("candidate_description", [None, "", "   "])
+    def test_omits_candidate_description_when_none_or_blank(self, mocker, candidate_description):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text", candidate_description)
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Intention de recherche" not in user_message
+
 
 # ---------------------------------------------------------------------------
 # _get_cv_text
@@ -223,6 +249,30 @@ class TestSetCvStatus:
 
         with pytest.raises(SQLAlchemyError):
             _set_cv_status("cv-uuid-1", "error")
+
+
+# ---------------------------------------------------------------------------
+# _mark_rome_analyzed
+# ---------------------------------------------------------------------------
+
+
+class TestMarkRomeAnalyzed:
+    def test_calls_execute_and_commit(self, mocker):
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _mark_rome_analyzed("cv-uuid-1")
+
+        mock_session.execute.assert_called_once()
+        mock_session.commit.assert_called_once()
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _mark_rome_analyzed("cv-uuid-1")
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +394,45 @@ class TestMergeRomeCodes:
         # write (the bug this fix addresses). With a real copy.deepcopy, original_m1805
         # must stay exactly as it was before the call.
         assert original_m1805["cv_ids"] == ["cv-uuid-1"]
+
+    def test_removes_cv_id_from_codes_no_longer_produced(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"},
+            "G1803": {"cv_ids": ["cv-uuid-1"], "label": "Service en salle"},
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        assert "G1803" not in mock_profile.rome_codes
+        assert mock_profile.rome_codes["M1805"]["cv_ids"] == ["cv-uuid-1"]
+        assert new_codes == []
+
+    def test_reconciliation_only_removes_this_cv_id_not_a_shared_codes_entry(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"},
+            "G1803": {"cv_ids": ["cv-uuid-1", "cv-uuid-2"], "label": "Service en salle"},
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        # G1803 stays — cv-uuid-2 still uses it — but cv-uuid-1's reference is gone.
+        assert mock_profile.rome_codes["G1803"]["cv_ids"] == ["cv-uuid-2"]
 
     def test_raises_value_error_when_profile_not_found(self, mocker):
         mock_session = MagicMock()
@@ -642,6 +731,83 @@ class TestMainRetryQualityOnly:
 
 
 # ---------------------------------------------------------------------------
+# main() — retry_rome_only branch
+# ---------------------------------------------------------------------------
+
+
+class TestMainRetryRomeOnly:
+    def _run_main_with_payload(self, mocker, payload: dict):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "receive_message", _receive_message_cm(payload))
+
+    def test_retry_only_runs_rome_extraction_not_quality(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, "Recherche dev"))
+        mock_extract = mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=[])
+        mock_mark = mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_run_quality = mocker.patch.object(_mod, "_run_quality_analysis")
+        mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        mock_extract.assert_called_once_with("cv text", "Recherche dev")
+        mock_mark.assert_called_once_with("cv-uuid-1")
+        mock_run_quality.assert_not_called()
+
+    def test_retry_only_skips_cleanly_when_cv_deleted(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-missing", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", side_effect=ValueError("not found"))
+        mock_extract = mocker.patch.object(_mod, "_extract_rome_codes")
+
+        _mod.main()  # must not raise
+
+        mock_extract.assert_not_called()
+
+    def test_retry_only_always_dispatches_start_matching_with_rome_retry_trigger(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=[])
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_send = mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        start_matching_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.START_MATCHING_QUEUE
+        ]
+        assert len(start_matching_calls) == 1
+        assert start_matching_calls[0].args[1]["trigger"] == "cv_analysis_rome_retry"
+
+    def test_retry_only_dispatches_offer_fetch_request_only_when_new_codes_present(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=["M1805"])
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_send = mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert len(offer_fetch_calls) == 1
+        assert offer_fetch_calls[0].args[1] == {"trigger": "cv_analysis", "rome_codes": ["M1805"]}
+
+
+# ---------------------------------------------------------------------------
 # main() — offer-fetch-request dispatch on newly-merged ROME codes
 # ---------------------------------------------------------------------------
 
@@ -655,8 +821,10 @@ class TestMainOfferFetchDispatch:
         )
         mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123"))
         mocker.patch.object(_mod, "_set_cv_status")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
         mocker.patch.object(_mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}])
         mocker.patch.object(_mod, "_merge_rome_codes", return_value=merge_return_value)
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
         mocker.patch.object(_mod, "_run_quality_analysis")
         return mocker.patch.object(_mod, "send_message")
 

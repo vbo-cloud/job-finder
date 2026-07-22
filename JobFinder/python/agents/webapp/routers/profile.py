@@ -150,6 +150,14 @@ def put_profile(
     so its change alone must still trigger a rescore even though the
     embedding itself is untouched.
 
+    description_updated_at is stamped only when candidate_description itself
+    changes (not on a PUT that leaves it untouched, nor when the new value
+    equals the old one) — distinct from updated_at, which cv_analysis's
+    _merge_rome_codes also touches on every CV analysis and is therefore
+    unusable as a "did the description change" signal. Compared against
+    CV.rome_analyzed_at by GET /cv/ to decide whether a manual ROME
+    reanalysis is worth offering.
+
     Args:
         body: New profile preferences.
         identity: Authenticated identity claims from the JWT (sub, email, name).
@@ -178,6 +186,7 @@ def put_profile(
 
     intent_embedding = None
     intent_changed = False
+    description_changed = False
     if updated.keys() & _INTENT_FIELDS:
         # A partial PUT (e.g. experience_level only) must not drop the other
         # field from the embedding — fall back to the existing row for any
@@ -201,6 +210,7 @@ def put_profile(
                 embedded = embed([intent_text])
                 intent_embedding = embedded[0] if embedded else None
             updated["intent_embedding"] = intent_embedding
+            updated["description_updated_at"] = now
 
     if "commune_codes" in updated and updated["commune_codes"] is None:
         # commune_codes is NOT NULL in the DB — a null-clear over the wire
@@ -216,6 +226,7 @@ def put_profile(
         "experience_level": updated.get("experience_level"),
         "candidate_description": updated.get("candidate_description"),
         "intent_embedding": intent_embedding,
+        "description_updated_at": now if description_changed else None,
     }
 
     try:

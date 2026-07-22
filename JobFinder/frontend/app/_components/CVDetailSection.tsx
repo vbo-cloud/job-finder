@@ -7,6 +7,7 @@ import type { CVData, CVMatchesOut } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import CorrespondancesPanel from "./CorrespondancesPanel";
 import CvAnalysisCard from "./CvAnalysisCard";
+import RomeReanalysisButton from "./RomeReanalysisButton";
 
 // Bornes du redimensionnement manuel de la zone d'analyse (drag sur le bandeau).
 const ANALYSIS_MIN_HEIGHT_PX = 140;
@@ -27,10 +28,14 @@ interface Props {
   /** Called whenever a match is marked seen, so the parent can refresh the
    * library's unseen_count badge for this CV. */
   onMatchSeen?: () => void;
+  /** Called after a successful manual ROME reanalysis, so the parent can refetch
+   * the CV list — rome_reanalysis_available flips back to false once
+   * cvs.rome_analyzed_at catches up with the profile's description_updated_at. */
+  onRomeReanalyzed?: () => void;
 }
 
 const CVDetailSection = forwardRef<HTMLElement, Props>(
-  ({ cvs, selectedCvId, onCvChange, onClose, zoneVersion, onMatchSeen }, ref) => {
+  ({ cvs, selectedCvId, onCvChange, onClose, zoneVersion, onMatchSeen, onRomeReanalyzed }, ref) => {
     const currentIndex  = cvs.findIndex((cv) => cv.id === selectedCvId);
     const currentCv     = cvs[currentIndex] ?? null;
     const prevCv        = cvs[currentIndex - 1] ?? null;
@@ -276,6 +281,13 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
                 </div>
               )}
             </div>
+
+            {currentCv?.rome_reanalysis_available && (
+              <RomeReanalysisButton
+                cvId={currentCv.id}
+                onReanalyzed={() => onRomeReanalyzed?.()}
+              />
+            )}
           </div>
 
           {/* Right — Vos correspondances, aligné sur le haut du pill */}
