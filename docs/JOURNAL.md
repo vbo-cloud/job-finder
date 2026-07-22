@@ -6952,10 +6952,23 @@ y compris chaîne vide/espaces) ; `TestMergeRomeCodes` (retrait d'un code devenu
 `TestListCvsRomeReanalysisAvailable` (les trois cas — pas de profil, `description_updated_at`
 `None`, avant/après `rome_analyzed_at`) ; `TestRetryRomeAnalysis` (dispatch, 404, 500). Profile :
 trois tests sur le stamping conditionnel de `description_updated_at`. Frontend :
-`RomeReanalysisButton.test.tsx` (rendu, tooltip au survol, appel POST, état d'erreur) et deux
-tests ajoutés à `CVDetailSection.test.tsx` (rendu conditionnel, branchement `onRomeReanalyzed`).
+`RomeReanalysisButton.test.tsx` (rendu, tooltip au survol **et** au focus clavier, association
+`aria-describedby`, appel POST, état d'erreur) et deux tests ajoutés à `CVDetailSection.test.tsx`
+(rendu conditionnel, branchement `onRomeReanalyzed`).
 
-**Vérification :** `pytest JobFinder/python` (321/321) ; `npm test` (15 suites, 145 tests) et
+**Vérification :** `pytest JobFinder/python` (321/321) ; `npm test` (15 suites, 147 tests) et
 `npx tsc --noEmit` propres côté frontend. Test manuel décisif (CV multi-métiers avec/sans
 intention déclarée, disparition du bouton après ré-analyse réussie) non exécuté dans cette
 session — nécessite l'infra Azure/OpenAI/DB réelle, indisponible ici ; à faire avant merge.
+
+### Limites connues (acceptées, non corrigées dans cette PR)
+
+`_merge_rome_codes` et `_mark_rome_analyzed` (comme, déjà avant cette PR, `_merge_rome_codes` et
+`_set_cv_status`) s'exécutent dans deux transactions/sessions DB séparées — remarque non-bloquante
+de `reviewer-backend`. Un crash exactement entre les deux laisserait `rome_analyzed_at` non
+rafraîchi alors que la fusion des codes a déjà eu lieu, ce qui garderait
+`rome_reanalysis_available` à `True` alors que ce n'est plus nécessaire. Effet borné à un bouton
+qui reste affiché à tort jusqu'au prochain déclenchement réussi — pas de corruption de données, le
+comportement est auto-cicatrisant. Accepté tel quel : c'est un pattern préexistant que cette PR
+étend plutôt qu'elle n'introduit, et unifier les deux écritures dans une seule session toucherait
+aussi le chemin d'upload normal — hors périmètre de cette PR.
