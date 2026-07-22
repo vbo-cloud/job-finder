@@ -53,6 +53,10 @@ START_MATCHING_QUEUE = "start-matching"
 # pg_try_advisory_lock() to serialize concurrent fetch cycles — distinct from
 # shared.db.ALEMBIC_MIGRATION_LOCK_ID (847291056), a different coordination point entirely.
 OFFER_FETCH_LOCK_ID = 592034871
+_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE = (
+    "offer_fetch_signals singleton row (singleton_key=1) not found — "
+    "the seed migration row is missing or was deleted"
+)
 
 # Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
 # "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
@@ -370,15 +374,21 @@ def _mark_full_refresh_pending() -> None:
 
     Raises:
         SQLAlchemyError: If the database update fails.
+        ValueError: If the offer_fetch_signals singleton row (singleton_key=1) is missing —
+            an UPDATE with no matching row would otherwise succeed having silently changed
+            nothing, masking the loss of every future scheduled refresh behind contention.
     """
     logger.info("offer_fetch_mark_full_refresh_pending_started")
     try:
         with get_session() as session:
-            session.execute(
+            result = session.execute(
                 update(OfferFetchSignal)
                 .where(OfferFetchSignal.singleton_key == 1)
                 .values(full_refresh_pending=True)
             )
+            if result.rowcount == 0:
+                logger.error("offer_fetch_signal_row_missing", operation="mark_full_refresh_pending")
+                raise ValueError(_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE)
             session.commit()
     except SQLAlchemyError:
         logger.error("offer_fetch_mark_full_refresh_pending_failed", exc_info=True)
@@ -421,10 +431,25 @@ def _drain_pending_signal() -> tuple[bool, list[str]]:
 
     Raises:
         SQLAlchemyError: If a database operation fails.
+        ValueError: If the offer_fetch_signals singleton row (singleton_key=1) is missing.
+            Checked as a separate query because the guarded UPDATE below only matches rows
+            where full_refresh_pending is already true — a 0-row result from that UPDATE is
+            the normal "nothing pending" case, and can't by itself distinguish "row exists,
+            flag false" from "row doesn't exist at all".
     """
     logger.info("offer_fetch_drain_pending_signal_started")
     try:
         with get_session() as session:
+            signal_row_exists = (
+                session.execute(
+                    select(OfferFetchSignal.id).where(OfferFetchSignal.singleton_key == 1)
+                ).first()
+                is not None
+            )
+            if not signal_row_exists:
+                logger.error("offer_fetch_signal_row_missing", operation="drain_pending_signal")
+                raise ValueError(_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE)
+
             full_pending = (
                 session.execute(
                     update(OfferFetchSignal)
@@ -501,6 +526,9 @@ def _handle_fetch_request(payload: dict) -> None:
 
     Raises:
         SQLAlchemyError: If acquiring or releasing the advisory lock fails.
+        ValueError: If the offer_fetch_signals singleton row is missing (see
+            _mark_full_refresh_pending / _drain_pending_signal) — a data-integrity issue
+            serious enough that it must halt the agent rather than fail open silently.
     """
     requested_codes = payload.get("rome_codes")
     logger.info("offer_fetch_lock_acquire_started", requested_codes=requested_codes)

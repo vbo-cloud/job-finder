@@ -258,12 +258,23 @@ class TestDispatchStartMatching:
 class TestMarkFullRefreshPending:
     def test_updates_signal_row_and_commits(self, mocker):
         mock_session = MagicMock()
+        mock_session.execute.return_value.rowcount = 1
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
         _mark_full_refresh_pending()
 
         mock_session.execute.assert_called_once()
         mock_session.commit.assert_called_once()
+
+    def test_raises_value_error_when_signal_row_missing(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.rowcount = 0
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(ValueError, match="singleton row"):
+            _mark_full_refresh_pending()
+
+        mock_session.commit.assert_not_called()
 
 
 class TestMarkRomeCodesPending:
@@ -287,10 +298,12 @@ class TestMarkRomeCodesPending:
 class TestDrainPendingSignal:
     def test_returns_full_pending_true_and_codes_when_both_present(self, mocker):
         mock_session = MagicMock()
+        existence_result = MagicMock()
+        existence_result.first.return_value = MagicMock()  # signal row exists
         update_result = MagicMock()
         update_result.first.return_value = MagicMock()  # a row -- the guarded UPDATE matched
         delete_result = [MagicMock(rome_code="M1502"), MagicMock(rome_code="M1703")]
-        mock_session.execute.side_effect = [update_result, delete_result]
+        mock_session.execute.side_effect = [existence_result, update_result, delete_result]
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
         full_pending, pending_codes = _drain_pending_signal()
@@ -301,15 +314,29 @@ class TestDrainPendingSignal:
 
     def test_returns_false_and_empty_list_when_nothing_pending(self, mocker):
         mock_session = MagicMock()
+        existence_result = MagicMock()
+        existence_result.first.return_value = MagicMock()  # signal row exists
         update_result = MagicMock()
         update_result.first.return_value = None  # no row matched -- nothing was pending
-        mock_session.execute.side_effect = [update_result, []]
+        mock_session.execute.side_effect = [existence_result, update_result, []]
         mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
 
         full_pending, pending_codes = _drain_pending_signal()
 
         assert full_pending is False
         assert pending_codes == []
+
+    def test_raises_value_error_when_signal_row_missing(self, mocker):
+        mock_session = MagicMock()
+        existence_result = MagicMock()
+        existence_result.first.return_value = None  # signal row missing
+        mock_session.execute.return_value = existence_result
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(ValueError, match="singleton row"):
+            _drain_pending_signal()
+
+        mock_session.commit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
