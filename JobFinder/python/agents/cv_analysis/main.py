@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
+from alembic.util.exc import CommandError
 from openai import AzureOpenAI
 from openai import OpenAIError
 from sqlalchemy import select, update
@@ -31,6 +32,7 @@ from shared.telemetry import configure_telemetry
 
 CV_ANALYSIS_QUEUE = "cv-analysis"
 START_MATCHING_QUEUE = "start-matching"
+OFFER_FETCH_REQUEST_QUEUE = "offer-fetch-request"
 
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
 if not AZURE_OPENAI_API_KEY:
@@ -227,7 +229,7 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
 # ==============================================================================
 
 
-def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]) -> None:
+def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]) -> list[str]:
     """Merge extracted ROME codes into the user profile dict with row-level locking.
 
     Each item in rome_items must have "code" and "label" keys. The cv_id is
@@ -251,6 +253,13 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
         cv_id: UUID string of the CV being analysed.
         rome_items: List of dicts with "code" and "label" keys.
 
+    Returns:
+        ROME codes from rome_items that were not already keys of this profile's rome_codes
+        before this call — i.e. genuinely new to this profile, regardless of whether other
+        profiles already use them. Used by main() to trigger an immediate, targeted
+        offer_fetching pass for exactly these codes instead of waiting for the next scheduled
+        refresh — see docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
+
     Raises:
         ValueError: If no UserProfile exists for user_id.
         SQLAlchemyError: On any database error.
@@ -268,11 +277,13 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
                 raise ValueError(f"UserProfile not found for user_id={user_id}")
 
             current: dict = copy.deepcopy(profile.rome_codes or {})
+            new_codes: list[str] = []
             for item in rome_items:
                 code = item["code"]
                 label = item["label"]
                 if code not in current:
                     current[code] = {"cv_ids": [], "label": label}
+                    new_codes.append(code)
                 if cv_id not in current[code]["cv_ids"]:
                     current[code]["cv_ids"].append(cv_id)
                 current[code]["label"] = label
@@ -286,7 +297,8 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
     except SQLAlchemyError:
         logger.error("rome_merge_failed", user_id=user_id, cv_id=cv_id, exc_info=True)
         raise
-    logger.info("rome_merge_done", user_id=user_id, cv_id=cv_id)
+    logger.info("rome_merge_done", user_id=user_id, cv_id=cv_id, new_codes=new_codes)
+    return new_codes
 
 
 # ==============================================================================
@@ -526,6 +538,7 @@ def _upsert_cv_analysis(cv_id: str, status: str, **fields) -> None:
     values = {"status": status, **fields}
     if status in ("done", "error"):
         values["completed_at"] = now
+    logger.info("cv_analysis_upsert_started", cv_id=cv_id, status=status)
     try:
         with get_session() as session:
             session.execute(
@@ -572,6 +585,145 @@ def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
 # ==============================================================================
 
 
+def _handle_retry_quality_only(cv_id: str) -> None:
+    """Handle a retry_quality_only cv-analysis message: re-run quality analysis only.
+
+    Manual retry from GET /cv/{id}/analysis status="error" (see
+    POST /cv/{id}/analysis/retry). Only the quality analysis re-runs — ROME
+    codes already exist on the profile and matching is untouched.
+
+    Args:
+        cv_id: UUID string of the CV to retry.
+    """
+    logger.info("cv_analysis_retry_started", cv_id=cv_id)
+    try:
+        raw_text, user_id = _get_cv_text(cv_id)
+    except ValueError:
+        logger.info("cv_analysis_retry_cv_deleted_skipping", cv_id=cv_id)
+        return
+    _run_quality_analysis(cv_id, user_id, raw_text)
+    logger.info("cv_analysis_retry_completed", cv_id=cv_id)
+
+
+def _dispatch_start_matching(cv_id: str, user_id: str, rome_codes: list[str]) -> None:
+    """Send a start-matching message so the matching agent re-scores existing offers.
+
+    Args:
+        cv_id: UUID string of the analysed CV.
+        user_id: Owner of the CV, for log correlation only.
+        rome_codes: ROME codes extracted for this CV.
+
+    Raises:
+        ServiceBusError: If the send fails — unlike the offer-fetch-request dispatch
+            below, this one must halt the agent so the message redelivers.
+    """
+    try:
+        send_message(
+            START_MATCHING_QUEUE,
+            {
+                "run_date": datetime.now(timezone.utc).date().isoformat(),
+                "rome_codes": rome_codes,
+                "new_offers_count": 0,
+                "embedded_count": 0,
+                "trigger": "cv_analysis",
+            },
+        )
+        logger.info("cv_analysis_start_matching_sent", cv_id=cv_id, user_id=user_id)
+    except ServiceBusError:
+        logger.error("cv_analysis_start_matching_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
+        raise
+
+
+def _dispatch_offer_fetch_request(cv_id: str, user_id: str, new_rome_codes: list[str]) -> None:
+    """Best-effort dispatch of a targeted offer-fetch-request for newly-merged ROME codes.
+
+    No-op if new_rome_codes is empty. Deliberately never re-raised, unlike
+    _dispatch_start_matching: on a cv-analysis message redelivery,
+    _merge_rome_codes would find these codes already merged by the first
+    successful attempt and return new_rome_codes=[] — raising here would
+    trigger a retry that could never re-send this exact message.
+    offer_fetching's next scheduled full refresh covers these codes anyway,
+    regardless of this send's outcome.
+
+    Args:
+        cv_id: UUID string of the analysed CV.
+        user_id: Owner of the CV, for log correlation only.
+        new_rome_codes: ROME codes genuinely new to this profile, as returned
+            by _merge_rome_codes.
+    """
+    if not new_rome_codes:
+        return
+    try:
+        send_message(
+            OFFER_FETCH_REQUEST_QUEUE,
+            {"trigger": "cv_analysis", "rome_codes": new_rome_codes},
+        )
+        logger.info(
+            "cv_analysis_offer_fetch_request_sent",
+            cv_id=cv_id,
+            user_id=user_id,
+            rome_codes=new_rome_codes,
+        )
+    except ServiceBusError:
+        logger.error(
+            "cv_analysis_offer_fetch_request_failed",
+            cv_id=cv_id,
+            user_id=user_id,
+            rome_codes=new_rome_codes,
+            exc_info=True,
+        )
+
+
+def _handle_new_cv_analysis(cv_id: str) -> None:
+    """Handle a new cv-analysis message: extract ROME codes, run quality analysis, dispatch.
+
+    Args:
+        cv_id: UUID string of the CV to analyse.
+
+    Raises:
+        OpenAIError: If the ROME extraction API call fails or exhausts its retries.
+        SQLAlchemyError: If merging ROME codes into the profile fails.
+        ValueError: If ROME extraction finds no valid codes, or no matching
+            UserProfile exists for this CV's owner.
+        ServiceBusError: If the start-matching dispatch fails (see
+            _dispatch_start_matching — the offer-fetch-request dispatch never
+            raises).
+    """
+    logger.info("cv_analysis_started", cv_id=cv_id)
+
+    _set_cv_status(cv_id, "processing")
+
+    try:
+        raw_text, user_id = _get_cv_text(cv_id)
+    except ValueError:
+        # CV was deleted between message enqueue and processing.
+        # Complete the message cleanly — no retry, no dead-letter.
+        logger.info("cv_analysis_cv_deleted_skipping", cv_id=cv_id)
+        return
+
+    try:
+        rome_items = _extract_rome_codes(raw_text)
+        new_rome_codes = _merge_rome_codes(user_id, cv_id, rome_items)
+    except (OpenAIError, SQLAlchemyError, ValueError):
+        # All three must mark the CV as errored before re-raising so the UI
+        # reflects the failure instead of staying stuck in "processing".
+        _set_cv_status(cv_id, "error")
+        raise
+
+    _set_cv_status(cv_id, "done")
+
+    # CV quality analysis — best-effort, never billed, never blocks the
+    # ROME -> matching pipeline. No raise here, unlike the ROME failure
+    # handling above, which must halt the agent (see ADR-018 addendum).
+    _run_quality_analysis(cv_id, user_id, raw_text)
+
+    rome_codes = [item["code"] for item in rome_items]
+    _dispatch_start_matching(cv_id, user_id, rome_codes)
+    _dispatch_offer_fetch_request(cv_id, user_id, new_rome_codes)
+
+    logger.info("cv_analysis_completed", cv_id=cv_id, user_id=user_id, rome_codes=rome_codes)
+
+
 def main() -> None:
     """Consume one cv-analysis message, extract ROME codes, and dispatch start-matching."""
     configure_telemetry("cv-analysis")
@@ -579,7 +731,7 @@ def main() -> None:
 
     try:
         run_migrations()
-    except Exception:  # intentional: Alembic can raise varied errors; any migration failure must halt the agent
+    except (SQLAlchemyError, CommandError):  # matches run_migrations()'s documented Raises
         logger.error("migrations_failed", exc_info=True)
         raise
 
@@ -588,72 +740,10 @@ def main() -> None:
     try:
         with receive_message(CV_ANALYSIS_QUEUE) as payload:
             cv_id = payload["cv_id"]
-
             if payload.get("retry_quality_only", False):
-                # Manual retry from GET /cv/{id}/analysis status="error" (see
-                # POST /cv/{id}/analysis/retry). Only the quality analysis
-                # re-runs — ROME codes already exist and matching is untouched.
-                logger.info("cv_analysis_retry_started", cv_id=cv_id)
-                try:
-                    raw_text, user_id = _get_cv_text(cv_id)
-                except ValueError:
-                    logger.info("cv_analysis_retry_cv_deleted_skipping", cv_id=cv_id)
-                    return
-                _run_quality_analysis(cv_id, user_id, raw_text)
-                logger.info("cv_analysis_retry_completed", cv_id=cv_id)
+                _handle_retry_quality_only(cv_id)
                 return
-
-            logger.info("cv_analysis_started", cv_id=cv_id)
-
-            _set_cv_status(cv_id, "processing")
-
-            try:
-                raw_text, user_id = _get_cv_text(cv_id)
-            except ValueError:
-                # CV was deleted between message enqueue and processing.
-                # Complete the message cleanly — no retry, no dead-letter.
-                logger.info("cv_analysis_cv_deleted_skipping", cv_id=cv_id)
-                return
-
-            try:
-                rome_items = _extract_rome_codes(raw_text)
-                _merge_rome_codes(user_id, cv_id, rome_items)
-            except (OpenAIError, SQLAlchemyError, ValueError):
-                # OpenAIError  — API failure or all ROME extraction retries exhausted.
-                # SQLAlchemyError — DB failure in _merge_rome_codes.
-                # ValueError — _extract_rome_codes found no valid codes after MAX_ATTEMPTS,
-                #              or _merge_rome_codes found no matching UserProfile.
-                # All three must mark the CV as errored before re-raising so the UI
-                # reflects the failure instead of staying stuck in "processing".
-                _set_cv_status(cv_id, "error")
-                raise
-
-            _set_cv_status(cv_id, "done")
-
-            # CV quality analysis — best-effort, never billed, never blocks the
-            # ROME -> matching pipeline. No raise here, unlike the ROME failure
-            # handling above, which must halt the agent (see ADR-018 addendum).
-            _run_quality_analysis(cv_id, user_id, raw_text)
-
-            rome_codes = [item["code"] for item in rome_items]
-            try:
-                send_message(
-                    START_MATCHING_QUEUE,
-                    {
-                        "run_date": datetime.now(timezone.utc).date().isoformat(),
-                        "rome_codes": rome_codes,
-                        "new_offers_count": 0,
-                        "embedded_count": 0,
-                        "trigger": "cv_analysis",
-                    },
-                )
-                logger.info("cv_analysis_start_matching_sent", cv_id=cv_id, user_id=user_id)
-            except ServiceBusError:
-                logger.error("cv_analysis_start_matching_failed", cv_id=cv_id, user_id=user_id, exc_info=True)
-                raise
-
-            logger.info("cv_analysis_completed", cv_id=cv_id, user_id=user_id, rome_codes=rome_codes)
-
+            _handle_new_cv_analysis(cv_id)
     except RuntimeError:
         # receive_message returns without yielding when the queue is empty.
         logger.info("cv_analysis_no_message")

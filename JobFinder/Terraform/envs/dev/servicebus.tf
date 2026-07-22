@@ -9,6 +9,10 @@
 #   match-ready               — job-matching → notification utilisateur
 #   cv-analysis               — POST /cv/upload → agent cv-analysis (codes ROME + qualité du CV)
 #   match-analysis            — job-matching (top N auto) + POST /matches/.../analyze → agent match-analysis
+#   offer-fetch-request       — offer_fetch_scheduler (relais planifié 12h/20h) + agent cv-analysis
+#                              (nouveau code ROME mergé sur un profil) → job-offer-fetching
+#                              (event-driven, voir docs/prompts/prompt-offer-fetching-event-driven-
+#                              and-new-code-fetch.md)
 
 module "servicebus" {
   source = "../../modules/servicebus"
@@ -26,6 +30,7 @@ module "servicebus" {
     "match-ready",
     "cv-analysis",
     "match-analysis",
+    "offer-fetch-request",
   ]
 }
 

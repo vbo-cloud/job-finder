@@ -4,7 +4,18 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped, relationship
 
@@ -48,6 +59,50 @@ class Offer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     matches: Mapped[list["Match"]] = relationship("Match", back_populates="offer")
+
+
+class OfferFetchSignal(Base):
+    """Single-row signal: sole durable contact point between concurrent offer_fetching
+    triggers (see agents/offer_fetching/main.py's advisory-lock-based coordination,
+    docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md). Set true when a
+    scheduled (full active-codes) trigger arrives while another fetch cycle already holds the
+    lock; drained by the running cycle before it releases the lock.
+
+    Standard UUID primary key, per conventions-sql — the single-row guarantee (and every
+    lookup/update) goes through singleton_key = 1 instead, not id. See the migration's
+    docstring (030_add_offer_fetch_coordination.py) for why this table doesn't qualify for
+    conventions-sql's cache/stats-table primary-key exception.
+    """
+
+    __tablename__ = "offer_fetch_signals"
+    __table_args__ = (
+        UniqueConstraint("singleton_key", name="uq_offer_fetch_signals_singleton_key"),
+        CheckConstraint("singleton_key = 1", name="ck_offer_fetch_signals_single_row"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    singleton_key: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    full_refresh_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class OfferFetchPendingCode(Base):
+    """A ROME code requested by a targeted (new-code) fetch trigger that arrived while another
+    offer_fetching cycle already held the coordination lock. Drained (and cleared) by the
+    running cycle before it releases the lock — see OfferFetchSignal.
+
+    Standard UUID primary key, per conventions-sql; deduplication on rome_code (the
+    INSERT ... ON CONFLICT DO NOTHING in _mark_rome_codes_pending) targets
+    uq_offer_fetch_pending_codes_rome_code, not the primary key — same pattern as
+    Offer.id / uq_offers_ft_id. See the migration's docstring for the full rationale.
+    """
+
+    __tablename__ = "offer_fetch_pending_codes"
+    __table_args__ = (UniqueConstraint("rome_code", name="uq_offer_fetch_pending_codes_rome_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rome_code: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class CV(Base):

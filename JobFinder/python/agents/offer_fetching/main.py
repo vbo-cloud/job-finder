@@ -1,11 +1,13 @@
 """Offer fetching agent — fetch, upsert, and embed job offers from France Travail.
 
-Runs as a Container App Job on a timer trigger, meant to actually execute at
-12:00 and 20:00 Europe/Paris local time. Azure Container Apps' schedule trigger
-only supports a UTC cron_expression with no timezone/DST awareness, so
-Terraform fires this job at every UTC hour that could map to a target local
-hour under either CET or CEST (see container_apps.tf) and main() no-ops the
-firings that don't match the current DST state — see _is_scheduled_local_hour.
+Runs as a Container App Job on a queue trigger (offer-fetch-request) — event-driven since
+docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md, this agent no longer
+knows the time of day at all. Two distinct triggers land on the same queue and the same
+consumer: agents/offer_fetch_scheduler's DST-safe 12:00/20:00 Europe/Paris relay (a full
+refresh over every active ROME code), and agents/cv_analysis publishing a targeted request
+with explicit rome_codes when a CV brings at least one new code to a profile. A session-level
+Postgres advisory lock (OFFER_FETCH_LOCK_ID) serializes fetch cycles that used to be
+guaranteed non-overlapping simply by running on a fixed schedule — see _handle_fetch_request.
 
 Fetch + upsert, then embed directly: offers with a NULL embedding (new offers,
 or existing ones invalidated by a more recent ft_updated_at) are embedded on
@@ -28,29 +30,33 @@ Expected environment variables:
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import structlog
 from alembic.util.exc import CommandError
 from azure.servicebus.exceptions import ServiceBusError
-from sqlalchemy import case, literal_column, select, text, update
+from sqlalchemy import case, delete, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import Insert, insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from ft_client import fetch_offers, get_access_token
-from shared.bus import send_message
+from shared.bus import receive_message, send_message
 from shared.config import OFFER_MAX_AGE_DAYS
-from shared.db import get_session, run_migrations
+from shared.db import get_engine, get_session, run_migrations
 from shared.embedder import embed
 from shared.geo import parse_department_from_location, parse_region_from_location
-from shared.models import Offer
+from shared.models import Offer, OfferFetchPendingCode, OfferFetchSignal
 from shared.telemetry import configure_telemetry
 
+OFFER_FETCH_REQUEST_QUEUE = "offer-fetch-request"
 START_MATCHING_QUEUE = "start-matching"
-PARIS_TZ = ZoneInfo("Europe/Paris")
-# Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
-# for job_offer_fetching — see _is_scheduled_local_hour.
-SCHEDULED_LOCAL_HOURS = (12, 20)
+# Arbitrary but fixed 64-bit key: every process must agree on the same value for
+# pg_try_advisory_lock() to serialize concurrent fetch cycles — distinct from
+# shared.db.ALEMBIC_MIGRATION_LOCK_ID (847291056), a different coordination point entirely.
+OFFER_FETCH_LOCK_ID = 592034871
+_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE = (
+    "offer_fetch_signals singleton row (singleton_key=1) not found — "
+    "the seed migration row is missing or was deleted"
+)
 
 # Formats observés sur des payloads France Travail réels : "Expérience exigée de 6 An(s)",
 # "Expérience exigée de 60 Mois", "Débutant accepté", ou "Expérience exigée" sans durée.
@@ -361,52 +367,128 @@ def _fetch_and_upsert_new_offers(rome_codes: list[str]) -> int:
     return total_new
 
 
-def _is_scheduled_local_hour(now_utc: datetime) -> bool:
-    """Check whether now_utc falls on one of this job's intended Europe/Paris run hours.
+def _mark_full_refresh_pending() -> None:
+    """Record that a scheduled (full active-codes) trigger arrived while a cycle was already
+    running, so the running cycle does one more full pass before releasing the lock instead
+    of silently dropping the periodic refresh.
 
-    Azure Container Apps' schedule trigger only supports a UTC cron_expression, with
-    no timezone or DST awareness. Terraform's cron_expression for job_offer_fetching
-    therefore fires at every UTC hour that could map to SCHEDULED_LOCAL_HOURS under
-    either CET (UTC+1) or CEST (UTC+2) — this guard picks out the two firings that are
-    actually correct for the current DST state, so main() can no-op the other two.
-    That keeps the schedule correct across DST transitions without a manual Terraform
-    change twice a year.
-
-    Args:
-        now_utc: Current time, timezone-aware in UTC.
-
-    Returns:
-        True if now_utc's Europe/Paris local hour is one of SCHEDULED_LOCAL_HOURS.
+    Raises:
+        SQLAlchemyError: If the database update fails.
+        ValueError: If the offer_fetch_signals singleton row (singleton_key=1) is missing —
+            an UPDATE with no matching row would otherwise succeed having silently changed
+            nothing, masking the loss of every future scheduled refresh behind contention.
     """
-    return now_utc.astimezone(PARIS_TZ).hour in SCHEDULED_LOCAL_HOURS
-
-
-def main() -> None:
-    """Run the offer-fetch job: fetch, upsert, embed pending offers, and trigger matching.
-
-    No-ops outside SCHEDULED_LOCAL_HOURS in Europe/Paris local time — see
-    _is_scheduled_local_hour.
-    """
-    configure_telemetry("offer-fetching")
-
-    now_utc = datetime.now(timezone.utc)
-    if not _is_scheduled_local_hour(now_utc):
-        logger.info("offer_fetch_skipped_outside_local_window", utc_hour=now_utc.hour)
-        return
-
+    logger.info("offer_fetch_mark_full_refresh_pending_started")
     try:
-        run_migrations()
-    except (SQLAlchemyError, CommandError):  # matches run_migrations()'s documented Raises
-        logger.error("migrations_failed", exc_info=True)
+        with get_session() as session:
+            result = session.execute(
+                update(OfferFetchSignal)
+                .where(OfferFetchSignal.singleton_key == 1)
+                .values(full_refresh_pending=True)
+            )
+            if result.rowcount == 0:
+                logger.error("offer_fetch_signal_row_missing", operation="mark_full_refresh_pending")
+                raise ValueError(_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE)
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("offer_fetch_mark_full_refresh_pending_failed", exc_info=True)
         raise
 
-    rome_codes = _get_active_rome_codes()
 
-    # Empty rome_codes means no profile has one yet (see _get_active_rome_codes) —
-    # skip the OAuth round-trip and the France Travail fetch entirely rather than
-    # fetching nothing with a freshly-obtained token. _embed_pending_offers below
-    # still runs unconditionally: offers already in DB from a prior run must keep
-    # getting embedded regardless of whether this run found anything new to fetch.
+def _mark_rome_codes_pending(rome_codes: list[str]) -> None:
+    """Record ROME codes requested by a targeted trigger that arrived while a cycle was
+    already running, so the running cycle fetches them in one more pass before releasing the
+    lock instead of silently dropping the CV's new code.
+
+    Args:
+        rome_codes: ROME codes to record. No-op if empty.
+
+    Raises:
+        SQLAlchemyError: If the database insert fails.
+    """
+    if not rome_codes:
+        return
+    logger.info("offer_fetch_mark_rome_codes_pending_started", rome_codes=rome_codes)
+    try:
+        with get_session() as session:
+            session.execute(
+                pg_insert(OfferFetchPendingCode)
+                .values([{"rome_code": code} for code in rome_codes])
+                .on_conflict_do_nothing(constraint="uq_offer_fetch_pending_codes_rome_code")
+            )
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("offer_fetch_mark_rome_codes_pending_failed", rome_codes=rome_codes, exc_info=True)
+        raise
+
+
+def _drain_pending_signal() -> tuple[bool, list[str]]:
+    """Atomically read and clear whatever was recorded while the current cycle was running.
+
+    Returns:
+        (full_refresh_needed, pending_rome_codes) — both empty/False means nothing arrived
+        during the cycle that just finished, and the caller can safely release the lock.
+
+    Raises:
+        SQLAlchemyError: If a database operation fails.
+        ValueError: If the offer_fetch_signals singleton row (singleton_key=1) is missing.
+            Checked as a separate query because the guarded UPDATE below only matches rows
+            where full_refresh_pending is already true — a 0-row result from that UPDATE is
+            the normal "nothing pending" case, and can't by itself distinguish "row exists,
+            flag false" from "row doesn't exist at all".
+    """
+    logger.info("offer_fetch_drain_pending_signal_started")
+    try:
+        with get_session() as session:
+            signal_row_exists = (
+                session.execute(
+                    select(OfferFetchSignal.id).where(OfferFetchSignal.singleton_key == 1)
+                ).first()
+                is not None
+            )
+            if not signal_row_exists:
+                logger.error("offer_fetch_signal_row_missing", operation="drain_pending_signal")
+                raise ValueError(_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE)
+
+            full_pending = (
+                session.execute(
+                    update(OfferFetchSignal)
+                    .where(
+                        OfferFetchSignal.singleton_key == 1,
+                        OfferFetchSignal.full_refresh_pending.is_(True),
+                    )
+                    .values(full_refresh_pending=False)
+                    .returning(OfferFetchSignal.id)
+                ).first()
+                is not None
+            )
+            pending_codes = [
+                row.rome_code
+                for row in session.execute(
+                    delete(OfferFetchPendingCode).returning(OfferFetchPendingCode.rome_code)
+                )
+            ]
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("offer_fetch_drain_pending_signal_failed", exc_info=True)
+        raise
+    return full_pending, pending_codes
+
+
+def _run_fetch_cycle(requested_codes: list[str] | None) -> None:
+    """Run one fetch/upsert/embed/dispatch pass.
+
+    Args:
+        requested_codes: Specific ROME codes to fetch (a targeted, new-code-triggered pass),
+            or None to recompute every currently active code (a full, scheduled-trigger pass).
+    """
+    rome_codes = requested_codes if requested_codes is not None else _get_active_rome_codes()
+
+    # Empty rome_codes means no profile has one yet (see _get_active_rome_codes) — skip the
+    # OAuth round-trip and the France Travail fetch entirely rather than fetching nothing with
+    # a freshly-obtained token. _embed_pending_offers below still runs unconditionally: offers
+    # already in DB from a prior run must keep getting embedded regardless of whether this run
+    # found anything new to fetch.
     total_new = _fetch_and_upsert_new_offers(rome_codes) if rome_codes else 0
 
     embedded_count = _embed_pending_offers()
@@ -421,7 +503,94 @@ def main() -> None:
         rome_codes=rome_codes,
         new_offers_count=total_new,
         embedded_count=embedded_count,
+        scope="full" if requested_codes is None else "targeted",
     )
+
+
+def _handle_fetch_request(payload: dict) -> None:
+    """Run (or defer) one fetch cycle for an incoming offer-fetch-request message.
+
+    A session-level Postgres advisory lock serializes fetch cycles — Container Apps Jobs'
+    queue trigger can launch overlapping instances once max_executions is raised above 1 (see
+    docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md), and two concurrent
+    full-batch upserts touching the same ft_id rows in a different lock order can deadlock. A
+    cycle that can't acquire the lock never blocks waiting for it — it records what it needed
+    (_mark_full_refresh_pending / _mark_rome_codes_pending) and returns immediately; the cycle
+    currently holding the lock drains and re-runs for exactly that before releasing it, so
+    nothing is silently dropped under contention.
+
+    Args:
+        payload: Decoded message body. "rome_codes" present and non-empty means a targeted
+            pass for those specific codes (a CV's new code); absent/empty means a full,
+            scheduled-trigger pass over every active code.
+
+    Raises:
+        SQLAlchemyError: If acquiring or releasing the advisory lock fails.
+        ValueError: If the offer_fetch_signals singleton row is missing (see
+            _mark_full_refresh_pending / _drain_pending_signal) — a data-integrity issue
+            serious enough that it must halt the agent rather than fail open silently.
+    """
+    requested_codes = payload.get("rome_codes")
+    logger.info("offer_fetch_lock_acquire_started", requested_codes=requested_codes)
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        try:
+            acquired = conn.execute(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": OFFER_FETCH_LOCK_ID}
+            ).scalar()
+        except SQLAlchemyError:
+            logger.error("offer_fetch_lock_acquire_failed", exc_info=True)
+            raise
+
+        if not acquired:
+            if requested_codes:
+                _mark_rome_codes_pending(requested_codes)
+            else:
+                _mark_full_refresh_pending()
+            logger.info("offer_fetch_deferred_lock_busy", requested_codes=requested_codes)
+            return
+
+        try:
+            _run_fetch_cycle(requested_codes)
+            # Drain anything recorded while this cycle was running, looping until a check
+            # comes back empty — guarantees full coverage even if several triggers piled up.
+            while True:
+                full_pending, pending_codes = _drain_pending_signal()
+                if not full_pending and not pending_codes:
+                    break
+                logger.info(
+                    "offer_fetch_draining_pending",
+                    full_pending=full_pending,
+                    pending_codes=pending_codes,
+                )
+                _run_fetch_cycle(None if full_pending else pending_codes)
+        finally:
+            try:
+                conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": OFFER_FETCH_LOCK_ID})
+            except SQLAlchemyError:
+                logger.error("offer_fetch_lock_release_failed", exc_info=True)
+                raise
+
+
+def main() -> None:
+    """Consume one offer-fetch-request message and run (or defer) a fetch cycle.
+
+    No longer schedule-aware — see agents/offer_fetch_scheduler for the DST-safe 12:00/20:00
+    Europe/Paris relay that used to live in this agent's own main() (_is_scheduled_local_hour).
+    """
+    configure_telemetry("offer-fetching")
+
+    try:
+        run_migrations()
+    except (SQLAlchemyError, CommandError):  # matches run_migrations()'s documented Raises
+        logger.error("migrations_failed", exc_info=True)
+        raise
+
+    try:
+        with receive_message(OFFER_FETCH_REQUEST_QUEUE) as payload:
+            _handle_fetch_request(payload)
+    except RuntimeError:
+        # receive_message returns without yielding when the queue is empty.
+        logger.info("offer_fetch_no_message")
 
 
 if __name__ == "__main__":
