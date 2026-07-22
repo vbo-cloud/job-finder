@@ -33,6 +33,17 @@ describe("RomeReanalysisButton", () => {
     );
   });
 
+  it("shows the explanatory tooltip on keyboard focus, for keyboard-only users", () => {
+    render(<RomeReanalysisButton cvId={CV_ID} onReanalyzed={jest.fn()} />);
+    const button = screen.getByRole("button", { name: "Mettre à jour les métiers détectés" });
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.focus(button);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    fireEvent.blur(button);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("calls the retry endpoint and notifies the parent on success", async () => {
     (apiClient.post as jest.Mock).mockResolvedValue({});
     const onReanalyzed = jest.fn();

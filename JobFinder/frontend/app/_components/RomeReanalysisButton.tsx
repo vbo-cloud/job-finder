@@ -19,7 +19,9 @@ interface Props {
 export default function RomeReanalysisButton({ cvId, onReanalyzed }: Props) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
-  const [hovered, setHovered] = useState(false);
+  // Mouse hover and keyboard focus both reveal the tooltip — a keyboard user
+  // tabbing to the button must get the same explanation a mouse user gets on hover.
+  const [showTooltip, setShowTooltip] = useState(false);
 
   function handleClick() {
     setRetrying(true);
@@ -38,13 +40,19 @@ export default function RomeReanalysisButton({ cvId, onReanalyzed }: Props) {
     <div className="flex flex-col items-start gap-1.5">
       <span
         className="relative inline-flex"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
       >
-        <button onClick={handleClick} disabled={retrying} className={BUTTON_CLASS}>
+        <button
+          onClick={handleClick}
+          onFocus={() => setShowTooltip(true)}
+          onBlur={() => setShowTooltip(false)}
+          disabled={retrying}
+          className={BUTTON_CLASS}
+        >
           {retrying ? "Analyse…" : "Mettre à jour les métiers détectés"}
         </button>
-        {hovered && (
+        {showTooltip && (
           <span
             role="tooltip"
             className="absolute bottom-full left-1/2 z-10 mb-1.5 w-64 -translate-x-1/2 rounded border border-default bg-surface px-2.5 py-1.5 text-xs text-body shadow-lg"

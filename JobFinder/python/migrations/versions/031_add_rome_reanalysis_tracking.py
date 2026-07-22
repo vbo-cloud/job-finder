@@ -16,6 +16,10 @@ No backfill: both columns start at NULL for every existing profile/CV, which nat
 the button for everyone until their first candidate_description change after this deploy —
 correct by construction, nothing to reconstruct.
 
+No index on either column: both are only ever read as a full-row comparison in application code
+(GET /cv/, on a profile/CV row already fetched by primary key) — never filtered or joined on in
+SQL — so an index would carry write cost without a query it speeds up.
+
 Revision ID: 031
 Revises: 030
 Create Date: 2026-07-22
