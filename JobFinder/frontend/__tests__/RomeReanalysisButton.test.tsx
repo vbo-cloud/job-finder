@@ -44,6 +44,16 @@ describe("RomeReanalysisButton", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("associates the visible tooltip to the button via aria-describedby", () => {
+    render(<RomeReanalysisButton cvId={CV_ID} onReanalyzed={jest.fn()} />);
+    const button = screen.getByRole("button", { name: "Mettre à jour les métiers détectés" });
+
+    expect(button).not.toHaveAttribute("aria-describedby");
+    fireEvent.focus(button);
+    const tooltip = screen.getByRole("tooltip");
+    expect(button).toHaveAttribute("aria-describedby", tooltip.id);
+  });
+
   it("calls the retry endpoint and notifies the parent on success", async () => {
     (apiClient.post as jest.Mock).mockResolvedValue({});
     const onReanalyzed = jest.fn();

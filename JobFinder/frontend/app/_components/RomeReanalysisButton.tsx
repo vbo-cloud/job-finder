@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import apiClient from "@/lib/api/client";
 
 const BUTTON_CLASS =
@@ -22,6 +22,7 @@ export default function RomeReanalysisButton({ cvId, onReanalyzed }: Props) {
   // Mouse hover and keyboard focus both reveal the tooltip — a keyboard user
   // tabbing to the button must get the same explanation a mouse user gets on hover.
   const [showTooltip, setShowTooltip] = useState(false);
+  const tooltipId = useId();
 
   function handleClick() {
     setRetrying(true);
@@ -48,12 +49,14 @@ export default function RomeReanalysisButton({ cvId, onReanalyzed }: Props) {
           onFocus={() => setShowTooltip(true)}
           onBlur={() => setShowTooltip(false)}
           disabled={retrying}
+          aria-describedby={showTooltip ? tooltipId : undefined}
           className={BUTTON_CLASS}
         >
           {retrying ? "Analyse…" : "Mettre à jour les métiers détectés"}
         </button>
         {showTooltip && (
           <span
+            id={tooltipId}
             role="tooltip"
             className="absolute bottom-full left-1/2 z-10 mb-1.5 w-64 -translate-x-1/2 rounded border border-default bg-surface px-2.5 py-1.5 text-xs text-body shadow-lg"
           >
