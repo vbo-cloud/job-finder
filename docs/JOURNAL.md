@@ -6822,3 +6822,37 @@ contre un Postgres 16 jetable, jamais par la suite de tests automatisée. Un `te
 authentifié (nécessite le backend state + auth Azure, indisponible dans cette session) reste
 recommandé avant merge pour confirmer que la conversion `job_offer_fetching` de `timer` à
 `queue` ne déclenche pas un destroy/replace plutôt qu'une mise à jour en place.
+
+### Suivi post-review : ligne singleton manquante
+
+Question posée par l'utilisateur après la revue initiale : que se passe-t-il si la ligne unique
+d'`offer_fetch_signals` (`singleton_key=1`, seedée une fois par la migration) disparaît hors
+bande ? Réponse : un `UPDATE ... WHERE singleton_key = 1` sur une ligne absente ne lève aucune
+erreur SQL — il touche simplement 0 ligne et "réussit" silencieusement. `_mark_full_refresh_pending`
+aurait donc perdu un refresh planifié sans aucun signal ; `_drain_pending_signal` ne pouvait déjà
+pas distinguer "rien en attente" (0 ligne touchée par l'`UPDATE` gardé, cas normal) de "ligne
+disparue" (même symptôme).
+
+Corrigé : `_mark_full_refresh_pending` vérifie désormais `result.rowcount == 0` sur son `UPDATE`
+inconditionnel (sans ambiguïté possible) et lève `ValueError` avant tout `commit` si la ligne
+manque. `_drain_pending_signal`, dont l'`UPDATE` est conditionné sur `full_refresh_pending = true`
+et ne peut donc pas servir de test d'existence, fait d'abord une requête d'existence séparée
+(`SELECT ... WHERE singleton_key = 1`) et lève la même erreur le cas échéant, avant tout
+`UPDATE`/`DELETE`. Message d'erreur factorisé dans une constante module
+`_OFFER_FETCH_SIGNAL_ROW_MISSING_MESSAGE` (remarque non-bloquante de `reviewer-backend` — le
+message était dupliqué mot pour mot entre les deux fonctions). `_handle_fetch_request`'s
+docstring mise à jour pour documenter que ce `ValueError` peut désormais la traverser.
+
+`reviewer-backend` a vérifié que `ValueError` n'est jamais catché par le `except SQLAlchemyError`
+englobant (remonte donc bien à travers `get_session()`, qui rollback puis relance), et que le
+`finally` de `_handle_fetch_request` relâche toujours le verrou même si l'erreur survient au
+milieu de la boucle de drain. Deux tests ajoutés (`test_raises_value_error_when_signal_row_missing`
+sur chacune des deux fonctions) ; les deux tests existants de `TestDrainPendingSignal` adaptés
+pour la nouvelle requête d'existence en tête (`side_effect` à trois éléments au lieu de deux).
+
+**Vérification :** `pytest JobFinder/python` (297/297, +2 tests) ; `reviewer-backend` APPROUVÉ
+sur ce suivi, aucune remarque non-bloquante restante après la factorisation du message d'erreur.
+Limite acceptée, signalée par le reviewer et non corrigée (hors du scope réaliste du problème) :
+la vérification d'existence et l'`UPDATE` gardé dans `_drain_pending_signal` sont deux requêtes
+séparées sans `FOR UPDATE` — une suppression concurrente de la ligne singleton atterrissant
+exactement entre les deux resterait un angle mort théorique.
