@@ -178,6 +178,7 @@ def put_profile(
 
     intent_embedding = None
     intent_changed = False
+    description_changed = False
     if updated.keys() & _INTENT_FIELDS:
         # A partial PUT (e.g. experience_level only) must not drop the other
         # field from the embedding — fall back to the existing row for any
@@ -201,6 +202,7 @@ def put_profile(
                 embedded = embed([intent_text])
                 intent_embedding = embedded[0] if embedded else None
             updated["intent_embedding"] = intent_embedding
+            updated["description_updated_at"] = now
 
     if "commune_codes" in updated and updated["commune_codes"] is None:
         # commune_codes is NOT NULL in the DB — a null-clear over the wire
@@ -216,6 +218,7 @@ def put_profile(
         "experience_level": updated.get("experience_level"),
         "candidate_description": updated.get("candidate_description"),
         "intent_embedding": intent_embedding,
+        "description_updated_at": now if description_changed else None,
     }
 
     try:

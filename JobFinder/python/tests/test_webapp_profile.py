@@ -382,6 +382,55 @@ class TestPutProfile:
         assert resp.status_code == 200
         mock_send_message.assert_called_once()
 
+    def test_description_change_stamps_description_updated_at(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["description_updated_at"] is not None
+
+    def test_experience_level_alone_does_not_stamp_description_updated_at(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": "2-5"})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "description_updated_at" not in set_clause
+
+    def test_unchanged_description_value_does_not_stamp_description_updated_at(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.candidate_description = "profil autodidacte"
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "description_updated_at" not in set_clause
+
 
 # ---------------------------------------------------------------------------
 # POST /profile/credits/refill

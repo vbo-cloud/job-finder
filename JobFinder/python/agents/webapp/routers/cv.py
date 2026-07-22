@@ -401,6 +401,11 @@ def list_cvs(
             match_count=match_count,
             unseen_count=unseen_count,
             has_thumbnail=cv.thumbnail_url is not None,
+            rome_reanalysis_available=(
+                profile is not None
+                and profile.description_updated_at is not None
+                and (cv.rome_analyzed_at is None or profile.description_updated_at > cv.rome_analyzed_at)
+            ),
         )
         for cv, match_count, unseen_count in rows
     ]
@@ -567,6 +572,48 @@ def retry_cv_analysis(
         logger.info("cv_analysis_retry_dispatched", user_id=user_id, cv_id=str(cv_id))
     except ServiceBusError:
         logger.error("cv_analysis_retry_dispatch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+
+
+@router.post("/{cv_id}/rome/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_rome_analysis(
+    cv_id: uuid.UUID,
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Manually re-trigger ROME code extraction for a CV owned by the authenticated user.
+
+    Free and unlimited, same cost regime as retry_cv_analysis (quality) and the automatic
+    extraction run at upload time. Only ROME extraction re-runs — CV quality analysis is
+    untouched. _merge_rome_codes reconciles rather than only adds, so codes no longer produced
+    by this fresh extraction are removed from the profile, not just supplemented — see
+    docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+
+    Args:
+        cv_id: UUID of the CV.
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+
+    Raises:
+        HTTPException 404: If the CV does not exist or is not owned by the user.
+    """
+    logger.info("cv_rome_retry_requested", user_id=user_id, cv_id=str(cv_id))
+    try:
+        cv = session.execute(
+            select(CV).where(CV.id == cv_id, CV.user_id == user_id)
+        ).scalar_one_or_none()
+    except SQLAlchemyError:
+        logger.error("cv_rome_retry_db_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
+        raise
+
+    if cv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+    # Fire-and-forget — same trade-off as cv_analysis_retry_dispatch_failed above.
+    try:
+        send_message(CV_ANALYSIS_QUEUE, {"cv_id": str(cv_id), "retry_rome_only": True})
+        logger.info("cv_rome_retry_dispatched", user_id=user_id, cv_id=str(cv_id))
+    except ServiceBusError:
+        logger.error("cv_rome_retry_dispatch_failed", user_id=user_id, cv_id=str(cv_id), exc_info=True)
 
 
 @router.get("/{cv_id}/thumbnail", response_class=Response)
