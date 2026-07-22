@@ -125,6 +125,10 @@ class CV(Base):
     # Compared against UserProfile.description_updated_at to decide whether GET /cv/ should
     # advertise a reanalysis as available.
     rome_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set at upload time by the column-aware PDF extraction (routers/cv.py). NULL = not yet
+    # computed (CV uploaded before this feature) — never treated as "1 column". 1 = single
+    # column, 2 = two columns detected (the only multi-column layout this extraction handles).
+    layout_columns_detected: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     matches: Mapped[list["Match"]] = relationship("Match", back_populates="cv")
     analysis: Mapped["CvAnalysis | None"] = relationship(
