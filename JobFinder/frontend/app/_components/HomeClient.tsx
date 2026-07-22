@@ -22,8 +22,9 @@ const sectionScrollBehavior = (): ScrollBehavior =>
     : "auto";
 
 export default function HomeClient() {
-  // Bumped on upload, zone save, and marking a match seen — anything that can
-  // change a CV's unseen_count badge in the library.
+  // Bumped on upload, zone save, marking a match seen, and a manual ROME
+  // reanalysis — anything that can change a CV's unseen_count badge or its
+  // rome_reanalysis_available flag in the library.
   const [libraryRefreshTrigger, setLibraryRefreshTrigger] = useState(0);
   const [libraryAccessible, setLibraryAccessible] = useState(false);
   const [optimisticUpload, setOptimisticUpload]   = useState<OptimisticUpload | null>(null);

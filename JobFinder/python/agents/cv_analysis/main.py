@@ -856,7 +856,14 @@ def _handle_new_cv_analysis(cv_id: str) -> None:
 
 
 def main() -> None:
-    """Consume one cv-analysis message, extract ROME codes, and dispatch start-matching."""
+    """Consume one cv-analysis message and route it to the matching handler.
+
+    Three mutually exclusive branches, keyed on flags in the message payload:
+    retry_quality_only (re-run CV quality analysis only), retry_rome_only
+    (re-run ROME extraction only), or — the default — a full new-CV analysis
+    (ROME extraction, quality analysis, and dispatch of start-matching /
+    offer-fetch-request).
+    """
     configure_telemetry("cv-analysis")
     logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))
 

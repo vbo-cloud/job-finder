@@ -347,6 +347,12 @@ def list_cvs(
     not, that never appear in the matches list actually shown for the
     selected zone.
 
+    rome_reanalysis_available is True when the profile's description_updated_at
+    is more recent than this CV's rome_analyzed_at (or the CV has never been
+    ROME-analyzed at all) — signals the frontend to offer a manual ROME
+    reanalysis button. Computed from the profile already loaded for
+    zone_condition, no extra query.
+
     Args:
         user_id: Authenticated user ID from the JWT sub claim.
         session: Active database session.

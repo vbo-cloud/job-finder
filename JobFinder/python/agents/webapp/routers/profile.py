@@ -150,6 +150,14 @@ def put_profile(
     so its change alone must still trigger a rescore even though the
     embedding itself is untouched.
 
+    description_updated_at is stamped only when candidate_description itself
+    changes (not on a PUT that leaves it untouched, nor when the new value
+    equals the old one) — distinct from updated_at, which cv_analysis's
+    _merge_rome_codes also touches on every CV analysis and is therefore
+    unusable as a "did the description change" signal. Compared against
+    CV.rome_analyzed_at by GET /cv/ to decide whether a manual ROME
+    reanalysis is worth offering.
+
     Args:
         body: New profile preferences.
         identity: Authenticated identity claims from the JWT (sub, email, name).
