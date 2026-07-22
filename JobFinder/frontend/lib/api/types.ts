@@ -8,6 +8,7 @@ export interface CVData {
   match_count: number;
   unseen_count: number;
   has_thumbnail: boolean;
+  rome_reanalysis_available: boolean;
 }
 
 export interface CVUploadResponse {
