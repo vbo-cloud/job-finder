@@ -6930,6 +6930,11 @@ profils/CV existants, ce qui désactive naturellement le bouton pour tout le mon
 premier changement de `candidate_description` après ce déploiement — comportement correct par
 construction.
 
+Pas d'index sur `description_updated_at` ni `rome_analyzed_at` : les deux colonnes ne sont
+jamais lues que comme comparaison sur une ligne déjà chargée par clé primaire (`GET /cv/`, sur
+un profil/CV déjà récupéré pour `zone_condition`) — jamais filtrées ni jointes en SQL — un
+index apporterait un coût d'écriture sans requête à accélérer.
+
 Ripples de test repérés en cours de relecture, au-delà de la liste du prompt d'origine (qui ne
 couvrait que les nouveaux tests) : `TestListCvs` construisait des `CV`/`UserProfile` mockés sans
 `rome_analyzed_at`/`description_updated_at` explicites — deux `MagicMock` par défaut comparés par
