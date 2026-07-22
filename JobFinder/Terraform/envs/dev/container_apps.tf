@@ -383,7 +383,7 @@ module "job_cv_analysis" {
     },
     {
       name  = "AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT"
-      value = "gpt-4o-mini"
+      value = "gpt-5-mini"
     },
     {
       name  = "AZURE_CLIENT_ID"
