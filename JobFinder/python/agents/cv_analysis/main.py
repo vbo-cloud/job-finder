@@ -123,14 +123,39 @@ def _set_cv_status(cv_id: str, status: str) -> None:
         raise
 
 
+def _mark_rome_analyzed(cv_id: str) -> None:
+    """Stamp cvs.rome_analyzed_at after a ROME extraction completes for this CV.
+
+    Compared against UserProfile.description_updated_at by GET /cv/ to decide whether a
+    manual reanalysis is worth offering — see
+    docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+
+    Args:
+        cv_id: UUID of the CV record.
+
+    Raises:
+        SQLAlchemyError: On any database error.
+    """
+    logger.info("cv_rome_analyzed_at_update", cv_id=cv_id)
+    try:
+        with get_session() as session:
+            session.execute(
+                update(CV).where(CV.id == cv_id).values(rome_analyzed_at=datetime.now(timezone.utc))
+            )
+            session.commit()
+    except SQLAlchemyError:
+        logger.error("cv_rome_analyzed_at_update_failed", cv_id=cv_id, exc_info=True)
+        raise
+
+
 # ==============================================================================
 # ROME extraction
 # ==============================================================================
 
 ROME_EXTRACTION_SYSTEM_PROMPT = (
     "Tu es un expert en classification des métiers français selon le référentiel ROME. "
-    "Analyse le CV fourni et retourne UNIQUEMENT un objet JSON valide "
-    'de la forme {"rome_codes": ["M1805", "M1802", ...]} '
+    "Analyse le CV fourni (et l'intention de recherche du candidat si elle est transmise) et "
+    'retourne UNIQUEMENT un objet JSON valide de la forme {"rome_codes": ["M1805", "M1802", ...]} '
     "contenant entre 1 et 5 codes ROME pertinents "
     "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
     "RÈGLE — le code doit refléter le métier ou la fonction réellement exercée par LE "
@@ -140,6 +165,15 @@ ROME_EXTRACTION_SYSTEM_PROMPT = (
     "commercial (codes de la famille vente/administration des ventes), pas un métier "
     "de développeur ou d'administrateur système, même si le CV contient beaucoup de "
     "vocabulaire technique. "
+    "RÈGLE — quand un objectif de poste explicite est identifiable (intitulé de poste "
+    "recherché en tête de CV, ex. \"Développeur Web\", ou intention de recherche transmise "
+    "séparément), privilégie fortement les codes ROME correspondant à cet objectif. Un "
+    "candidat qui a exercé plusieurs métiers clairement distincts au fil de son parcours "
+    "(ex. un job alimentaire ou saisonnier sans lien avec sa direction de carrière, en plus "
+    "de son métier ou de sa formation principale) ne doit pas voir ces expériences annexes "
+    "représentées à égalité avec son objectif réel — ne retourne un code pour une expérience "
+    "annexe que si rien d'autre dans le CV ou l'intention transmise n'indique une direction de "
+    "carrière plus cohérente. "
     "RÈGLE — ne complète jamais la liste avec un code supplémentaire seulement pour "
     "atteindre un nombre minimal : un CV clairement mono-métier peut n'avoir qu'un "
     "seul code pertinent. "
@@ -147,7 +181,7 @@ ROME_EXTRACTION_SYSTEM_PROMPT = (
 )
 
 
-def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
+def _extract_rome_codes(raw_text: str, candidate_description: str | None = None) -> list[dict[str, str]]:
     """Extract ROME occupation codes from CV text using GPT-4o-mini.
 
     GPT-4o-mini identifies candidate codes only — no labels. Each code is
@@ -165,11 +199,22 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
       occupation of people mentioned in the CV — and no longer pads the result
       to a 3-code floor when the CV is genuinely mono-occupation.
 
+    A third invariant, added when a CV mixing a declared developer objective with
+    disjoint food-service/handling/coaching jobs diluted the extraction with a
+    code per job actually held: candidate_description (the intention declared on
+    the platform, distinct from what the CV text itself says) is passed to the
+    model when available, and the system prompt tells it to prioritize the
+    declared objective over annex experiences — see
+    docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
 
     Args:
         raw_text: Plain text content of the CV.
+        candidate_description: The candidate's declared search intent
+            (UserProfile.candidate_description), if any. Blank or whitespace-only
+            values are treated the same as None.
 
     Returns:
         A list of 1–5 dicts, each with "code" and "label" keys,
@@ -179,6 +224,13 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
         OpenAIError: If the API call fails.
         ValueError: If all retry attempts fail to produce valid ROME codes.
     """
+    user_content = f"CV :\n\n{raw_text[:8000]}"
+    if candidate_description and candidate_description.strip():
+        user_content += (
+            f"\n\nIntention de recherche déclarée par le candidat : "
+            f"{candidate_description.strip()}"
+        )
+
     last_error: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -192,7 +244,7 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
                     {"role": "system", "content": ROME_EXTRACTION_SYSTEM_PROMPT},
                     {
                         "role": "user",
-                        "content": f"CV :\n\n{raw_text[:8000]}",
+                        "content": user_content,
                     },
                 ],
             )
@@ -230,14 +282,26 @@ def _extract_rome_codes(raw_text: str) -> list[dict[str, str]]:
 
 
 def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]) -> list[str]:
-    """Merge extracted ROME codes into the user profile dict with row-level locking.
+    """Reconcile this cv_id's ROME codes into the user profile dict with row-level locking.
 
     Each item in rome_items must have "code" and "label" keys. The cv_id is
     appended to the code's cv_ids list if not already present. The label is
-    always updated to the latest value from the ROME referential.
+    always updated to the latest value from the ROME referential. Codes
+    previously associated with this cv_id that this extraction no longer
+    produces are also removed (see the reconciliation note below) — this is
+    not purely additive.
 
     Uses SELECT ... FOR UPDATE to prevent concurrent analyses from overwriting
     each other's data.
+
+    Reconciliation, not pure addition: documented twice before (JOURNAL, PR #213,
+    the shallow-copy fix) and only now actually fixed — a re-extraction that
+    drops a code for this cv_id (e.g. the intent-aware prioritization above, or
+    a manual retry_rome_only) must remove that code's reference to this cv_id,
+    otherwise the profile keeps an obsolete code forever, additive-only merges
+    never being able to retract anything. Mirrors the cleanup idiom already used
+    by routers/cv.py::_remove_cv_from_rome_codes at CV deletion: drop this cv_id
+    from a code's cv_ids, and drop the code entirely once its cv_ids is empty.
 
     Important: `profile.rome_codes` is a JSONB column mutated in place. A plain
     shallow copy (`dict(profile.rome_codes)`) is not enough — the nested
@@ -277,7 +341,17 @@ def _merge_rome_codes(user_id: str, cv_id: str, rome_items: list[dict[str, str]]
                 raise ValueError(f"UserProfile not found for user_id={user_id}")
 
             current: dict = copy.deepcopy(profile.rome_codes or {})
+            fresh_codes = {item["code"] for item in rome_items}
             new_codes: list[str] = []
+
+            # Reconcile first: drop this cv_id from any code this extraction no
+            # longer produces, purging the code entirely once its cv_ids is empty.
+            for code in list(current.keys()):
+                if code not in fresh_codes:
+                    current[code]["cv_ids"] = [cid for cid in current[code]["cv_ids"] if cid != cv_id]
+                    if not current[code]["cv_ids"]:
+                        del current[code]
+
             for item in rome_items:
                 code = item["code"]
                 label = item["label"]
@@ -605,13 +679,68 @@ def _handle_retry_quality_only(cv_id: str) -> None:
     logger.info("cv_analysis_retry_completed", cv_id=cv_id)
 
 
-def _dispatch_start_matching(cv_id: str, user_id: str, rome_codes: list[str]) -> None:
+def _handle_retry_rome_only(cv_id: str) -> None:
+    """Handle a retry_rome_only cv-analysis message: re-run ROME extraction only.
+
+    Manual retry from POST /cv/{id}/rome/retry, offered when the profile's
+    candidate_description has changed more recently than this CV's last ROME
+    extraction. Only ROME extraction re-runs — CV quality analysis is untouched.
+    _merge_rome_codes reconciles rather than only adds, so codes no longer
+    produced by this fresh extraction are removed from the profile, not just
+    supplemented. See docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+
+    Unlike _handle_new_cv_analysis, a ROME extraction failure here does not flip
+    the CV to status="error": the CV already completed its initial analysis
+    successfully, and downgrading it to "error" over a reanalysis hiccup would
+    hide the working CV and its existing matches behind an error state instead
+    of simply leaving the manual retry button available for another attempt.
+
+    Args:
+        cv_id: UUID string of the CV to retry.
+
+    Raises:
+        OpenAIError: If the ROME extraction API call fails or exhausts its retries.
+        SQLAlchemyError: If merging ROME codes into the profile fails.
+        ValueError: If ROME extraction finds no valid codes.
+        ServiceBusError: If the start-matching dispatch fails (see
+            _dispatch_start_matching — the offer-fetch-request dispatch never
+            raises).
+    """
+    logger.info("cv_analysis_rome_retry_started", cv_id=cv_id)
+    try:
+        raw_text, user_id = _get_cv_text(cv_id)
+    except ValueError:
+        logger.info("cv_analysis_rome_retry_cv_deleted_skipping", cv_id=cv_id)
+        return
+
+    try:
+        _, candidate_description = _get_profile_intent(user_id)
+        rome_items = _extract_rome_codes(raw_text, candidate_description)
+        new_rome_codes = _merge_rome_codes(user_id, cv_id, rome_items)
+        _mark_rome_analyzed(cv_id)
+    except (OpenAIError, SQLAlchemyError, ValueError):
+        logger.error("cv_analysis_rome_retry_failed", cv_id=cv_id, exc_info=True)
+        raise
+
+    rome_codes = [item["code"] for item in rome_items]
+    _dispatch_start_matching(cv_id, user_id, rome_codes, trigger="cv_analysis_rome_retry")
+    _dispatch_offer_fetch_request(cv_id, user_id, new_rome_codes)
+
+    logger.info("cv_analysis_rome_retry_completed", cv_id=cv_id, rome_codes=rome_codes)
+
+
+def _dispatch_start_matching(
+    cv_id: str, user_id: str, rome_codes: list[str], trigger: str = "cv_analysis"
+) -> None:
     """Send a start-matching message so the matching agent re-scores existing offers.
 
     Args:
         cv_id: UUID string of the analysed CV.
         user_id: Owner of the CV, for log correlation only.
         rome_codes: ROME codes extracted for this CV.
+        trigger: Value stamped on the message's "trigger" field — distinguishes
+            the normal upload path ("cv_analysis") from a manual ROME-only retry
+            ("cv_analysis_rome_retry") in downstream telemetry.
 
     Raises:
         ServiceBusError: If the send fails — unlike the offer-fetch-request dispatch
@@ -625,7 +754,7 @@ def _dispatch_start_matching(cv_id: str, user_id: str, rome_codes: list[str]) ->
                 "rome_codes": rome_codes,
                 "new_offers_count": 0,
                 "embedded_count": 0,
-                "trigger": "cv_analysis",
+                "trigger": trigger,
             },
         )
         logger.info("cv_analysis_start_matching_sent", cv_id=cv_id, user_id=user_id)
@@ -702,8 +831,10 @@ def _handle_new_cv_analysis(cv_id: str) -> None:
         return
 
     try:
-        rome_items = _extract_rome_codes(raw_text)
+        _, candidate_description = _get_profile_intent(user_id)
+        rome_items = _extract_rome_codes(raw_text, candidate_description)
         new_rome_codes = _merge_rome_codes(user_id, cv_id, rome_items)
+        _mark_rome_analyzed(cv_id)
     except (OpenAIError, SQLAlchemyError, ValueError):
         # All three must mark the CV as errored before re-raising so the UI
         # reflects the failure instead of staying stuck in "processing".
@@ -742,6 +873,9 @@ def main() -> None:
             cv_id = payload["cv_id"]
             if payload.get("retry_quality_only", False):
                 _handle_retry_quality_only(cv_id)
+                return
+            if payload.get("retry_rome_only", False):
+                _handle_retry_rome_only(cv_id)
                 return
             _handle_new_cv_analysis(cv_id)
     except RuntimeError:
