@@ -139,6 +139,63 @@ describe("CVDetailSection — accordéon d'analyse du CV", () => {
   });
 });
 
+describe("CVDetailSection — état de chargement du matching (bug 3)", () => {
+  // The matches fetch always resolves with an empty list here (see the global
+  // apiClient mock above) — these tests check that an empty list is only ever
+  // rendered as "Aucune offre ne correspond" once currentCv.status says the
+  // back-end has actually finished, not merely once the HTTP request settled.
+  it.each(["pending", "processing", "done"] as const)(
+    "keeps the loading skeleton when currentCv.status is %s, even after the fetch resolves with an empty list",
+    async (status) => {
+      renderSection([{ ...CV, status }]);
+      await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV.id}`));
+
+      expect(
+        document.querySelectorAll(".animate-pulse").length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryByText("Aucune offre ne correspond")).not.toBeInTheDocument();
+    },
+  );
+
+  it('shows "Aucune offre ne correspond" once currentCv.status is "matched" and the list is empty', async () => {
+    renderSection([{ ...CV, status: "matched" }]);
+
+    await waitFor(() => expect(screen.getByText("Aucune offre ne correspond")).toBeInTheDocument());
+    expect(document.querySelectorAll(".animate-pulse").length).toBe(0);
+  });
+
+  it('does not get stuck in the loading state when currentCv.status is "error"', async () => {
+    renderSection([{ ...CV, status: "error" }]);
+
+    await waitFor(() => expect(screen.getByText("Aucune offre ne correspond")).toBeInTheDocument());
+    expect(document.querySelectorAll(".animate-pulse").length).toBe(0);
+  });
+
+  it('clears the skeleton once the parent re-renders with status "matched", without a remount', async () => {
+    // The real parent (HomeClient, fed by LibrarySection's poll — see
+    // LibrarySection's POLL_INTERVAL_MS) re-renders CVDetailSection with a
+    // fresh CVData[] every few seconds while status is in flight; this
+    // simulates that transition via rerender (no key change, no unmount) to
+    // guard against isAnalysisInProgress getting stuck forever if the CV was
+    // still "processing" at initial mount.
+    const { rerender } = renderSection([{ ...CV, status: "processing" }]);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV.id}`));
+    expect(document.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+
+    rerender(
+      <CVDetailSection
+        cvs={[{ ...CV, status: "matched" }]}
+        selectedCvId={CV.id}
+        onCvChange={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Aucune offre ne correspond")).toBeInTheDocument());
+    expect(document.querySelectorAll(".animate-pulse").length).toBe(0);
+  });
+});
+
 describe("CVDetailSection — bouton de ré-analyse ROME", () => {
   it("is not rendered when rome_reanalysis_available is false", async () => {
     renderSection();

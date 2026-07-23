@@ -50,6 +50,13 @@ _MIN_COLUMN_GAP_WIDTH = 14.0
 # a real column break, not just an indented list or bullet block spanning a few lines. Same
 # calibration caveat as above.
 _MIN_GAP_ROW_COVERAGE = 0.6
+# Minimum fraction of text rows that must have actual content on BOTH sides of a candidate gap.
+# Without this, a single-column CV whose lines have very uneven lengths (e.g. short skill-badge
+# lines next to long experience bullets) can have a wide blank margin on one side that no line
+# ever crosses — satisfying _MIN_GAP_ROW_COVERAGE trivially without there being a real second
+# column anywhere on the page. Calibrated as a starting point, not a fixed value — see the
+# diagnostic referenced in _detect_column_gap's docstring.
+_MIN_GAP_BILATERAL_ROWS = 0.3
 
 AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
 if not AZURE_STORAGE_ACCOUNT_URL:
@@ -273,6 +280,30 @@ def _gap_row_coverage(rows: list[list[dict]], gap_left: float, gap_right: float)
     return clean_rows / len(rows)
 
 
+def _gap_has_bilateral_content(rows: list[list[dict]], gap_left: float, gap_right: float) -> bool:
+    """True if enough rows have at least one word strictly left of the gap AND at
+    least one word strictly right of the gap — real two-column evidence, as
+    opposed to a large blank margin that no row happens to cross (which passes
+    _gap_row_coverage trivially without ever containing right-hand content).
+
+    Args:
+        rows: Rows as returned by _group_words_into_rows.
+        gap_left: Left edge of the candidate gap band.
+        gap_right: Right edge of the candidate gap band.
+
+    Returns:
+        Whether at least _MIN_GAP_BILATERAL_ROWS of rows have content on both sides.
+    """
+    if not rows:
+        return False
+    bilateral_rows = sum(
+        1
+        for row in rows
+        if any(w["x1"] <= gap_left for w in row) and any(w["x0"] >= gap_right for w in row)
+    )
+    return (bilateral_rows / len(rows)) >= _MIN_GAP_BILATERAL_ROWS
+
+
 def _detect_column_gap(words: list[dict], page_width: float, page_height: float) -> float | None:
     """Detect the x-coordinate of a vertical whitespace band splitting the page into two columns.
 
@@ -286,7 +317,14 @@ def _detect_column_gap(words: list[dict], page_width: float, page_height: float)
       per row (not against total page height), so a header or footer line that happens to span
       the full page width doesn't kill an otherwise-real gap, while an indented bullet list in
       an actually single-column CV (whose indentation only clears a handful of rows, not most of
-      them) does not reach the coverage threshold and is correctly rejected.
+      them) does not reach the coverage threshold and is correctly rejected;
+    - at least _MIN_GAP_BILATERAL_ROWS of the page's text rows have actual content on both sides
+      of the gap. The two conditions above only prove that nothing *crosses* the band — a
+      single-column CV with very uneven line lengths (short skill-badge lines next to long
+      experience bullets) routinely has a wide blank margin on one side that no line ever
+      reaches, which satisfies both of them without there being a second column anywhere on the
+      page. This third condition requires actual right-hand (and left-hand) content, not just
+      an absence of crossings, to tell a real column gutter apart from a one-sided margin.
 
     3+ column layouts and grid/table layouts are out of scope: only the single widest qualifying
     gap is ever considered, so this never attempts to split a page into more than two columns —
@@ -319,6 +357,8 @@ def _detect_column_gap(words: list[dict], page_width: float, page_height: float)
         if width <= _MIN_COLUMN_GAP_WIDTH:
             continue
         if _gap_row_coverage(rows, left, right) < _MIN_GAP_ROW_COVERAGE:
+            continue
+        if not _gap_has_bilateral_content(rows, left, right):
             continue
         if width > best_width:
             best_width = width

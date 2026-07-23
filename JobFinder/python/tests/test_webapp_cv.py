@@ -167,6 +167,55 @@ class TestDetectColumnGap:
 
         assert gap == pytest.approx(175.0)
 
+    def test_rejects_gap_from_uneven_line_lengths_in_single_column_cv(self):
+        # Reproduces the bug-1 false positive: a real mono-column CV where most rows are
+        # short (skill badges, x0=50-200) and a single row is much longer (a banner
+        # sentence, x0=50-490). No row ever crosses the (200, 490) band — 15 of 16 rows
+        # are "clean" for it, comfortably over _MIN_GAP_ROW_COVERAGE — but nothing on the
+        # page has content on BOTH sides of that band: it is a one-sided margin, not a
+        # column gutter. Before _gap_has_bilateral_content this was the widest qualifying
+        # gap and got selected, tearing the banner's text away from the rest of the page.
+        badge_rows = [_word(f"badge{i}", 50, 200, 100.0 + i * 20) for i in range(15)]
+        banner_row = [_word("banner sentence", 50, 490, 500.0)]
+
+        gap = cv_router_module._detect_column_gap(badge_rows + banner_row, 600, 800)
+
+        assert gap is None
+
+
+class TestGapHasBilateralContent:
+    def test_true_when_every_row_has_content_on_both_sides(self):
+        rows = cv_router_module._group_words_into_rows(
+            [_word(f"side{i}", 50, 150, 100.0 + i * 20) for i in range(10)]
+            + [_word(f"main{i}", 200, 500, 100.0 + i * 20) for i in range(10)]
+        )
+
+        assert cv_router_module._gap_has_bilateral_content(rows, 150, 200) is True
+
+    def test_false_when_all_rows_are_on_a_single_side(self):
+        # Same shape as the bug-1 regression: nothing ever reaches past x=200, so no row
+        # has a word with x0 >= 200 — a one-sided margin, not a column gutter.
+        rows = cv_router_module._group_words_into_rows(
+            [_word(f"badge{i}", 50, 200, 100.0 + i * 20) for i in range(15)]
+        )
+
+        assert cv_router_module._gap_has_bilateral_content(rows, 200, 490) is False
+
+    def test_returns_false_for_empty_rows(self):
+        assert cv_router_module._gap_has_bilateral_content([], 100, 200) is False
+
+    def test_respects_the_minimum_bilateral_fraction_threshold(self):
+        # 3 of 10 rows (30%) have content on both sides — exactly at
+        # _MIN_GAP_BILATERAL_ROWS (0.3), which must pass ("at least").
+        bilateral_rows = [
+            [_word(f"left{i}", 50, 100, 100.0 + i * 20), _word(f"right{i}", 300, 350, 100.0 + i * 20)]
+            for i in range(3)
+        ]
+        left_only_rows = [[_word(f"onlyleft{i}", 50, 100, 300.0 + i * 20)] for i in range(7)]
+        rows = bilateral_rows + left_only_rows
+
+        assert cv_router_module._gap_has_bilateral_content(rows, 100, 300) is True
+
 
 class TestExtractPageText:
     def test_falls_back_to_default_extract_text_when_no_words(self):
@@ -228,6 +277,25 @@ class TestExtractPageText:
 
         assert columns == 2
         assert text.count("HEADER") == 1
+
+    def test_falls_back_to_single_column_for_uneven_line_lengths(self):
+        # End-to-end non-regression for the bug-1 fix: same shape as
+        # TestDetectColumnGap.test_rejects_gap_from_uneven_line_lengths_in_single_column_cv,
+        # exercised through _extract_page_text — must fall back to page.extract_text(),
+        # byte-identical, not attempt a bogus two-column split.
+        page = MagicMock()
+        page.width = 600
+        page.height = 800
+        badge_rows = [_word(f"badge{i}", 50, 200, 100.0 + i * 20) for i in range(15)]
+        banner_row = [_word("banner sentence", 50, 490, 500.0)]
+        page.extract_words.return_value = badge_rows + banner_row
+        page.extract_text.return_value = "unchanged single-column text"
+
+        text, columns = cv_router_module._extract_page_text(page)
+
+        assert text == "unchanged single-column text"
+        assert columns == 1
+        page.extract_text.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
