@@ -1,4 +1,4 @@
-"""CV analysis agent — ROME code extraction and CV quality analysis via GPT-4o-mini."""
+"""CV analysis agent — ROME code extraction and CV quality analysis via Azure OpenAI."""
 
 import copy
 import json
@@ -6,7 +6,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -44,8 +44,14 @@ if not AZURE_OPENAI_ENDPOINT:
 
 # Default matches the fixed deployment name used across all environments.
 # A missing env var is safe — the deployment name is not secret and does not vary.
-AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-5-mini")
 MAX_ATTEMPTS = 2
+
+# Azure OpenAI deployments known to reject a pinned temperature/seed outright (400 error)
+# instead of silently ignoring it — confirmed for gpt-5-mini by a direct API error:
+# "'temperature' does not support 0.0 with this model. Only the default (1) value is
+# supported." Enrich this set if a future deployment has the same reasoning-model constraint.
+MODELS_WITHOUT_TEMPERATURE_SEED = frozenset({"gpt-5-mini"})
 
 ROME_CODE_PATTERN = re.compile(r"^[A-Z]\d{4}$")
 
@@ -62,19 +68,37 @@ _openai_client = AzureOpenAI(
     api_version="2024-02-01",
 )
 
+
+def _sampling_kwargs() -> dict[str, float | int]:
+    """Return temperature/seed kwargs for the configured deployment, empty if unsupported.
+
+    See MODELS_WITHOUT_TEMPERATURE_SEED — some Azure OpenAI deployments (e.g. gpt-5-mini) reject
+    a pinned temperature/seed with a 400 error rather than silently ignoring it, so the kwargs
+    must be omitted from the call entirely for those, not passed with a default value.
+
+    Returns:
+        {"temperature": ANALYSIS_TEMPERATURE, "seed": ANALYSIS_SEED}, or {} if
+        AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT is in MODELS_WITHOUT_TEMPERATURE_SEED.
+    """
+    if AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT in MODELS_WITHOUT_TEMPERATURE_SEED:
+        return {}
+    return {"temperature": ANALYSIS_TEMPERATURE, "seed": ANALYSIS_SEED}
+
+
 # ==============================================================================
 # CV fetch
 # ==============================================================================
 
 
-def _get_cv_text(cv_id: str) -> tuple[str, str]:
-    """Fetch raw CV text and owner user_id from the database.
+def _get_cv_text(cv_id: str) -> tuple[str, str, int | None]:
+    """Fetch raw CV text, owner user_id, and detected layout column count from the database.
 
     Args:
         cv_id: UUID of the CV record.
 
     Returns:
-        A tuple of (raw_text, user_id).
+        A tuple of (raw_text, user_id, layout_columns_detected). layout_columns_detected is
+        None for CVs uploaded before column detection existed — see CV.layout_columns_detected.
 
     Raises:
         ValueError: If no CV with the given ID exists.
@@ -84,16 +108,16 @@ def _get_cv_text(cv_id: str) -> tuple[str, str]:
     try:
         with get_session() as session:
             row = session.execute(
-                select(CV.raw_text, CV.user_id).where(CV.id == cv_id)
+                select(CV.raw_text, CV.user_id, CV.layout_columns_detected).where(CV.id == cv_id)
             ).one_or_none()
     except SQLAlchemyError:
         logger.error("cv_fetch_failed", cv_id=cv_id, exc_info=True)
         raise
     if row is None:
         raise ValueError(f"CV {cv_id} not found")
-    raw_text, user_id = row
+    raw_text, user_id, layout_columns_detected = row
     logger.info("cv_fetch_done", cv_id=cv_id, chars=len(raw_text))
-    return raw_text, user_id
+    return raw_text, user_id, layout_columns_detected
 
 
 # ==============================================================================
@@ -152,12 +176,19 @@ def _mark_rome_analyzed(cv_id: str) -> None:
 # ROME extraction
 # ==============================================================================
 
+# The referential is injected into the system prompt (not the user message) so the same prompt
+# text is reused across calls and stays eligible for prompt caching — see date injection below
+# for the counter-example (date goes in the user message precisely because it must vary).
+_ROME_REFERENTIEL_TEXT = "\n".join(f"{code}: {label}" for code, label in ROME_REFERENTIEL.items())
+
 ROME_EXTRACTION_SYSTEM_PROMPT = (
     "Tu es un expert en classification des métiers français selon le référentiel ROME. "
+    "Voici la liste COMPLÈTE des codes ROME valides et leurs libellés :\n\n"
+    f"{_ROME_REFERENTIEL_TEXT}\n\n"
     "Analyse le CV fourni (et l'intention de recherche du candidat si elle est transmise) et "
     'retourne UNIQUEMENT un objet JSON valide de la forme {"rome_codes": ["M1805", "M1802", ...]} '
-    "contenant entre 1 et 5 codes ROME pertinents "
-    "(format : une lettre majuscule suivie de 4 chiffres, ex : M1805). "
+    "contenant entre 1 et 5 codes ROME pertinents, choisis EXCLUSIVEMENT dans la liste ci-dessus "
+    "(ne jamais inventer un code absent de cette liste). "
     "RÈGLE — le code doit refléter le métier ou la fonction réellement exercée par LE "
     "CANDIDAT lui-même, jamais le secteur d'activité, les produits ou outils "
     "vendus/utilisés, ou le métier des personnes ou clients mentionnés dans le CV. "
@@ -177,14 +208,24 @@ ROME_EXTRACTION_SYSTEM_PROMPT = (
     "RÈGLE — ne complète jamais la liste avec un code supplémentaire seulement pour "
     "atteindre un nombre minimal : un CV clairement mono-métier peut n'avoir qu'un "
     "seul code pertinent. "
+    "RÈGLE — niveau de qualification : le ou les codes choisis doivent correspondre au diplôme "
+    "le plus élevé réellement obtenu et au poste réellement occupé par le candidat, jamais à "
+    "une formation entamée puis abandonnée sans diplôme (ex. une seule année de classe "
+    "préparatoire non validée ne justifie jamais un code d'ingénieur), ni à un niveau de "
+    "responsabilité/encadrement supérieur à celui de l'expérience réellement démontrée dans le "
+    "CV (ex. ne retourne pas un code d'architecte, de chef de chantier ou de conducteur de "
+    "travaux pour un dessinateur-projeteur ou technicien sans expérience d'encadrement "
+    "explicitement décrite). Ne retourne un second ou troisième code que si le CV démontre une "
+    "expérience réelle et distincte à ce niveau, jamais par simple proximité de secteur avec le "
+    "code principal. "
     "Ne retourne rien d'autre que le JSON."
 )
 
 
 def _extract_rome_codes(raw_text: str, candidate_description: str | None = None) -> list[dict[str, str]]:
-    """Extract ROME occupation codes from CV text using GPT-4o-mini.
+    """Extract ROME occupation codes from CV text using the configured Azure OpenAI deployment.
 
-    GPT-4o-mini identifies candidate codes only — no labels. Each code is
+    The model identifies candidate codes only — no labels. Each code is
     validated against ROME_REFERENTIEL: codes that fail the regex or are absent
     from the referential are silently rejected (hallucination protection). The
     label is always sourced from the referential, never from GPT output.
@@ -192,8 +233,9 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
     Two invariants, both required after the same CV produced two disjoint code
     sets on consecutive uploads (see docs/prompts/prompt-cv-analysis-rome-code-
     determinism-and-precision.md for the full diagnostic):
-    - Determinism: temperature/seed pinned to ANALYSIS_TEMPERATURE/ANALYSIS_SEED,
-      same as _analyze_cv_quality and match_analysis's _analyze_match.
+    - Determinism: temperature/seed pinned via _sampling_kwargs() (empty for
+      deployments in MODELS_WITHOUT_TEMPERATURE_SEED), same as _analyze_cv_quality
+      and match_analysis's _analyze_match.
     - Precision: the system prompt requires codes to reflect the candidate's own
       occupation, never the sector/products/tools they work with or the
       occupation of people mentioned in the CV — and no longer pads the result
@@ -206,6 +248,17 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
     model when available, and the system prompt tells it to prioritize the
     declared objective over annex experiences — see
     docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+
+    A fourth invariant, added after a real misclassified CV (dessinateur-projeteur
+    BTP scored under computer-science and taxidermist codes) traced back to the
+    model producing a ROME code from free recall over ~1911 possible identifiers:
+    ROME_EXTRACTION_SYSTEM_PROMPT now embeds the full referential so the model
+    selects from a shown list instead of recalling an arbitrary code from memory
+    — see docs/prompts/prompt-cv-analysis-referentiel-model-upgrade-column-
+    parsing.md for the diagnostic that isolated this as the root cause (not text
+    ordering, which was tested and ruled out first). The current date is also
+    passed in the user message (not the system prompt, to keep it cache-eligible)
+    so the model has a real anchor for chronological-coherence judgments.
 
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
@@ -226,8 +279,9 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
     """
     # The 8000-char cap covers only raw_text — candidate_description is appended
     # uncapped below. Negligible in practice (a profile description is at most a
-    # few hundred chars, far under GPT-4o-mini's 128k-token context window).
-    user_content = f"CV :\n\n{raw_text[:8000]}"
+    # few hundred chars, far under the configured deployment's context window).
+    today_str = date.today().isoformat()
+    user_content = f"Date du jour : {today_str}\n\nCV :\n\n{raw_text[:8000]}"
     if candidate_description and candidate_description.strip():
         user_content += (
             f"\n\nIntention de recherche déclarée par le candidat : "
@@ -241,8 +295,7 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
-                temperature=ANALYSIS_TEMPERATURE,
-                seed=ANALYSIS_SEED,
+                **_sampling_kwargs(),
                 messages=[
                     {"role": "system", "content": ROME_EXTRACTION_SYSTEM_PROMPT},
                     {
@@ -447,7 +500,10 @@ critère que tu ne connais pas réellement (ex. "75 = 40 points de structure + 3
 CHECKLIST OBLIGATOIRE — avant de rédiger points_faibles et suggestions, vérifie explicitement chacun
 des quatre angles suivants sur CE CV — ne saute silencieusement aucun d'entre eux :
 1. Cohérence chronologique : les dates de chaque expérience sont-elles dans le bon ordre (début avant
-   fin) ? Y a-t-il des trous ou des chevauchements non expliqués entre deux expériences ?
+   fin) ? Y a-t-il des trous ou des chevauchements non expliqués entre deux expériences ? La date du
+   jour est fournie dans le message utilisateur (ligne "Date du jour") — sers-t'en comme seule
+   référence pour juger si une date du CV est cohérente (passée, actuelle, ou anormalement future),
+   ne te fie jamais à une estimation interne de "aujourd'hui".
 2. Impact et formulation : les réalisations sont-elles quantifiées (résultat mesurable, taille de
    projet, gain de temps) ou seulement décrites en tâches ? Des verbes faibles ou des répétitions de
    formulation entre plusieurs expériences ?
@@ -491,6 +547,15 @@ plutôt que "certaines descriptions sont répétitives"). La synthese doit donne
 lecture méthodique de bout en bout, pas d'un survol — et ne commence jamais par une formule générique
 qui pourrait ouvrir n'importe quelle analyse, du type "Ce CV présente un candidat solide...".
 
+RÈGLE — mise en page à colonnes : si le message utilisateur indique une mise en page à 2 colonnes ou
+plus, le texte du CV qui te parvient a déjà été remis dans un ordre de lecture cohérent — ne déduis
+JAMAIS de désorganisation du contenu, de tâches mal rattachées ou de sections fusionnées à partir de
+cette seule information de mise en page (le texte que tu lis est propre). En revanche, mentionne
+explicitement dans points_faibles ou suggestions le risque que cette mise en page à colonnes soit mal
+interprétée par certains logiciels ATS automatisés lors d'une candidature en ligne, et suggère une
+version à une seule colonne pour ce cas d'usage — c'est un vrai conseil de mise en forme, pas une
+critique du contenu.
+
 Ton : coach bienveillant et constructif, jamais un audit froid. Ne retourne rien d'autre que le JSON.
 """
 
@@ -527,12 +592,24 @@ def _get_profile_intent(user_id: str) -> tuple[str | None, str | None]:
 
 
 def _analyze_cv_quality(
-    raw_text: str, experience_level: str | None, candidate_description: str | None
+    raw_text: str,
+    experience_level: str | None,
+    candidate_description: str | None,
+    columns_detected: int | None,
 ) -> dict:
     """Analyze CV structure, phrasing, ATS-friendliness, and coherence with declared intent.
 
     Retries up to MAX_ATTEMPTS times on JSON parse errors — same policy as
     _extract_rome_codes. OpenAI API errors are not retried.
+
+    columns_detected (CV.layout_columns_detected, threaded through _get_cv_text ->
+    _run_quality_analysis) is required, not optional with a None default: a CV whose PDF had a
+    two-column layout must always surface the ATS-risk note below, and a silently-defaulted None
+    here would mask a break anywhere upstream in that threading instead of surfacing it. See the
+    RÈGLE — mise en page à colonnes block in CV_QUALITY_SYSTEM_PROMPT — this is the mechanism
+    that lets the model warn about the ATS risk of a columnar layout without inventing
+    content-organization defects from what _extract_page_text has already reordered into clean
+    text (see docs/prompts/prompt-cv-analysis-referentiel-model-upgrade-column-parsing.md).
 
     Returns:
         dict with keys ats_score (int, clamped 0-100), synthese (str),
@@ -556,6 +633,13 @@ def _analyze_cv_quality(
         fragments.append(candidate_description.strip())
     intent_text = "\n".join(fragments) if fragments else "Aucune intention renseignée par l'utilisateur."
 
+    today_str = date.today().isoformat()
+    layout_note = (
+        f"Mise en page détectée : {columns_detected} colonnes.\n\n"
+        if columns_detected and columns_detected >= 2
+        else ""
+    )
+
     last_error: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -563,13 +647,13 @@ def _analyze_cv_quality(
             response = _openai_client.chat.completions.create(
                 model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
                 response_format={"type": "json_object"},
-                temperature=ANALYSIS_TEMPERATURE,
-                seed=ANALYSIS_SEED,
+                **_sampling_kwargs(),
                 messages=[
                     {"role": "system", "content": CV_QUALITY_SYSTEM_PROMPT},
                     {
                         "role": "user",
                         "content": (
+                            f"Date du jour : {today_str}\n\n{layout_note}"
                             f"Intention du candidat :\n{intent_text}\n\nCV :\n\n{raw_text[:8000]}"
                         ),
                     },
@@ -629,7 +713,9 @@ def _upsert_cv_analysis(cv_id: str, status: str, **fields) -> None:
         raise
 
 
-def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
+def _run_quality_analysis(
+    cv_id: str, user_id: str, raw_text: str, columns_detected: int | None
+) -> None:
     """Run the CV quality analysis and persist its result — best-effort, never raises.
 
     Shared by the normal upload flow (run right after ROME extraction succeeds)
@@ -642,11 +728,13 @@ def _run_quality_analysis(cv_id: str, user_id: str, raw_text: str) -> None:
         cv_id: UUID string of the CV being analysed.
         user_id: Owner of the CV, used to look up profile intent.
         raw_text: Plain text content of the CV.
+        columns_detected: CV.layout_columns_detected for this cv_id, forwarded to
+            _analyze_cv_quality — see that function's docstring for why this is required.
     """
     try:
         _upsert_cv_analysis(cv_id, "processing")
         experience_level, candidate_description = _get_profile_intent(user_id)
-        result = _analyze_cv_quality(raw_text, experience_level, candidate_description)
+        result = _analyze_cv_quality(raw_text, experience_level, candidate_description, columns_detected)
         _upsert_cv_analysis(cv_id, "done", **result)
         logger.info("cv_quality_analysis_completed", cv_id=cv_id)
     except (OpenAIError, SQLAlchemyError, ValueError, KeyError, TypeError):
@@ -674,11 +762,11 @@ def _handle_retry_quality_only(cv_id: str) -> None:
     """
     logger.info("cv_analysis_retry_started", cv_id=cv_id)
     try:
-        raw_text, user_id = _get_cv_text(cv_id)
+        raw_text, user_id, columns_detected = _get_cv_text(cv_id)
     except ValueError:
         logger.info("cv_analysis_retry_cv_deleted_skipping", cv_id=cv_id)
         return
-    _run_quality_analysis(cv_id, user_id, raw_text)
+    _run_quality_analysis(cv_id, user_id, raw_text, columns_detected)
     logger.info("cv_analysis_retry_completed", cv_id=cv_id)
 
 
@@ -711,7 +799,7 @@ def _handle_retry_rome_only(cv_id: str) -> None:
     """
     logger.info("cv_analysis_rome_retry_started", cv_id=cv_id)
     try:
-        raw_text, user_id = _get_cv_text(cv_id)
+        raw_text, user_id, _ = _get_cv_text(cv_id)
     except ValueError:
         logger.info("cv_analysis_rome_retry_cv_deleted_skipping", cv_id=cv_id)
         return
@@ -826,7 +914,7 @@ def _handle_new_cv_analysis(cv_id: str) -> None:
     _set_cv_status(cv_id, "processing")
 
     try:
-        raw_text, user_id = _get_cv_text(cv_id)
+        raw_text, user_id, columns_detected = _get_cv_text(cv_id)
     except ValueError:
         # CV was deleted between message enqueue and processing.
         # Complete the message cleanly — no retry, no dead-letter.
@@ -849,7 +937,7 @@ def _handle_new_cv_analysis(cv_id: str) -> None:
     # CV quality analysis — best-effort, never billed, never blocks the
     # ROME -> matching pipeline. No raise here, unlike the ROME failure
     # handling above, which must halt the agent (see ADR-018 addendum).
-    _run_quality_analysis(cv_id, user_id, raw_text)
+    _run_quality_analysis(cv_id, user_id, raw_text, columns_detected)
 
     rome_codes = [item["code"] for item in rome_items]
     _dispatch_start_matching(cv_id, user_id, rome_codes)

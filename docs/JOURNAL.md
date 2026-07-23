@@ -6977,3 +6977,160 @@ qui reste affiché à tort jusqu'au prochain déclenchement réussi — pas de c
 comportement est auto-cicatrisant. Accepté tel quel : c'est un pattern préexistant que cette PR
 étend plutôt qu'elle n'introduit, et unifier les deux écritures dans une seule session toucherait
 aussi le chemin d'upload normal — hors périmètre de cette PR.
+
+## PR #217 — fix(cv-analysis): référentiel ROME dans le prompt, extraction PDF par colonnes, gpt-5-mini
+
+**Date :** 2026-07-22
+**Branche :** `feat/cv-analysis-referentiel-model-upgrade-column-parsing` → `dev`
+
+### Contexte
+
+Signalement d'un CV réel (Nicolas Pasqualini, dessinateur-projeteur BTP) classé sous des codes
+ROME informatique (`M1802`/`M1805`), puis, une fois le modèle changé, sous des codes tout aussi
+faux (taxidermiste `B1701`/`B1702`). Diagnostic mené en amont de cette session (voir
+`prompt-cv-analysis-referentiel-model-upgrade-column-parsing.md`, non versionné dans ce repo —
+même convention que les autres `docs/prompts/*.md` déjà référencés dans le code) : l'ordre du
+texte n'était pas la cause (un texte reconstitué à la main donnait des résultats tout aussi faux) ;
+la cause racine était que `_extract_rome_codes` demandait un code ROME de mémoire, sans jamais
+montrer au modèle les ~1911 entrées valides — un pur exercice de rappel fermé sur un espace
+arbitraire. Injecter le référentiel complet dans le prompt système fait retomber `gpt-4o-mini` sur
+`F1104` (le bon code) de façon stable. Cause secondaire distincte : `pdfplumber.extract_text()` ne
+gère pas la mise en page à deux colonnes de ce CV (bandeau latéral + bloc principal), entrelaçant
+les deux blocs dans `raw_text` — corrigé séparément par une extraction consciente des colonnes.
+
+### Ce qui a été fait
+
+**Référentiel dans le prompt ROME.** `ROME_EXTRACTION_SYSTEM_PROMPT` (`agents/cv_analysis/main.py`)
+construit désormais dynamiquement à partir de `ROME_REFERENTIEL` (`code: label` par ligne, ~1911
+entrées) — le référentiel guide maintenant la génération, plus seulement le filtrage anti-
+hallucination a posteriori. Toujours dans le prompt système (pas le message utilisateur), pour
+rester éligible au cache de prompt. Nouvelle RÈGLE — niveau de qualification (n'jamais retourner un
+code d'un niveau de responsabilité supérieur à l'expérience réellement démontrée), en défense en
+profondeur du défaut de sur-génération observé sur `gpt-4o-mini` pendant le diagnostic.
+
+**Date du jour dans les deux prompts.** `_extract_rome_codes` et `_analyze_cv_quality` préfixent
+maintenant leur message utilisateur de `Date du jour : {isoformat}` (jamais le prompt système, même
+rationale de cache) — corrige un bug constaté en diagnostic où l'analyse qualité qualifiait une
+date de 08/2024 de "futuriste" faute d'ancrage réel sur le jour présent.
+
+**Extraction PDF consciente des colonnes** (`agents/webapp/routers/cv.py`). Nouvelles fonctions
+`_group_words_into_rows`, `_words_to_lines`, `_gap_row_coverage`, `_detect_column_gap`,
+`_extract_page_text` : détecte une bande verticale vide séparant deux colonnes (largeur minimale
+`_MIN_COLUMN_GAP_WIDTH=14pt`, couverture minimale `_MIN_GAP_ROW_COVERAGE=0.6` des lignes de texte —
+pas de la hauteur totale de page, pour tolérer un en-tête pleine largeur sans perdre la détection,
+et pour rejeter une simple liste à puces indentée qui ne dégage cette bande que sur une minorité de
+lignes). Repli strict sur `page.extract_text()` (comportement inchangé, byte-identique) dès qu'aucun
+mot n'est trouvé ou qu'aucune bande candidate ne satisfait les deux seuils — cas dominant (CV à une
+seule colonne). `upload_cv` appelle `_extract_page_text` par page, agrège `raw_text` (join `"\n"`,
+inchangé) et le nombre max de colonnes détecté sur le document ; loggé dans
+`cv_upload_text_extracted` (`columns_detected=<n>`) et persisté sur `cvs.layout_columns_detected`
+(migration `032`, `SmallInteger` nullable — `NULL` = non calculé, pas de backfill, même rationale
+que `rome_analyzed_at` en migration `031`). 3+ colonnes / mise en page en grille explicitement hors
+périmètre : repli sur le comportement à une colonne plutôt qu'un résultat faux silencieux.
+
+**Signal colonnes → analyse qualité.** `_get_cv_text` sélectionne désormais aussi
+`CV.layout_columns_detected` (retourne un 3-tuple — tous les appelants mis à jour) et le transmet
+via `_run_quality_analysis` jusqu'à `_analyze_cv_quality`, qui préfixe le message utilisateur de
+`Mise en page détectée : {n} colonnes.` si `n >= 2`. Nouvelle RÈGLE dans
+`CV_QUALITY_SYSTEM_PROMPT` : ce signal ne doit jamais servir à inventer une désorganisation de
+contenu (le texte reçu est déjà remis en ordre de lecture) mais doit être mentionné comme un vrai
+risque ATS dans `points_faibles`/`suggestions` — décision actée avec Vincent en amont : un score
+ATS bas à cause d'une mise en page à colonnes n'est pas injuste en soi (de vrais logiciels ATS
+gèrent mal les CV à colonnes), le problème était seulement que les critiques de contenu générées à
+partir d'un texte désordonné étaient fausses une fois le texte bien extrait.
+
+**Changement de modèle : gpt-4o-mini → gpt-5-mini, avec gestion conditionnelle temperature/seed.**
+`gpt-5-mini` rejette `temperature`/`seed` fixés (`400 Bad Request` direct, confirmé en diagnostic) —
+`MODELS_WITHOUT_TEMPERATURE_SEED` (frozenset) + `_sampling_kwargs()` (nouveau helper,
+`agents/cv_analysis/main.py`) retournent un dict vide pour ces déploiements plutôt que d'envoyer
+`temperature=0.0` et casser l'appel. `AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT` bascule par défaut sur
+`"gpt-5-mini"`. Le déploiement Azure `gpt-5-mini` existait déjà (créé manuellement dans le portail
+par Vincent pour les tests) — importé dans l'état Terraform plutôt que laissé à `apply` pour le
+recréer (`terraform import` exécuté en session, resource address
+`module.openai.azurerm_cognitive_deployment.this["gpt-5-mini"]`, confirmé absent de l'état avant
+import). Nouvelle entrée dans la map `deployments` de `Terraform/envs/dev/openai.tf`
+(`model_version = "2025-08-07"`, `sku_name = "GlobalStandard"`, `capacity_tpm` sur la variable
+partagée `var.openai_capacity_tpm` — pas de quota dédié, confirmé avec Vincent). `container_apps.tf`
+ligne 386 (`AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT`) bascule sur `"gpt-5-mini"` ; ligne 456
+(`AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT`, agent différent) volontairement inchangée.
+
+### Décisions techniques
+
+Le déploiement manuel existant avait `sku.capacity = 100`, pas `1000` (la valeur de
+`var.openai_capacity_tpm`) — `terraform plan` après import montre donc un vrai changement de quota
+(100k → 1M TPM) sur ce déploiement au prochain `apply`, pas seulement une prise en compte passive
+de l'existant. Confirmé volontairement avec Vincent plutôt que découvert silencieusement en CI.
+Vérifié via `az cognitiveservices usage list --location francecentral` : le quota souscription pour
+`OpenAI.GlobalStandard.gpt-5-mini` est de 2000 (2M TPM), usage courant 100 — la hausse à 1000 reste
+largement sous le plafond, pas de risque d'échec d'`apply` par dépassement de quota.
+
+État Terraform et configuration divergent tant que cette PR n'est pas mergée : le `terraform
+import` exécuté en session a déjà ajouté `module.openai.azurerm_cognitive_deployment.this["gpt-5-
+mini"]` à l'état distant partagé, mais seule cette branche déclare la ressource correspondante dans
+`openai.tf`. Un `apply` sur `dev` déclenché par une autre PR avant que #217 ne merge planifierait la
+destruction de ce déploiement (l'état le connaît, la config sur `dev` ne le déclare pas encore) —
+contrainte d'ordre de merge : #217 doit être la prochaine PR appliquée sur `dev` touchant cette
+zone, ou l'import doit être annulé (`terraform state rm`) si cette PR est abandonnée.
+
+`_get_cv_text` retourne désormais `(raw_text, user_id, layout_columns_detected)` — un 3-tuple, pas
+un `None` par défaut sur `columns_detected` dans `_analyze_cv_quality` : un défaut silencieux
+aurait masqué une rupture du fil de transmission (upload → DB → `_get_cv_text` →
+`_run_quality_analysis` → `_analyze_cv_quality`) au lieu de la faire échouer bruyamment à l'appel.
+
+Pas de fixture PDF réelle pour les tests de détection de colonnes : aucune bibliothèque de
+génération PDF n'existe dans ce repo (confirmé par recherche), et le chemin heureux de
+`POST /cv/upload` est déjà explicitement exclu des tests unitaires dans ce fichier de tests (trop
+de mocks simultanés — pdfplumber, `embed()`, blob, `send_message` — testé manuellement en
+intégration à la place). Les fonctions pures (`_detect_column_gap`, `_words_to_lines`,
+`_extract_page_text`) sont testées directement contre des dicts `pdfplumber`-compatibles construits
+à la main. Ces tests valident l'algorithme de séparation/reconstitution contre un schéma de
+coordonnées connu — ils ne prouvent rien sur le fait qu'un vrai PDF à deux colonnes produise des
+coordonnées que les seuils (`_MIN_COLUMN_GAP_WIDTH=14`, `_MIN_GAP_ROW_COVERAGE=0.6`) séparent
+correctement. Ces deux constantes sont documentées comme provisoires dans le code — à recalibrer
+via le champ `columns_detected` loggé, observé sur un échantillon réel après déploiement.
+
+### Tests
+
+`test_cv_analysis.py` : `TestSamplingKwargs` (dict vide vs `{temperature, seed}` selon le
+déploiement configuré) ; `TestRomeExtractionSystemPrompt` (`"F1104:"` présent dans le prompt
+construit, interdiction d'inventer un code) ; date du jour dans le message utilisateur
+(`_extract_rome_codes` et `_analyze_cv_quality`) ; `layout_note` présent seulement si
+`columns_detected >= 2` (paramétré sur `None`/`0`/`1` vs `2`/`3`) ; `TestGetCvText` étendu au
+3-tuple, y compris le cas `layout_columns_detected IS NULL` (CV pré-migration) ;
+`TestRunQualityAnalysis` vérifie explicitement que `columns_detected` est transmis inchangé
+jusqu'à `_analyze_cv_quality` (pas seulement que l'appel a lieu). `tests/conftest.py` fixe
+`AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT=gpt-4o-mini` pour que les assertions de déterminisme
+existantes restent valables sans que chaque test doive patcher la variable — le nouveau défaut du
+module est `gpt-5-mini`, pour lequel `_sampling_kwargs()` renvoie volontairement un dict vide.
+
+`test_webapp_cv.py` : nouvelle section dédiée (`TestGroupWordsIntoRows`, `TestWordsToLines`,
+`TestDetectColumnGap`, `TestExtractPageText`) — non-régression stricte (byte-identique) sur le cas
+à une seule colonne ; rejet d'un faux positif (liste à puces indentée sur une minorité de lignes) ;
+détection correcte sur un vrai cas à deux colonnes avec un en-tête pleine largeur qui ne doit pas
+empêcher la détection ; le mot pleine largeur est assigné à un seul côté sans être perdu ni dupliqué
+(`test_full_width_word_lands_on_one_side_without_being_dropped_or_duplicated`, exerce
+explicitement la branche `straddling` de `_extract_page_text`, pas seulement `_detect_column_gap`).
+
+Migration `032` : `alembic history` confirme la chaîne `031 → 032` sans exécuter d'`upgrade`/
+`downgrade` réel (pas de Postgres local disponible en session — voir Vérification).
+
+**Vérification :** `pytest JobFinder/python` (348/348, suite complète y compris
+`agents/cleanup/tests`, pour couvrir le changement global sur `conftest.py`) ; `terraform fmt
+-check`, `terraform validate`, et un `terraform plan` ciblé confirmant exactement les deux diffs
+attendus (env var du job `cv-analysis`, capacité du déploiement `gpt-5-mini`) sans effet de bord
+sur le reste de l'état. **Non exécuté dans cette session, à faire avant merge** : `alembic upgrade
+head` / `downgrade -1` sur une vraie base (pas de Postgres local ici) ; ré-exécution sur le CV réel
+de Nicolas Pasqualini pour confirmer la convergence stable sur `F1104` ; observation du champ
+`columns_detected` sur un échantillon d'uploads réels variés pour ajuster les seuils si des faux
+positifs apparaissent en production.
+
+### Limites connues (acceptées, non corrigées dans cette PR)
+
+Le référentiel complet (~22-24k tokens) plus le CV (jusqu'à 8000 caractères) sont envoyés à chaque
+appel `_extract_rome_codes` — bien en dessous de toute fenêtre de contexte de déploiement Azure
+OpenAI moderne, mais la fenêtre exacte du déploiement `gpt-5-mini` n'a pas été vérifiée dans cette
+session (pas d'accès à la documentation Azure à jour) ; à confirmer avant merge plutôt qu'affirmée
+sans preuve.
+
+`_MIN_COLUMN_GAP_WIDTH` et `_MIN_GAP_ROW_COVERAGE` sont des valeurs provisoires calibrées contre
+des layouts synthétiques, pas contre de vrais CV à colonnes — voir Décisions techniques.
