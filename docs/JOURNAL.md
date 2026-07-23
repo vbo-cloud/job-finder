@@ -7134,3 +7134,88 @@ sans preuve.
 
 `_MIN_COLUMN_GAP_WIDTH` et `_MIN_GAP_ROW_COVERAGE` sont des valeurs provisoires calibrées contre
 des layouts synthétiques, pas contre de vrais CV à colonnes — voir Décisions techniques.
+
+## PR #218 — fix: trois bugs indépendants post-#217 — colonnes CV, verrou Service Bus, chargement matchs
+
+**Date :** 2026-07-23
+**Branche :** `fix/cv-column-detection-servicebus-lock-loading-feedback` → `dev`
+
+### Contexte
+
+Trois bugs distincts, sans lien de cause entre eux, découverts après le déploiement de #217 (extraction
+PDF par colonnes + gpt-5-mini). Regroupés sur une seule branche parce qu'ils ont été corrigés dans la même
+session, pas parce qu'ils partagent une racine commune — chaque section ci-dessous est un correctif à part
+entière.
+
+### Ce qui a été fait
+
+**Bug 1 — faux positif de colonne sur un CV mono-colonne à lignes inégales**
+(`agents/webapp/routers/cv.py`). Un CV à une seule colonne dont les lignes ont des longueurs très inégales
+(courtes lignes de badges de compétences à côté de longues puces d'expérience) pouvait laisser une marge
+blanche large d'un seul côté qu'aucune ligne ne traverse jamais — `_detect_column_gap` la prenait alors
+pour une véritable gouttière de colonnes, déchirant un mot isolé (bannière pleine largeur) en une fausse
+deuxième colonne. Nouvelle constante `_MIN_GAP_BILATERAL_ROWS = 0.3` et nouvelle fonction
+`_gap_has_bilateral_content()` : exige qu'une fraction minimale des lignes aient du contenu réel des deux
+côtés du gap candidat (pas seulement l'absence de mot qui le traverse, ce que `_gap_row_coverage` vérifiait
+déjà) — troisième condition ajoutée dans la boucle de `_detect_column_gap`, en plus de la largeur minimale
+et de la couverture par ligne existantes. Docstrings de `_detect_column_gap` et des deux constantes mises à
+jour pour documenter ce troisième critère.
+
+**Bug 2 — perte de verrou Service Bus sur un traitement long** (`shared/bus.py`). Aucun renouvellement de
+verrou n'était en place : tout traitement plus lent que le `lock_duration` par défaut de la queue
+(~60s, jamais surchargé) faisait échouer `complete_message`/`abandon_message` avec `MessageLockLostError`
+alors que le travail métier avait déjà été validé (commit DB, etc.) — devenu courant depuis #217 avec
+gpt-5-mini et le référentiel ROME complet injecté dans le prompt de `cv-analysis`. `receive_message()`
+enregistre désormais un `AutoLockRenewer` (nouvelle constante `MAX_LOCK_RENEWAL_DURATION_SECONDS = 900`,
+15 min, généreuse par rapport à la durée réelle observée) sur le message reçu, et ferme le renewer dans un
+bloc `finally`. `MessageLockLostError` est capturée séparément autour de `complete_message` (loggée en
+`warning`, jamais re-levée — le travail a déjà réussi, ce n'est qu'une perte de bookkeeping côté
+accusé-réception) et autour de `abandon_message` dans le chemin d'exception (loggée de la même façon), mais
+l'exception métier d'origine est toujours re-levée dans ce second cas — une vraie erreur de traitement doit
+toujours remonter comme échec de job. Docstring de `receive_message` étendue pour documenter les deux
+chemins de tolérance et le `finally`.
+
+**Bug 3 — état de chargement des matchs découplé du statut réel de traitement du CV**
+(`app/_components/CVDetailSection.tsx`). La liste de correspondances affichait « Aucune offre ne
+correspond » alors que l'analyse/le matching du CV était encore en cours côté serveur, parce que le
+booléen `loading` transmis à `CorrespondancesPanel`/`MatchList` ne reflétait que « la requête HTTP est en
+vol », jamais « le back-end a fini son travail ». Nouveau booléen dérivé `isAnalysisInProgress`
+(`currentCv.status !== "matched" && currentCv.status !== "error"`), combiné par `||` avec
+`loadingMatches` existant avant transmission à `CorrespondancesPanel`. Calculé au rendu (pas dans un effet
+séparé) pour se recalculer à chaque changement de `currentCv.status` sans déclencher le hard reset du
+`useEffect` de fetch des matchs (qui ne réagit qu'à `selectedCvId`/`zoneVersion`, volontairement inchangé).
+
+### Décisions techniques
+
+`_MIN_GAP_BILATERAL_ROWS = 0.3` est, comme `_MIN_COLUMN_GAP_WIDTH` et `_MIN_GAP_ROW_COVERAGE` avant lui, une
+valeur provisoire calibrée contre des layouts synthétiques construits à la main, pas contre un corpus de
+vrais CV — même réserve que celle déjà actée dans #217, à recalibrer via `columns_detected` une fois
+observé en production.
+
+`MAX_LOCK_RENEWAL_DURATION_SECONDS = 900` a été choisie généreuse plutôt qu'ajustée au plus près de la
+durée réelle observée d'un traitement `cv-analysis` : le but explicite est que le verrou ne soit jamais le
+facteur limitant en usage normal, pas d'optimiser la valeur.
+
+**`lib/api/types.ts` n'a volontairement pas été modifié**, alors que le prompt d'origine le demandait.
+`CVStatus` (ligne 1) inclut déjà `"matched"` et `"error"` — c'est bien ce champ que lit
+`isAnalysisInProgress` sur `currentCv.status`. Les deux unions littérales qui ne les incluent pas,
+`CvAnalysisOut.status` (~ligne 62) et `MatchAnalysisOut.status` (~ligne 78), sont un champ différent et
+sans rapport (progression d'une analyse individuelle CV ou paire CV↔offre, pas le statut du CV lui-même) —
+confirmé en relisant `agents/webapp/routers/cv.py` et `agents/matching/main.py` : le back-end n'écrit
+jamais `"matched"` sur ces colonnes, seulement sur `CV.status` (`agents/matching/main.py`, la fonction qui
+fait avancer les CV de `"done"` à `"matched"` une fois qu'au moins un cycle de matching les a considérés).
+Ajouter `"matched"` à ces deux unions inventerait un état inatteignable ; ne pas « corriger » ce fichier
+dans une passe ultérieure sans revérifier ce raisonnement.
+
+**Vérification :** Suite de tests non ré-exécutée dans cette session de revue documentaire (accès limité
+en lecture/écriture de fichiers, pas d'exécution shell). Couverture attendue par les tests déjà présents
+sur la branche : `test_webapp_cv.py` — `TestGapHasBilateralContent` (4 cas : tout bilatéral, tout d'un seul
+côté — régression bug 1 —, rows vides, seuil exact 0.3) et non-régression bout-en-bout dans
+`TestDetectColumnGap`/`TestExtractPageText` (`test_rejects_gap_from_uneven_line_lengths_in_single_column_cv`,
+`test_falls_back_to_single_column_for_uneven_line_lengths`) ; `test_bus.py` — nouvelle classe
+`TestReceiveMessage` (enregistrement de l'`AutoLockRenewer`, complétion + fermeture du renewer au succès,
+tolérance à `MessageLockLostError` sur `complete_message` et sur `abandon_message`, ré-lèvement systématique
+de l'exception métier d'origine, non-enregistrement du renewer quand la queue est vide) ;
+`CVDetailSection.test.tsx` — nouveau describe « état de chargement du matching (bug 3) » (skeleton maintenu
+pour `pending`/`processing`/`done` même liste vide reçue, affichage de l'état vide dès `matched` ou
+`error`, transition sans remount via `rerender`). À ré-exécuter (`pytest`, `jest`) avant merge.
