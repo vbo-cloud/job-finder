@@ -139,6 +139,16 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
         });
     }, [selectedCvId, zoneVersion, currentCv?.match_count]);
 
+    // Whether the back-end still has analysis/matching work in flight for this CV
+    // (pending, processing, or already-analyzed-but-not-yet-matched). A fetch that
+    // resolves with an empty list while this is true is not "0 correspondance" —
+    // matching just hasn't produced results yet, so the loading state must stay on
+    // regardless of loadingMatches. Derived at render, not a separate effect: it
+    // must recompute on every currentCv.status change without triggering the hard
+    // reset above (see prevMatchesKeyRef), which only reacts to selectedCvId/zoneVersion.
+    const isAnalysisInProgress =
+      !!currentCv && currentCv.status !== "matched" && currentCv.status !== "error";
+
     useEffect(() => {
       if (!currentCv?.has_thumbnail) { setThumbnailSrc(null); return; }
       let objectUrl: string | null = null;
@@ -296,7 +306,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
               key={selectedCvId}
               cvId={selectedCvId}
               matches={matches?.matches ?? []}
-              loading={loadingMatches}
+              loading={loadingMatches || isAnalysisInProgress}
               error={matchesError}
               onMatchSeen={onMatchSeen}
             />
