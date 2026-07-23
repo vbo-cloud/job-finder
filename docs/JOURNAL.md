@@ -7219,3 +7219,39 @@ de l'exception métier d'origine, non-enregistrement du renewer quand la queue e
 `CVDetailSection.test.tsx` — nouveau describe « état de chargement du matching (bug 3) » (skeleton maintenu
 pour `pending`/`processing`/`done` même liste vide reçue, affichage de l'état vide dès `matched` ou
 `error`, transition sans remount via `rerender`). À ré-exécuter (`pytest`, `jest`) avant merge.
+
+---
+
+## PR #219 — feat(infra): raise max_executions for cv-analysis and match-analysis jobs
+
+**Date :** 2026-07-23
+**Branche :** `feature/tune-cv-match-analysis-max-executions` → `dev`
+
+### Contexte
+
+Réglage de parallélisme pur, sans lien de cause avec #218 (qui a corrigé un bug de verrou Service Bus sur
+`cv-analysis`, entre autres) — les deux touchent le même job par coïncidence de calendrier, pas par
+dépendance. `job_cv_analysis` et `job_match_analysis` tournaient tous deux avec le défaut du module
+`container_app_job` (`max_executions = 1`, aucun parallélisme). `cv-analysis` est devenu nettement plus
+lent par message depuis #217 (gpt-5-mini + référentiel ROME complet injecté dans le prompt) ; `match-analysis`
+a des caractéristiques de queue qui bénéficient d'un plus grand nombre de réplicas en parallèle.
+
+### Ce qui a été fait
+
+- `envs/dev/container_apps.tf` : `module.job_cv_analysis` → `max_executions = 2`.
+- `envs/dev/container_apps.tf` : `module.job_match_analysis` → `max_executions = 8`.
+
+Aucune autre ligne touchée — changement volontairement minimal et scopé.
+
+### Décisions techniques
+
+`max_executions = 2` pour cv-analysis compense le ralentissement par message observé depuis #217
+(gpt-5-mini + référentiel ROME complet injecté dans le prompt) par un parallélisme modeste — un premier
+palier au-dessus du défaut de 1, pas une valeur recalculée à partir d'une charge cible précise.
+`max_executions = 8` pour match-analysis est plus généreux, cohérent avec les caractéristiques de sa queue.
+Les deux valeurs restent des réglages empiriques (comme `MATCHING_SCORE_THRESHOLD` en #122) — à ajuster à
+l'usage réel plutôt que recalculées analytiquement.
+
+**Vérification :** `terraform plan` non exécuté dans cette session de revue documentaire (pas d'accès Bash) ;
+passera par le plan CI standard (`terraformPlan.yml`) sur la PR — diff attendu : deux valeurs modifiées
+uniquement (`max_executions` sur `job_cv_analysis` et `job_match_analysis`), aucune ressource recréée.
