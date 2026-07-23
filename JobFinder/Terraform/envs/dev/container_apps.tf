@@ -346,6 +346,7 @@ module "job_cv_analysis" {
   registry_server      = module.container_registry.login_server
   registry_identity    = data.azurerm_user_assigned_identity.caj.id
   additional_tags      = { keda_reset = "2026-06-28" }
+  max_executions       = 2
   secrets = [
     {
       name  = "postgresql-connection-string"
@@ -416,6 +417,7 @@ module "job_match_analysis" {
   identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
   registry_server      = module.container_registry.login_server
   registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  max_executions       = 8
   secrets = [
     {
       name  = "postgresql-connection-string"
