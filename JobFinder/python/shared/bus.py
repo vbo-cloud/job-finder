@@ -7,10 +7,18 @@ from typing import Generator
 
 import structlog
 from azure.identity import DefaultAzureCredential
-from azure.servicebus import ServiceBusClient, ServiceBusMessage
-from azure.servicebus.exceptions import MessageSizeExceededError, ServiceBusError
+from azure.servicebus import AutoLockRenewer, ServiceBusClient, ServiceBusMessage
+from azure.servicebus.exceptions import (
+    MessageLockLostError,
+    MessageSizeExceededError,
+    ServiceBusError,
+)
 
 RECEIVE_MAX_WAIT_SECONDS = 30
+# Généreux par rapport à la durée réelle observée d'un traitement cv-analysis (gpt-5-mini +
+# référentiel complet) ou d'un cycle offer-fetching complet — le but est que le verrou ne soit
+# jamais le facteur limitant en usage normal.
+MAX_LOCK_RENEWAL_DURATION_SECONDS = 900  # 15 min
 
 logger = structlog.get_logger()
 
@@ -88,8 +96,23 @@ def send_messages_batch(queue_name: str, bodies: list[dict]) -> None:
 def receive_message(queue_name: str) -> Generator[dict, None, None]:
     """Receive exactly one message from the specified queue.
 
-    Yields the decoded message body as a dict.
-    Calls complete_message() on success, abandon_message() on exception.
+    Yields the decoded message body as a dict. Calls complete_message() on success,
+    abandon_message() on exception. The message lock is kept alive for the duration
+    of processing via AutoLockRenewer (see MAX_LOCK_RENEWAL_DURATION_SECONDS) — without
+    this, any processing slower than the queue's lock_duration (~60s default, never
+    overridden) causes complete_message()/abandon_message() to raise
+    MessageLockLostError even though the business logic already succeeded and
+    committed, triggering a needless redelivery-and-rerun or, if unhandled, a crashed
+    job execution.
+
+    A MessageLockLostError raised by complete_message() specifically is caught and
+    logged as a warning, not re-raised: the work already committed successfully, so
+    surfacing this as a job failure would be a false alarm — Service Bus will not
+    redeliver a message whose settlement fails this way, so this is purely a
+    bookkeeping loss, not a processing failure. A MessageLockLostError raised by
+    abandon_message() in the exception path is similarly swallowed (logged), but the
+    original exception is always re-raised regardless — a real processing failure must
+    still surface as a failed job.
 
     Note: processes exactly one message per call — intentional.
     KEDA handles parallelism by launching one container instance per message.
@@ -117,11 +140,28 @@ def receive_message(queue_name: str) -> Generator[dict, None, None]:
                 logger.info("servicebus_no_messages", queue=queue_name)
                 return
             msg = messages[0]
+
+            renewer = AutoLockRenewer(max_workers=1)
+            renewer.register(
+                receiver, msg, max_lock_renewal_duration=MAX_LOCK_RENEWAL_DURATION_SECONDS
+            )
             try:
                 yield json.loads(b"".join(msg.body))
-                receiver.complete_message(msg)
-                logger.info("servicebus_message_completed", queue=queue_name)
+                try:
+                    receiver.complete_message(msg)
+                    logger.info("servicebus_message_completed", queue=queue_name)
+                except MessageLockLostError:
+                    logger.warning(
+                        "servicebus_message_settlement_lock_lost",
+                        queue=queue_name,
+                        detail="processing succeeded and committed; only the ack was lost",
+                    )
             except Exception:  # re-raise intentional — context manager pattern
-                receiver.abandon_message(msg)
+                try:
+                    receiver.abandon_message(msg)
+                except MessageLockLostError:
+                    logger.warning("servicebus_abandon_lock_lost", queue=queue_name)
                 logger.error("servicebus_message_abandoned", queue=queue_name, exc_info=True)
                 raise
+            finally:
+                renewer.close()
