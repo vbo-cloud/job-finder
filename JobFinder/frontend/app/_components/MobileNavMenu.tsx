@@ -1,6 +1,6 @@
 "use client";
 
-import { Briefcase, Home, Library, Menu, UserRound, X } from "lucide-react";
+import { Briefcase, Home, Library, Menu, MessageSquareWarning, UserRound, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -29,10 +29,10 @@ function sectionVisible(id: string): boolean {
  * (layout.tsx). On phones the home page no longer navigates by swipe between
  * its full-screen sections: this menu is the way to move around. Section
  * entries scroll the home snap container programmatically (or land on the
- * home page first when opened from another route); "Mon profil" is a plain
- * route link. Entry availability is sampled when the menu opens — the
- * library and the correspondances sections only exist once a CV is uploaded
- * or selected.
+ * home page first when opened from another route); "Mon profil" and
+ * "Donner un avis / Signaler un bug" are plain route links. Entry
+ * availability is sampled when the menu opens — the library and the
+ * correspondances sections only exist once a CV is uploaded or selected.
  */
 export default function MobileNavMenu() {
   const router = useRouter();
@@ -134,6 +134,14 @@ export default function MobileNavMenu() {
           >
             <UserRound className="h-4 w-4" aria-hidden="true" />
             Mon profil
+          </Link>
+          <Link
+            href="/feedback"
+            onClick={() => setOpen(false)}
+            className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+          >
+            <MessageSquareWarning className="h-4 w-4" aria-hidden="true" />
+            Donner un avis / Signaler un bug
           </Link>
         </nav>
       )}
