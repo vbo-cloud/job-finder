@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
+import posthog from "posthog-js";
 
 import apiClient from "@/lib/api/client";
 import { loginRequest } from "@/lib/auth/msalConfig";
@@ -48,7 +49,10 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
       // No .finally() revoke here: pdfjs must read the URL first (race condition fix).
       apiClient
         .post<{ cv_id: string }>("/cv/upload", formData)
-        .then((res) => { onUploadComplete?.(res.data.cv_id); })
+        .then((res) => {
+          posthog.capture("cv_uploaded", { cv_id: res.data.cv_id });
+          onUploadComplete?.(res.data.cv_id);
+        })
         .catch(() => { /* silent — library card shows regardless */ });
     },
     [isAuthenticated, instance, onUploadComplete],
