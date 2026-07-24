@@ -464,6 +464,19 @@ def _analyze_match(context: dict) -> tuple[dict, list[str] | None]:
                     {"role": "user", "content": user_content},
                 ],
             )
+            # Logged before json.loads(...): a parse failure below still consumed billable
+            # tokens on this attempt, so this must stay ahead of the parse or a retry's cost
+            # silently drops out of the token accounting.
+            logger.info(
+                "openai_call_completed",
+                agent="match-analysis",
+                operation="match_analysis",
+                model=AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
+                attempt=attempt,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
             data = json.loads(response.choices[0].message.content)
             analysis_fields, new_offer_key_skills = _parse_analysis_payload(data, cached_key_skills)
             logger.info(

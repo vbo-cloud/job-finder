@@ -304,6 +304,19 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
                     },
                 ],
             )
+            # Logged before json.loads(...): a parse failure below still consumed billable
+            # tokens on this attempt, so this must stay ahead of the parse or a retry's cost
+            # silently drops out of the token accounting.
+            logger.info(
+                "openai_call_completed",
+                agent="cv-analysis",
+                operation="rome_extraction",
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+                attempt=attempt,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
             raw_codes: list = json.loads(response.choices[0].message.content)["rome_codes"]
             valid_items = []
             for code in raw_codes:
@@ -658,6 +671,19 @@ def _analyze_cv_quality(
                         ),
                     },
                 ],
+            )
+            # Logged before json.loads(...): a parse failure below still consumed billable
+            # tokens on this attempt, so this must stay ahead of the parse or a retry's cost
+            # silently drops out of the token accounting.
+            logger.info(
+                "openai_call_completed",
+                agent="cv-analysis",
+                operation="cv_quality_analysis",
+                model=AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+                attempt=attempt,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
             )
             data = json.loads(response.choices[0].message.content)
             result = {

@@ -223,6 +223,70 @@ class TestExtractRomeCodes:
         user_message = mock_create.call_args.kwargs["messages"][1]["content"]
         assert f"Date du jour : {_mod.date.today().isoformat()}" in user_message
 
+    def test_logs_openai_call_completed_with_token_usage(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_response.usage.prompt_tokens = 400
+        mock_response.usage.completion_tokens = 60
+        mock_response.usage.total_tokens = 460
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _extract_rome_codes("cv text")
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=400,
+            completion_tokens=60,
+            total_tokens=460,
+        )
+
+    def test_logs_openai_call_completed_on_every_attempt_including_failed_parse(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        bad.usage.prompt_tokens = 100
+        bad.usage.completion_tokens = 10
+        bad.usage.total_tokens = 110
+        good = MagicMock()
+        good.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        good.usage.prompt_tokens = 105
+        good.usage.completion_tokens = 15
+        good.usage.total_tokens = 120
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _extract_rome_codes("cv text")
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=100,
+            completion_tokens=10,
+            total_tokens=110,
+        )
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=2,
+            prompt_tokens=105,
+            completion_tokens=15,
+            total_tokens=120,
+        )
+
 
 class TestRomeExtractionSystemPrompt:
     def test_embeds_a_sample_of_referential_entries(self):
@@ -687,6 +751,70 @@ class TestAnalyzeCvQuality:
 
         user_message = mock_create.call_args.kwargs["messages"][1]["content"]
         assert "Mise en page détectée" not in user_message
+
+    def test_logs_openai_call_completed_with_token_usage(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_response.usage.prompt_tokens = 700
+        mock_response.usage.completion_tokens = 180
+        mock_response.usage.total_tokens = 880
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=700,
+            completion_tokens=180,
+            total_tokens=880,
+        )
+
+    def test_logs_openai_call_completed_on_every_attempt_including_failed_parse(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        bad.usage.prompt_tokens = 200
+        bad.usage.completion_tokens = 20
+        bad.usage.total_tokens = 220
+        good = MagicMock()
+        good.choices[0].message.content = _QUALITY_JSON
+        good.usage.prompt_tokens = 210
+        good.usage.completion_tokens = 40
+        good.usage.total_tokens = 250
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=200,
+            completion_tokens=20,
+            total_tokens=220,
+        )
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=2,
+            prompt_tokens=210,
+            completion_tokens=40,
+            total_tokens=250,
+        )
 
 
 # ---------------------------------------------------------------------------
