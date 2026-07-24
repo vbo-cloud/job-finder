@@ -55,6 +55,20 @@ def embed(texts: list[str]) -> list[list[float]]:
         except openai.OpenAIError:
             logger.error("embedding_failed", model=_EMBEDDING_MODEL, exc_info=True)
             raise
+        # No "agent" field here (unlike the chat-completion sites): this module is shared
+        # across several services with no configure_telemetry() of its own — cloud_RoleName
+        # (the OTel service.name resource attribute set by each caller) already carries that
+        # attribution. Embedding usage has no completion_tokens, so it's omitted rather than
+        # logged as None.
+        logger.info(
+            "openai_call_completed",
+            operation="embedding",
+            model=_EMBEDDING_MODEL,
+            batch=i + 1,
+            total_batches=total_batches,
+            prompt_tokens=response.usage.prompt_tokens,
+            total_tokens=response.usage.total_tokens,
+        )
         vectors.extend(item.embedding for item in response.data)
         if i < total_batches - 1:
             time.sleep(1)
