@@ -4,21 +4,31 @@ import { useEffect } from "react";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 
-// Next.js only inlines NEXT_PUBLIC_* into the client bundle when referenced
-// statically (process.env.NEXT_PUBLIC_FOO), so the value is read this way and
-// validated, same pattern as lib/auth/msalConfig.ts.
-function requireEnv(name: string, value: string | undefined): string {
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-const posthogKey = requireEnv("NEXT_PUBLIC_POSTHOG_KEY", process.env.NEXT_PUBLIC_POSTHOG_KEY);
-const posthogHost = requireEnv("NEXT_PUBLIC_POSTHOG_HOST", process.env.NEXT_PUBLIC_POSTHOG_HOST);
-
+/**
+ * Wraps the application in an initialized PostHog client.
+ *
+ * Analytics is treated as non-critical: if `NEXT_PUBLIC_POSTHOG_KEY`/`_HOST`
+ * are absent, it logs a warning and skips `init()` instead of throwing —
+ * children still render normally either way.
+ */
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
+    // Unlike lib/auth/msalConfig.ts's requireEnv() (fail-fast is right there:
+    // without MSAL vars the app has no auth and shouldn't pretend otherwise),
+    // this module is imported by the root layout, which has no
+    // global-error.tsx to catch a module-level throw — that would crash every
+    // route. Analytics is non-critical: read statically (required for Next.js
+    // to inline NEXT_PUBLIC_* at build time) but only inside the effect, and
+    // degrade gracefully — same failure mode already documented for "GitHub
+    // repo vars not yet created" (docs/JOURNAL.md, PR #221).
+    const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+    if (!posthogKey || !posthogHost) {
+      console.warn(
+        "[jf] PostHog disabled: NEXT_PUBLIC_POSTHOG_KEY/NEXT_PUBLIC_POSTHOG_HOST not set.",
+      );
+      return;
+    }
     posthog.init(posthogKey, {
       api_host: posthogHost,
       // "2026-05-30" sets capture_pageview: "history_change", which already

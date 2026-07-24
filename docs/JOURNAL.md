@@ -7348,8 +7348,9 @@ Portée entièrement frontend (`JobFinder/frontend/`) sauf la propagation des va
 ### Ce qui a été fait
 
 - `npm install posthog-js` (1.407.2).
-- `app/providers.tsx` (nouveau) : `PostHogProvider`, `posthog.init()` dans un `useEffect`, `defaults:
-  "2026-05-30"`. Pas de composant `PostHogPageView` manuel — vérifié dans le bundle installé
+- `app/Providers.tsx` (nouveau — PascalCase, `reviewer-frontend` a bloqué un premier `providers.tsx` en
+  minuscule) : `PostHogProvider`, `posthog.init()` dans un `useEffect`, `defaults: "2026-05-30"`. Pas de
+  composant `PostHogPageView` manuel — vérifié dans le bundle installé
   (`node_modules/posthog-js/dist/module.js`) que ce preset fixe déjà `capture_pageview: "history_change"`,
   qui autocapture le `$pageview` sur navigation App Router ; un capture manuel en plus aurait doublé
   l'event à chaque changement de route.
@@ -7375,7 +7376,8 @@ Portée entièrement frontend (`JobFinder/frontend/`) sauf la propagation des va
   Décisions techniques) : `.env.local`/`.env.local.example`, `ARG`/`ENV` dans `Dockerfile`, `build-args`
   dans `.github/workflows/buildAgents.yml` (`vars.NEXT_PUBLIC_POSTHOG_KEY`/`_HOST`).
 - Mock `posthog-js` ajouté dans `__tests__/CvAnalysisCard.test.tsx` et
-  `__tests__/CorrespondancesPanel.test.tsx` (seuls tests existants touchant les composants modifiés).
+  `__tests__/CorrespondancesPanel.test.tsx` (seuls tests existants touchant les composants modifiés), plus
+  un nouveau `__tests__/Providers.test.tsx` (voir Décisions techniques).
 
 ### Décisions techniques
 
@@ -7389,10 +7391,29 @@ mélange donc pas couche plateforme et couche applicative.
 
 **Action manuelle requise, hors du périmètre de cette PR :** les variables de repo GitHub
 `vars.NEXT_PUBLIC_POSTHOG_KEY` et `vars.NEXT_PUBLIC_POSTHOG_HOST` doivent être créées manuellement
-(Settings → Secrets and variables → Actions → Variables) avant le prochain déploiement en dev. Sans elles,
-le build inline `undefined` dans le bundle et PostHog ne s'initialise silencieusement pas — le funnel
-resterait invisible sans qu'aucun test ni CI ne le détecte.
+(Settings → Secrets and variables → Actions → Variables) avant le prochain déploiement en dev.
 
-**Vérification :** `npx jest` (153 tests, tous passants), `npx tsc --noEmit` (aucune erreur), `npx eslint`
-sur tous les fichiers touchés (aucun avertissement). QA manuelle des 8 events en dev déployé non réalisée
-dans cette session (nécessite les variables de repo GitHub ci-dessus) — à faire une fois celles-ci créées.
+Ce point a failli être plus grave qu'un simple "PostHog silencieusement désactivé". La première version de
+`Providers.tsx` utilisait le même `requireEnv()` fail-fast que `lib/auth/msalConfig.ts` (throw si la
+variable est absente). Repéré après-coup (revue indépendante, hors des deux passes `reviewer-frontend`) :
+`buildAgents.yml` déclenche `az containerapp update` sur `app-jf-dev-frc-frontend` immédiatement après tout
+push sur `dev` touchant `JobFinder/frontend/**` — donc merger cette PR avant la création des variables
+GitHub aurait redéployé en prod-dev un layout racine qui `throw` à l'évaluation du module. Vérifié qu'aucun
+`global-error.tsx` n'existe dans ce projet (seul un `error.tsx` par segment, qui ne capture pas les erreurs
+du root layout lui-même) : ce throw aurait fait tomber tout le site, pas juste désactivé les analytics.
+Corrigé en déplaçant la lecture des deux variables à l'intérieur du `useEffect` (toujours une référence
+statique `process.env.NEXT_PUBLIC_*`, requis pour l'inlining Next.js, mais plus au niveau module) et en
+dégradant sur `console.warn` + `return` plutôt que de lancer une exception — l'appel `posthog.capture()`
+avant tout `init()` ne fait de toute façon rien de pire qu'un warning silencieux (vérifié dans le bundle
+installé : `posthog-js` renvoie tôt sur `!this.__loaded` pour `capture`/`identify`, jamais de throw).
+`requireEnv()` reste approprié tel quel dans `msalConfig.ts` : sans MSAL l'app n'a pas d'auth et ne doit pas
+le cacher — la distinction est la criticité de la feature, pas une règle générale à appliquer partout.
+`PostHogProvider` gagne au passage la JSDoc qui lui manquait, même pattern que `AuthProvider`.
+Nouveau test `__tests__/Providers.test.tsx` : vérifie que `posthog.init` est bien appelé quand les deux
+variables sont présentes, et que le rendu ne lève rien et saute `init` quand elles sont absentes.
+
+**Vérification :** `npx jest` (155 tests, tous passants), `npx tsc --noEmit` (aucune erreur), `npx eslint`
+sur tous les fichiers touchés (aucun avertissement), deux passes `reviewer-frontend` (la première a bloqué
+sur le nommage de fichier, corrigé puis re-soumis, `APPROUVÉ` sans remarque). QA manuelle des 8 events en
+dev déployé non réalisée dans cette session (nécessite les variables de repo GitHub ci-dessus) — à faire
+une fois celles-ci créées.
