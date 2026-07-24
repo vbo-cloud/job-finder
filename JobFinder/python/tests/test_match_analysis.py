@@ -322,6 +322,70 @@ class TestAnalyzeMatch:
 
         assert mock_create.call_count == 1
 
+    def test_logs_openai_call_completed_with_token_usage(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _ANALYSIS_JSON
+        mock_response.usage.prompt_tokens = 500
+        mock_response.usage.completion_tokens = 120
+        mock_response.usage.total_tokens = 620
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_match(_make_context())
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="match-analysis",
+            operation="match_analysis",
+            model=_mod.AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=500,
+            completion_tokens=120,
+            total_tokens=620,
+        )
+
+    def test_logs_openai_call_completed_on_every_attempt_including_failed_parse(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        bad.usage.prompt_tokens = 300
+        bad.usage.completion_tokens = 50
+        bad.usage.total_tokens = 350
+        good = MagicMock()
+        good.choices[0].message.content = _ANALYSIS_JSON
+        good.usage.prompt_tokens = 310
+        good.usage.completion_tokens = 90
+        good.usage.total_tokens = 400
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_match(_make_context())
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="match-analysis",
+            operation="match_analysis",
+            model=_mod.AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=300,
+            completion_tokens=50,
+            total_tokens=350,
+        )
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="match-analysis",
+            operation="match_analysis",
+            model=_mod.AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT,
+            attempt=2,
+            prompt_tokens=310,
+            completion_tokens=90,
+            total_tokens=400,
+        )
+
     def test_includes_intent_fallback_when_profile_empty(self, mocker):
         mock_response = MagicMock()
         mock_response.choices[0].message.content = _ANALYSIS_JSON
