@@ -7326,3 +7326,73 @@ implémentation interne), et l'ajout du logging n'y change pas le contrat public
 
 **Vérification :** `pytest` exécuté sur l'ensemble de la suite (366 tests, tous passants) après les
 modifications, y compris les nouveaux tests d'assertion sur `openai_call_completed`.
+
+---
+
+## PR #221 — feat(frontend): instrumentation PostHog du funnel utilisateur
+
+**Date :** 2026-07-24
+**Branche :** `feature/posthog-integration` → `dev`
+
+### Contexte
+
+Suite au plan PostHog conçu avec Claude Cowork : les logs backend (AppTraces) ne loggent pas `user_id`
+sur `cv_analysis_started`/`match_analysis_started`, alors que le contexte utilisateur est déjà disponible
+côté frontend au moment du clic. Cette PR instrumente le frontend Next.js avec PostHog Cloud EU
+(organisation `vbo-cloud`, projet 231604) pour obtenir le funnel utilisateur complet — upload CV → analyse
+consultée → matches consultés → analyse de matching demandée → crédit consommé/épuisé → profil complété.
+
+Portée entièrement frontend (`JobFinder/frontend/`) sauf la propagation des variables d'environnement
+`NEXT_PUBLIC_POSTHOG_*` jusqu'au build de l'image Docker.
+
+### Ce qui a été fait
+
+- `npm install posthog-js` (1.407.2).
+- `app/providers.tsx` (nouveau) : `PostHogProvider`, `posthog.init()` dans un `useEffect`, `defaults:
+  "2026-05-30"`. Pas de composant `PostHogPageView` manuel — vérifié dans le bundle installé
+  (`node_modules/posthog-js/dist/module.js`) que ce preset fixe déjà `capture_pageview: "history_change"`,
+  qui autocapture le `$pageview` sur navigation App Router ; un capture manuel en plus aurait doublé
+  l'event à chaque changement de route.
+- `app/layout.tsx` : `PostHogProvider` englobe `AuthProvider` (Server Component parent inchangé, le
+  nouveau wrapper est lui-même un client component).
+- 8 events instrumentés :
+  - `user_logged_in` + `identify(homeAccountId)` — `lib/auth/AuthProvider.tsx`, dans le callback MSAL
+    `LOGIN_SUCCESS` (identifiant `homeAccountId`, pas `username`/email, pour éviter le PII dans le
+    `distinct_id`).
+  - `cv_uploaded` — `app/_components/UploadSection.tsx`, `.then()` de l'upload.
+  - `cv_analysis_viewed` — `app/_components/CvAnalysisCard.tsx`, une fois par montage quand `status`
+    atteint `"done"` (`useRef` guard).
+  - `matches_viewed` — `app/_components/CorrespondancesPanel.tsx`, une fois par montage quand
+    `matches.length > 0 && !loading` (`useRef` guard).
+  - `match_analysis_requested`, `credit_consumed` — même fichier, `requestAnalysis()`.
+  - `credits_exhausted` — même fonction, uniquement dans la branche `catch` où `status === 402` (le bus
+    de crédits appelle `notifyCreditsConsumed()` sur ce même chemin pour une autre raison — resync avec
+    le solde serveur, pas une consommation réelle — donc l'event ne s'accroche pas à cet appel mais au
+    `status` HTTP).
+  - `profile_completed` + `setPersonProperties({ experience_level })` — `app/profile/page.tsx`, après le
+    `PUT /profile` réussi.
+- Propagation des variables d'environnement jusqu'au build Docker (pas de changement Terraform — voir
+  Décisions techniques) : `.env.local`/`.env.local.example`, `ARG`/`ENV` dans `Dockerfile`, `build-args`
+  dans `.github/workflows/buildAgents.yml` (`vars.NEXT_PUBLIC_POSTHOG_KEY`/`_HOST`).
+- Mock `posthog-js` ajouté dans `__tests__/CvAnalysisCard.test.tsx` et
+  `__tests__/CorrespondancesPanel.test.tsx` (seuls tests existants touchant les composants modifiés).
+
+### Décisions techniques
+
+Le prompt de tâche initial pointait vers `envs/dev/frontend.tf` pour propager les variables d'env —
+vérifié faux avant d'implémenter : ce fichier documente explicitement qu'aucune variable `NEXT_PUBLIC_*`
+n'est portée par la Container App (elles sont inlinées dans le bundle JS au build, pas lues au runtime).
+Le mécanisme réel, déjà en place pour `NEXT_PUBLIC_ENTRA_*`, est `Dockerfile` (`ARG`/`ENV`) +
+`buildAgents.yml` (`build-args` depuis les `vars` du repo GitHub) — reproduit à l'identique pour
+`NEXT_PUBLIC_POSTHOG_KEY`/`NEXT_PUBLIC_POSTHOG_HOST`. Aucun fichier Terraform touché : cette PR ne
+mélange donc pas couche plateforme et couche applicative.
+
+**Action manuelle requise, hors du périmètre de cette PR :** les variables de repo GitHub
+`vars.NEXT_PUBLIC_POSTHOG_KEY` et `vars.NEXT_PUBLIC_POSTHOG_HOST` doivent être créées manuellement
+(Settings → Secrets and variables → Actions → Variables) avant le prochain déploiement en dev. Sans elles,
+le build inline `undefined` dans le bundle et PostHog ne s'initialise silencieusement pas — le funnel
+resterait invisible sans qu'aucun test ni CI ne le détecte.
+
+**Vérification :** `npx jest` (153 tests, tous passants), `npx tsc --noEmit` (aucune erreur), `npx eslint`
+sur tous les fichiers touchés (aucun avertissement). QA manuelle des 8 events en dev déployé non réalisée
+dans cette session (nécessite les variables de repo GitHub ci-dessus) — à faire une fois celles-ci créées.
