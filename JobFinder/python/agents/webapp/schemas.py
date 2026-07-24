@@ -26,6 +26,20 @@ class ProfileUpdate(BaseModel):
     candidate_description: str | None = Field(default=None, max_length=1000)
 
 
+class FeedbackCreate(BaseModel):
+    """Payload for POST /feedback — user-submitted review or bug report.
+
+    No email/name field: the recipient of the relayed email is derived
+    server-side from the validated JWT (UserIdentity), never from client input.
+    sentiment is the only optional field — the smiley picker is not required.
+    """
+
+    type: Literal["avis", "bug"]
+    subject: str = Field(max_length=200)
+    message: str = Field(max_length=5000)
+    sentiment: Literal["positif", "neutre", "negatif"] | None = None
+
+
 class OfferOut(BaseModel):
     """Job offer returned by the API."""
 

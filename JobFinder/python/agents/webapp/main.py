@@ -8,7 +8,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import cv, matches, profile
+from routers import cv, feedback, matches, profile
 from shared.db import run_migrations
 from shared.telemetry import configure_telemetry
 
@@ -67,3 +67,4 @@ app.add_middleware(
 app.include_router(cv.router)
 app.include_router(matches.router)
 app.include_router(profile.router)
+app.include_router(feedback.router)
