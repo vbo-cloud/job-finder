@@ -171,6 +171,8 @@ jobs:
             NEXT_PUBLIC_ENTRA_API_SCOPE=${{ vars.NEXT_PUBLIC_ENTRA_API_SCOPE }}
             NEXT_PUBLIC_REDIRECT_URI=${{ vars.NEXT_PUBLIC_REDIRECT_URI }}
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_POSTHOG_KEY=${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}
+            NEXT_PUBLIC_POSTHOG_HOST=${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/frontend:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/frontend:cache,mode=max
 
