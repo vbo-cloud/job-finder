@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import posthog from "posthog-js";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
@@ -61,6 +62,14 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   // the parent refetches (the prop only refreshes on CV/zone change).
   const [analysisOverrides, setAnalysisOverrides] = useState(new Map<string, MatchAnalysisOut>());
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const hasTrackedMatchesViewedRef = useRef(false);
+
+  useEffect(() => {
+    if (matches.length > 0 && !loading && !hasTrackedMatchesViewedRef.current) {
+      hasTrackedMatchesViewedRef.current = true;
+      posthog.capture("matches_viewed", { matches_count: matches.length });
+    }
+  }, [matches, loading]);
 
   // Seed the polling set with any offer whose analysis is already pending or
   // processing when `matches` (re)loads — covers analyses enqueued server-side
@@ -138,12 +147,14 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     // second click can land — no round-trip delay, no double-spend on repeat clicks.
     setAnalysisPending((prev) => new Set(prev).add(offerId));
     notifyCreditsReserved();
+    posthog.capture("match_analysis_requested", { offer_id: offerId, cv_id: cvId });
 
     apiClient
       .post(`/matches/${cvId}/offers/${offerId}/analyze`)
       .then(() => {
         // Sync with the server's real balance now that the request landed.
         notifyCreditsConsumed();
+        posthog.capture("credit_consumed", { operation: "match_analysis" });
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } })?.response?.status;
@@ -161,6 +172,9 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           // instead of crediting +1 back onto a floor-clamped 0, which would
           // otherwise conjure a phantom credit.
           notifyCreditsConsumed();
+          // No real consumption happened on this request (rejected before spending
+          // a credit) — hence "exhausted", not "credit_consumed", for analytics.
+          posthog.capture("credits_exhausted");
         } else {
           notifyCreditsReleased();
         }

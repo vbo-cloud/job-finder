@@ -3,6 +3,7 @@
 import { EventType } from "@azure/msal-browser";
 import type { AuthenticationResult } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
+import posthog from "posthog-js";
 import { useEffect, useState } from "react";
 
 import { msalInstance } from "./msalInstance";
@@ -36,6 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (event.eventType === EventType.LOGIN_SUCCESS && event.payload) {
             const result = event.payload as AuthenticationResult;
             msalInstance.setActiveAccount(result.account);
+            // homeAccountId, not username (= email) — avoids PII in the distinct_id.
+            posthog.identify(result.account.homeAccountId);
+            posthog.capture("user_logged_in");
           }
         });
 

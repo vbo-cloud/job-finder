@@ -14,6 +14,11 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { capture: jest.fn(), identify: jest.fn(), setPersonProperties: jest.fn() },
+}));
+
 const CV_ID = "cv-uuid-1";
 const OFFER_ID = "offer-uuid-1";
 const LS_KEY = `jf_seen_${CV_ID}`;

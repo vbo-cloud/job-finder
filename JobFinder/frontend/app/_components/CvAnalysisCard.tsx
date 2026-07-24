@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import posthog from "posthog-js";
 import apiClient from "@/lib/api/client";
 import type { CvAnalysisOut } from "@/lib/api/types";
 import AnalysisPointsList from "./AnalysisPointsList";
@@ -33,6 +34,14 @@ export default function CvAnalysisCard({ cvId }: Props) {
   // Bumped after a successful retry POST to re-enter the polling effect
   // immediately instead of waiting for the next natural fetch.
   const [pollGeneration, setPollGeneration] = useState(0);
+  const hasTrackedViewedRef = useRef(false);
+
+  useEffect(() => {
+    if (analysis?.status === "done" && !hasTrackedViewedRef.current) {
+      hasTrackedViewedRef.current = true;
+      posthog.capture("cv_analysis_viewed", { ats_score: analysis.ats_score, cv_id: cvId });
+    }
+  }, [analysis, cvId]);
 
   useEffect(() => {
     let cancelled = false;

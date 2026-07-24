@@ -9,6 +9,11 @@ jest.mock("@/lib/api/client", () => ({
   default: { get: jest.fn(), post: jest.fn() },
 }));
 
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { capture: jest.fn(), identify: jest.fn(), setPersonProperties: jest.fn() },
+}));
+
 const CV_ID = "cv-uuid-1";
 
 function analysis(overrides: Partial<CvAnalysisOut> = {}): CvAnalysisOut {

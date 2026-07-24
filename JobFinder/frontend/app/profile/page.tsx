@@ -3,6 +3,7 @@
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
+import posthog from "posthog-js";
 import { useEffect, useState } from "react";
 
 import apiClient from "@/lib/api/client";
@@ -80,6 +81,8 @@ export default function ProfilePage() {
         experience_level: experienceLevel,
         candidate_description: candidateDescription.trim() || null,
       });
+      posthog.setPersonProperties({ experience_level: experienceLevel });
+      posthog.capture("profile_completed", { experience_level: experienceLevel });
       setSaved(true);
     } catch {
       setSaveError("Erreur lors de la sauvegarde.");
