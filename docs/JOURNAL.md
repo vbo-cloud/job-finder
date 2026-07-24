@@ -7255,3 +7255,74 @@ l'usage réel plutôt que recalculées analytiquement.
 **Vérification :** `terraform plan` non exécuté dans cette session de revue documentaire (pas d'accès Bash) ;
 passera par le plan CI standard (`terraformPlan.yml`) sur la PR — diff attendu : deux valeurs modifiées
 uniquement (`max_executions` sur `job_cv_analysis` et `job_match_analysis`), aucune ressource recréée.
+
+---
+
+## PR #220 — feat(cv-analysis,match-analysis): logging des tokens consommés par appel Azure OpenAI
+
+**Date :** 2026-07-24
+**Branche :** `feature/openai-cost-instrumentation` → `dev`
+
+### Contexte
+
+Prépare une section « Coûts » dans le dashboard Grafana produit (Offres / CV / Utilisateurs / Coûts).
+Aucun appel `chat.completions.create` ne capturait `response.usage` jusqu'ici — impossible de savoir
+combien coûte une analyse CV ou une analyse de matching. Cette PR ajoute uniquement le logging des tokens
+consommés ; le calcul du coût en euros se fera côté requête KQL dans Grafana (prix au token en variable de
+dashboard, pas en dur dans le code — un changement de tarif Azure OpenAI ne doit pas nécessiter de
+redéploiement). `cv_analysis` (extraction ROME + analyse qualité) tourne sur gpt-5-mini,
+`match_analysis` sur gpt-4o-mini — deux modèles, deux prix au token distincts, d'où la présence du champ
+`model` sur chaque event (pas seulement `agent`/`operation`), au cas où le déploiement change sans que le
+nom d'`operation` change.
+
+### Ce qui a été fait
+
+Nouvel event structlog `openai_call_completed` sur les trois sites d'appel `chat.completions.create` +
+le site d'appel `embeddings.create` du module partagé :
+
+- `agents/cv_analysis/main.py` — `_extract_rome_codes` (`operation="rome_extraction"`) et
+  `_analyze_cv_quality` (`operation="cv_quality_analysis"`), toutes deux sur
+  `AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT`, `agent="cv-analysis"`.
+- `agents/match_analysis/main.py` — `_analyze_match` (`operation="match_analysis"`), sur
+  `AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT`, `agent="match-analysis"`.
+- `shared/embedder.py` — `embed()` (`operation="embedding"`), sur `text-embedding-3-small`, une fois par
+  batch de 100 textes (pas une seule fois agrégée en fin de fonction : chaque appel `embeddings.create` du
+  batch consomme ses propres tokens).
+
+Les trois sites `chat.completions.create` sont dans des boucles de retry (`MAX_ATTEMPTS`) : un
+`JSONDecodeError`/`KeyError`/`ValueError` sur `response.choices[0].message.content` se produit **après**
+que l'appel API a réussi et consommé des tokens. Le nouvel event est donc émis juste après l'appel
+`create(...)`, avant `json.loads(...)` — sur chaque tentative qui a obtenu une réponse, pas seulement sur
+le chemin de succès, pour ne pas sous-compter le coût des retries ratés au parsing.
+
+Champs vérifiés contre le SDK `openai` réellement installé (2.44.0, non pinné dans `requirements.txt`) :
+`response.usage.prompt_tokens` / `.completion_tokens` / `.total_tokens` (chat) et `.prompt_tokens` /
+`.total_tokens` sans `.completion_tokens` (embeddings — absent du modèle Pydantic `Usage` du SDK, pas
+seulement `None` en pratique) : le champ est donc omis de l'event plutôt que loggé comme `None`.
+
+Tests étendus dans `tests/test_cv_analysis.py` et `tests/test_match_analysis.py` : usage mocké sur
+`response.usage`, vérification que `openai_call_completed` est loggé avec les bons champs, y compris sur
+la tentative dont le parsing JSON échoue avant le retry réussi (les deux appels doivent chacun logger leur
+propre usage, avec le bon `attempt`).
+
+### Décisions techniques
+
+`shared/embedder.py` n'a volontairement pas reçu de champ `agent=` sur son event, à la différence des
+trois sites `chat.completions.create`. Ce module est partagé par plusieurs services sans
+`configure_telemetry()` propre (`agents/webapp/routers/profile.py`, `agents/webapp/routers/cv.py`,
+`agents/offer_fetching/main.py` l'appellent tous), donc il n'existe pas une valeur `agent` unique à
+coder en dur ici comme c'est le cas pour `cv-analysis`/`match-analysis`. Faire remonter l'appelant
+réel aurait exigé de faire transiter un paramètre à travers ces trois call sites, hors du périmètre de
+cette tâche (portée explicitement limitée à `agents/cv_analysis/`, `agents/match_analysis/`, et
+`shared/embedder.py`). L'attribution par service reste disponible sans ce champ : `configure_telemetry()`
+exporte déjà `service.name` comme attribut de ressource OpenTelemetry, exploitable côté Application
+Insights via `cloud_RoleName` sur chaque ligne de log. Le champ `model` (`text-embedding-3-small`, un seul
+modèle donc un seul prix au token quel que soit l'appelant) reste le champ discriminant utile pour la
+requête KQL de coût côté Grafana.
+
+Pas de fichier de test dédié créé pour `shared/embedder.py` — aucun test unitaire n'existait déjà pour ce
+module (les tests de `agents/webapp` qui l'utilisent mockent `embed()` dans son ensemble, sans tester son
+implémentation interne), et l'ajout du logging n'y change pas le contrat public de la fonction.
+
+**Vérification :** `pytest` exécuté sur l'ensemble de la suite (366 tests, tous passants) après les
+modifications, y compris les nouveaux tests d'assertion sur `openai_call_completed`.
