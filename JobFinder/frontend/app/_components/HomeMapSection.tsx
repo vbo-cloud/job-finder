@@ -275,7 +275,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
   return (
     <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page">
       <div className="absolute inset-0" style={cvLayerStyle(mode)}>
-        <UploadSection {...uploadProps} />
+        <UploadSection {...uploadProps} onEnterMap={enterMap} />
       </div>
       <div className="absolute inset-0" style={mapLayerStyle(mode)}>
         <MapSection
@@ -314,6 +314,19 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
           className="absolute right-4 top-3 z-10 hidden min-h-11 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default max-md:bottom-4 max-md:top-auto [@media(any-pointer:coarse)]:flex"
         >
           Terminé
+        </button>
+      )}
+      {/* Mouse-only equivalent of the "Terminé" pill above (which targets
+          coarse pointers): same scroll-hint pattern as the other sections. */}
+      {mode === "map" && (
+        <button
+          type="button"
+          onClick={exitMap}
+          aria-label="Quitter la carte et revenir à l'accueil"
+          className="absolute bottom-[18px] left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden [@media(any-pointer:coarse)]:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+        >
+          <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
         </button>
       )}
     </section>

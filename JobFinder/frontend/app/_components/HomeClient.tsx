@@ -84,7 +84,8 @@ export default function HomeClient() {
     });
   }, []);
 
-  // Back action from CVDetailSection: scroll to library without unmounting the section.
+  // Back action from CVDetailSection (and the library-bound hint in
+  // UploadSection): scroll to library without unmounting the section.
   const handleCloseDetail = useCallback(() => {
     document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
@@ -140,6 +141,7 @@ export default function HomeClient() {
           onUploadComplete: handleUploadComplete,
           onAnimationComplete: handleAnimationComplete,
           libraryAccessible,
+          onScrollToLibrary: handleCloseDetail,
         }}
         onZoneSaved={handleZoneSaved}
       />
