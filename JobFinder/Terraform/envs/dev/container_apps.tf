@@ -45,7 +45,6 @@ data "azurerm_key_vault_secret" "ft_client_secret" {
 
 locals {
   postgresql_connection_string = module.postgresql.connection_string
-  openai_api_key               = module.openai.primary_key
   openai_endpoint              = module.openai.endpoint
   ft_client_id                 = data.azurerm_key_vault_secret.ft_client_id.value
   ft_client_secret             = data.azurerm_key_vault_secret.ft_client_secret.value
@@ -186,8 +185,9 @@ module "job_cleanup" {
 # Agent 3 — Offer Fetching (queue: offer-fetch-request)
 # Replaces offerFetch.yml GitHub Actions workflow.
 # Embeds pending offers directly (shared/embedder.py) after upsert — no distillation
-# step, hence the openai-api-key secret and AZURE_OPENAI_* env vars below (see
-# docs/prompts/prompt-remove-offer-distillation.md).
+# step, hence the AZURE_OPENAI_ENDPOINT env var below (see
+# docs/prompts/prompt-remove-offer-distillation.md). Authenticates to Azure OpenAI via
+# the shared Managed Identity (AZURE_CLIENT_ID below) — no API key secret needed.
 # Event-driven since docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md:
 # this agent no longer knows the time of day at all. The DST-safe 12:00/20:00 Europe/Paris
 # full-refresh trigger (Azure Container Apps' schedule trigger only supports UTC cron
@@ -229,10 +229,6 @@ module "job_offer_fetching" {
       value = local.ft_client_secret
     },
     {
-      name  = "openai-api-key"
-      value = local.openai_api_key
-    },
-    {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
@@ -253,10 +249,6 @@ module "job_offer_fetching" {
     {
       name        = "FT_CLIENT_SECRET"
       secret_name = "ft-client-secret"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
     },
     {
       name  = "AZURE_OPENAI_ENDPOINT"
@@ -353,10 +345,6 @@ module "job_cv_analysis" {
       value = local.postgresql_connection_string
     },
     {
-      name  = "openai-api-key"
-      value = local.openai_api_key
-    },
-    {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
@@ -369,10 +357,6 @@ module "job_cv_analysis" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
     },
     {
       name  = "AZURE_OPENAI_ENDPOINT"
@@ -424,10 +408,6 @@ module "job_match_analysis" {
       value = local.postgresql_connection_string
     },
     {
-      name  = "openai-api-key"
-      value = local.openai_api_key
-    },
-    {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
@@ -440,10 +420,6 @@ module "job_match_analysis" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
     },
     {
       name  = "AZURE_OPENAI_ENDPOINT"
