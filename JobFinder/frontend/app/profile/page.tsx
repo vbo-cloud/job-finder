@@ -15,6 +15,7 @@ import AdminRefillButton from "./_components/AdminRefillButton";
 import DeleteAccountSection from "./_components/DeleteAccountSection";
 import ExperienceToggle from "./_components/ExperienceToggle";
 import { InfoTooltip } from "./_components/InfoTooltip";
+import NotificationDaysToggle from "./_components/NotificationDaysToggle";
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
@@ -33,6 +34,7 @@ export default function ProfilePage() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const [experienceLevel, setExperienceLevel] = useState<"0-2" | "2-5" | "5+" | null>(null);
+  const [notificationDays, setNotificationDays] = useState<number[]>([]);
   const [candidateDescription, setCandidateDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -41,6 +43,11 @@ export default function ProfilePage() {
 
   function handleExperienceChange(next: "0-2" | "2-5" | "5+" | null) {
     setExperienceLevel(next);
+    setSaved(false);
+  }
+
+  function handleNotificationDaysChange(next: number[]) {
+    setNotificationDays(next);
     setSaved(false);
   }
 
@@ -59,6 +66,7 @@ export default function ProfilePage() {
       .get<ProfileData>("/profile")
       .then((res) => {
         setExperienceLevel(res.data.experience_level ?? null);
+        setNotificationDays(res.data.notification_days ?? []);
         setCandidateDescription(res.data.candidate_description ?? "");
         setAnalysisCredits(res.data.analysis_credits_remaining);
         setIsAdmin(res.data.is_admin);
@@ -79,6 +87,7 @@ export default function ProfilePage() {
     try {
       await apiClient.put("/profile", {
         experience_level: experienceLevel,
+        notification_days: notificationDays,
         candidate_description: candidateDescription.trim() || null,
       });
       posthog.setPersonProperties({ experience_level: experienceLevel });
@@ -163,6 +172,16 @@ export default function ProfilePage() {
             </span>
           </div>
         )}
+
+        <div className="mt-6 rounded-2xl bg-profile-surface p-4 sm:p-6">
+          <div className="flex items-center gap-1.5">
+            <span className={microLabel}>Notifications</span>
+            <InfoTooltip text="Recevez un email récapitulatif des nouvelles offres correspondant à vos CV, les jours cochés." />
+          </div>
+          <div className="mt-2.5">
+            <NotificationDaysToggle value={notificationDays} onChange={handleNotificationDaysChange} />
+          </div>
+        </div>
 
         <div className="mt-6 rounded-2xl bg-profile-surface p-4 sm:p-6">
           <div className="flex items-center gap-1.5">

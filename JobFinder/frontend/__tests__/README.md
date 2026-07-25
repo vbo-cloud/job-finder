@@ -26,6 +26,7 @@ npm run test:watch
 | `MatchList.test.tsx` | `app/_components/MatchList.tsx` | Loading skeleton, empty state, list rendering |
 | `client.test.ts` | `lib/api/client.ts` | Request interceptor single-flight `acquireTokenRedirect`: concurrent callers share one in-flight redirect; a prior failed redirect doesn't block a later retry |
 | `LibrarySection.test.tsx` | `app/_components/LibrarySection.tsx` | "Ajouter un CV" calls the `onAddCv` prop (no direct upload call — upload/validation live in `UploadSection.handleFile`); `onCvsChange` fires on local deletion, not just fetches; add-CV slot hidden once the CV quota is reached |
+| `NotificationDaysToggle.test.tsx` | `app/profile/_components/NotificationDaysToggle.tsx` | Renders all seven days, pressed state reflects `value`, clicking toggles a day in/out of the selection (including clearing the last selected day) |
 
 ## Design decisions
 
