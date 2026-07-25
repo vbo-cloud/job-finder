@@ -7664,7 +7664,7 @@ suites / 157 tests) et `npm run lint` relancés après chaque changement — pro
 
 ---
 
-## PR #224 — fix(cv-analysis): distinguish target-occupation sibling ROME codes from different-direction codes requiring proof
+## PR #225 — fix(cv-analysis): distinguish target-occupation sibling ROME codes from different-direction codes requiring proof
 
 **Date :** 2026-07-25
 **Branche :** `fix/cv-analysis-rome-code-family-coverage` → `dev`
