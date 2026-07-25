@@ -5,6 +5,7 @@ import type { CVData } from "@/lib/api/types";
 import CVDetailSection from "./CVDetailSection";
 import HomeMapSection from "./HomeMapSection";
 import LibrarySection from "./LibrarySection";
+import type { UploadSectionHandle } from "./UploadSection";
 
 interface OptimisticUpload {
   thumbnailUrl: string;
@@ -33,6 +34,7 @@ export default function HomeClient() {
   const [zoneVersion, setZoneVersion]             = useState(0);
   const detailRef                                  = useRef<HTMLElement>(null);
   const mainRef                                    = useRef<HTMLElement>(null);
+  const uploadSectionRef                           = useRef<UploadSectionHandle>(null);
 
   // Holds the cv_id from POST /cv/upload so we can set it on the optimistic
   // entry even if the POST response arrives before the animation ends.
@@ -96,10 +98,11 @@ export default function HomeClient() {
     detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
-  // Scrolls to the home/upload section, then calls onLanded once the scroll
-  // has settled — "scrollend" covers both the animated case and
-  // prefers-reduced-motion (an instant jump still fires it); the timeout is
-  // only a safety net for the rare browser without scrollend support.
+  // "ACCUEIL" hint in LibrarySection: scroll to the home/upload section, then
+  // call onLanded once the scroll has settled — "scrollend" covers both the
+  // animated case and prefers-reduced-motion (an instant jump still fires
+  // it); the timeout is only a safety net for the rare browser without
+  // scrollend support.
   const handleScrollToHome = useCallback((onLanded: () => void) => {
     const home = document.getElementById("home");
     const container = mainRef.current;
@@ -114,6 +117,16 @@ export default function HomeClient() {
     container.addEventListener("scrollend", finish, { once: true });
     setTimeout(finish, 900);
     home.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, []);
+
+  // "Ajouter un CV" in LibrarySection: scroll to the home/upload section and
+  // open its file picker right away — the picker is a native OS dialog, so
+  // it can open while the scroll is still animating behind it (unlike
+  // handleScrollToHome above, no scrollend/900ms wait — that delay made the
+  // picker feel slow to appear here).
+  const handleAddCv = useCallback(() => {
+    document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+    uploadSectionRef.current?.openPicker();
   }, []);
 
   const handleZoneSaved = useCallback(() => {
@@ -149,6 +162,7 @@ export default function HomeClient() {
           libraryAccessible,
           onScrollToLibrary: handleCloseDetail,
         }}
+        uploadSectionRef={uploadSectionRef}
         onZoneSaved={handleZoneSaved}
       />
       <LibrarySection
@@ -161,6 +175,7 @@ export default function HomeClient() {
         selectedCvId={selectedCvId}
         onScrollToHome={handleScrollToHome}
         onScrollToOffers={handleScrollToDetail}
+        onAddCv={handleAddCv}
       />
       {selectedCvId && (
         <CVDetailSection

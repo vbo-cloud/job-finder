@@ -8,6 +8,7 @@ import {
   useState,
   type ComponentProps,
   type CSSProperties,
+  type Ref,
 } from "react";
 
 import apiClient from "@/lib/api/client";
@@ -15,7 +16,7 @@ import type { ProfileData } from "@/lib/api/types";
 
 import MapSection from "./MapSection";
 import ScrollHint from "./ScrollHint";
-import UploadSection from "./UploadSection";
+import UploadSection, { type UploadSectionHandle } from "./UploadSection";
 
 type Mode = "cv" | "to-map" | "map" | "to-cv";
 
@@ -96,6 +97,9 @@ function lensStyle(mode: Mode): CSSProperties {
 
 interface HomeMapSectionProps {
   uploadProps: ComponentProps<typeof UploadSection>;
+  /** Forwarded to UploadSection so a sibling (LibrarySection, via HomeClient)
+   * can open its file picker and reuse its upload/animation pipeline. */
+  uploadSectionRef?: Ref<UploadSectionHandle>;
   /** Called after the painted zone is successfully persisted to the
    * profile — lets the parent invalidate anything derived from it (e.g.
    * the matches list, which stays mounted and won't refetch on its own). */
@@ -116,7 +120,7 @@ interface HomeMapSectionProps {
  * The painted zone is auto-saved to the profile with a debounce, flushed
  * when leaving the map mode.
  */
-export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSectionProps) {
+export default function HomeMapSection({ uploadProps, uploadSectionRef, onZoneSaved }: HomeMapSectionProps) {
   const isAuthenticated = useIsAuthenticated();
   const sectionRef = useRef<HTMLElement>(null);
   const onZoneSavedRef = useRef(onZoneSaved);
@@ -279,7 +283,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
   return (
     <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page">
       <div className="absolute inset-0" style={cvLayerStyle(mode)}>
-        <UploadSection {...uploadProps} onEnterMap={enterMap} />
+        <UploadSection {...uploadProps} onEnterMap={enterMap} ref={uploadSectionRef} />
       </div>
       <div className="absolute inset-0" style={mapLayerStyle(mode)}>
         <MapSection

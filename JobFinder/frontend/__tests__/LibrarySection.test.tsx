@@ -47,29 +47,18 @@ describe("LibrarySection — add CV slot", () => {
     mockGet.mockResolvedValue({ data: baseCvs });
   });
 
-  it("uploads a selected PDF and refetches the library", async () => {
-    mockPost.mockResolvedValue({ data: { cv_id: "new-id" } });
-    render(<LibrarySection />);
+  // The add slot no longer owns an upload pipeline: clicking it just asks the
+  // parent to open the picker on UploadSection, which is the component that
+  // owns validation, the POST, and the fly-down animation (see
+  // UploadSection.handleFile). This keeps both entry points on one pipeline.
+  it("calls onAddCv when the add slot is clicked", async () => {
+    const onAddCv = jest.fn();
+    render(<LibrarySection onAddCv={onAddCv} />);
 
     await waitFor(() => expect(screen.getByText("cv1.pdf")).toBeInTheDocument());
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByLabelText("Ajouter un CV"));
 
-    const file = new File(["%PDF-1.4"], "new-cv.pdf", { type: "application/pdf" });
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [file] } });
-
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cv/upload", expect.any(FormData)));
-    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
-  });
-
-  it("ignores a non-PDF file without calling the upload endpoint", async () => {
-    render(<LibrarySection />);
-    await waitFor(() => expect(screen.getByText("cv1.pdf")).toBeInTheDocument());
-
-    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [file] } });
-
+    expect(onAddCv).toHaveBeenCalledTimes(1);
     expect(mockPost).not.toHaveBeenCalled();
   });
 

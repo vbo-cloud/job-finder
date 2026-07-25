@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import posthog from "posthog-js";
 
@@ -25,13 +25,19 @@ interface Props {
   onScrollToLibrary?: () => void;
 }
 
-export default function UploadSection({
-  onUploadComplete,
-  onAnimationComplete,
-  libraryAccessible = false,
-  onEnterMap,
-  onScrollToLibrary,
-}: Props) {
+export interface UploadSectionHandle {
+  /** Opens the native file picker as if the CV icon had been clicked — lets
+   * LibrarySection's "Ajouter un CV" button share this component's upload
+   * and animation pipeline instead of running its own. Silently no-ops while
+   * an upload/animation is already in flight (`animState !== "idle"`), same
+   * as the icon's own onClick. */
+  openPicker: () => void;
+}
+
+const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSection(
+  { onUploadComplete, onAnimationComplete, libraryAccessible = false, onEnterMap, onScrollToLibrary },
+  ref,
+) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -100,6 +106,13 @@ export default function UploadSection({
       fileInputRef.current?.click();
     }
   }, [animState, isAuthenticated, instance]);
+
+  useImperativeHandle(ref, () => ({
+    openPicker: () => {
+      if (animState !== "idle") return;
+      fileInputRef.current?.click();
+    },
+  }), [animState]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -181,4 +194,6 @@ export default function UploadSection({
       )}
     </div>
   );
-}
+});
+
+export default UploadSection;

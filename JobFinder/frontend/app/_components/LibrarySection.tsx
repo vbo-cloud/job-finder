@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useIsAuthenticated } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
@@ -15,7 +15,6 @@ import ScrollHint from "./ScrollHint";
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_CVS = 10;
-const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 // Mobile-first: narrower minimum column and shorter rows so a 375px screen
 // fits two card columns instead of one card stretched full-width; the desktop
@@ -52,6 +51,10 @@ interface Props {
   /** Scrolls to the detail section ("OFFRES" hint) — owned by the parent for
    * the same reason as onScrollToHome. */
   onScrollToOffers?: () => void;
+  /** Scrolls to the home section and opens its file picker there — owned by
+   * the parent so this component doesn't need its own upload pipeline; the
+   * upload and its animation are handled by UploadSection. */
+  onAddCv?: () => void;
 }
 
 export default function LibrarySection({
@@ -64,19 +67,12 @@ export default function LibrarySection({
   selectedCvId = null,
   onScrollToHome,
   onScrollToOffers,
+  onAddCv,
 }: Props) {
   const isAuthenticated        = useIsAuthenticated();
   const [cvs, setCvs]          = useState<CVData[]>([]);
   const [loading, setLoading]  = useState(true);
   const [error, setError]      = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const fileInputRef           = useRef<HTMLInputElement>(null);
-  const uploadErrorTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
-  }, []);
 
   const handleCvDeleted = useCallback((id: string) => {
     setCvs((prev) => prev.filter((cv) => cv.id !== id));
@@ -159,50 +155,8 @@ export default function LibrarySection({
   const placeholderCount  = Math.max(0, MAX_CVS - used - (canAdd ? 1 : 0));
   const showGrid          = showOptimistic || cvs.length > 0;
 
-  // Scroll back up to the map/upload section first so the file picker opens
-  // in a familiar context, then trigger the browse dialog once the scroll has
-  // landed. The scroll itself (and knowledge of the home section's DOM id)
-  // belongs to the parent — this component only asks to be told when it's safe.
-  const handleAddClick = () => {
-    if (!onScrollToHome) { fileInputRef.current?.click(); return; }
-    onScrollToHome(() => fileInputRef.current?.click());
-  };
-
-  // "ACCUEIL" hint: same scroll, no follow-up action once landed.
+  // "ACCUEIL" hint: scroll home, no follow-up action once landed.
   const handleAccueilClick = () => onScrollToHome?.(() => {});
-
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
-    if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
-    if (file.type !== "application/pdf") {
-      setUploadError("Le fichier doit être un PDF.");
-      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
-      return;
-    }
-    if (file.size > MAX_PDF_BYTES) {
-      setUploadError("Le fichier dépasse la taille maximale autorisée (10 Mo).");
-      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
-      return;
-    }
-    setUploadError(null);
-
-    setUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      await apiClient.post("/cv/upload", formData);
-      await fetchCvs();
-    } catch (err) {
-      console.error("[LibrarySection] add CV failed", err);
-      setUploadError("Échec de l'import, réessayez.");
-      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 4000);
-    } finally {
-      setUploading(false);
-    }
-  }, [fetchCvs]);
 
   return (
     <section
@@ -292,17 +246,16 @@ export default function LibrarySection({
                 {canAdd && (
                   <button
                     type="button"
-                    onClick={handleAddClick}
-                    disabled={uploading}
-                    aria-busy={uploading}
-                    aria-label={uploading ? "Import du CV en cours" : "Ajouter un CV"}
+                    onClick={onAddCv}
+                    aria-label="Ajouter un CV"
                     className={cn(
                       "flex h-full flex-col items-center justify-center gap-[11px] rounded-[14px] border-[1.5px] border-dashed border-soft bg-transparent text-hint transition-colors",
-                      uploading ? "cursor-wait opacity-60" : "cursor-pointer hover:border-accent hover:bg-accent-muted hover:text-accent",
+                      "cursor-pointer hover:border-accent hover:bg-accent-muted hover:text-accent",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
                     )}
                   >
                     <div className="flex h-10 w-10 items-center justify-center rounded-full border-[1.5px] border-current pb-[2px] text-[22px] leading-none">+</div>
-                    <span className="text-[13px] font-semibold">{uploading ? "Import en cours…" : "Ajouter un CV"}</span>
+                    <span className="text-[13px] font-semibold">Ajouter un CV</span>
                   </button>
                 )}
                 {Array.from({ length: placeholderCount }).map((_, i) => (
@@ -314,21 +267,9 @@ export default function LibrarySection({
             {isAuthenticated && error && (
               <p className="mt-4 text-xs text-destructive">Impossible de charger les CVs.</p>
             )}
-
-            {uploadError && (
-              <p role="alert" className="mt-4 text-xs text-destructive">{uploadError}</p>
-            )}
           </div>
         </div>
       </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf"
-        className="sr-only"
-        onChange={(e) => void handleFileChange(e)}
-      />
     </section>
   );
 }
