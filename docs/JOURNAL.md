@@ -7644,3 +7644,20 @@ de `client.ts` vers l'ancien code (via `git stash`, jamais laissé dans le diff 
 avec « 2 appels » au lieu de « 1 ». Suite `jest` complète non ré-exécutée dans cette session de revue
 documentaire (accès en lecture/écriture de fichiers uniquement, pas d'exécution shell) — à relancer
 (`npm test` dans `JobFinder/frontend/`) avant merge.
+
+**Suivi post-review (après ouverture de la PR #224) :** deux remarques non-bloquantes relevées par une
+revue indépendante ont été traitées :
+1. `client.ts` : le fait que `redirectInFlight` ne se réinitialise jamais à `null` en cas de succès (seulement
+   en cas d'échec) reposait sur une hypothèse implicite non documentée — `acquireTokenRedirect` navigue
+   toujours hors de la page en cas de succès, donc le module JS est de toute façon rechargé. Ajout d'un
+   commentaire au-dessus de la déclaration du flag documentant cette hypothèse et le risque si un flow
+   d'authentification non-navigant (ex. popup fallback) était introduit un jour.
+2. `client.test.ts` : le test appelait `flushMicrotasks()` deux fois de suite avec un commentaire justifiant
+   les deux appels comme nécessaires. Vérification empirique (5 exécutions locales) qu'un seul appel suffit
+   et n'introduit aucune instabilité — le second appel était un reliquat du débogage initial du bug
+   `instanceof`/registre de modules (voir plus haut), jamais nettoyé. Supprimé, et commentaire de
+   `flushMicrotasks` réécrit pour expliquer correctement pourquoi un seul flush (macrotask via `setTimeout`)
+   suffit à vider une chaîne de microtasks quelle que soit sa profondeur.
+
+`reviewer-frontend` a re-validé les deux points (`APPROUVÉ`, aucune remarque). Suite `jest` complète (17
+suites / 157 tests) et `npm run lint` relancés après chaque changement — propres.
