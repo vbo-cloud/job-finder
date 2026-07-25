@@ -68,6 +68,12 @@ variable "admin_user_ids" {
   description = "Comma-separated Entra External ID user IDs (JWT sub claims) granted in-app admin features in the webapp (e.g. the credits refill button). Empty string means no admins — the feature is simply disabled."
 }
 
+variable "portfolio_contact_function_url" {
+  type        = string
+  default     = ""
+  description = "URL of the portfolio repo's sendContactEmail Azure Function, called server-to-server by the webapp's POST /feedback endpoint. Not a secret — an anonymous-auth HTTP Function URL — but left empty by default since it's only known after that Function is deployed; empty string means the feedback endpoint returns 502 until this is set (see docs/JOURNAL.md)."
+}
+
 variable "frontend_custom_domain" {
   type        = string
   default     = "jobfinder.vincentboutin.dev"

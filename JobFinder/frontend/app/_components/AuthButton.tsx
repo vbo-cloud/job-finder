@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
-import { LogOut, Moon, Sun, UserRound } from "lucide-react";
+import { LogOut, MessageSquareWarning, Moon, Sun, UserRound } from "lucide-react";
 import Link from "next/link";
 
 import { loginRequest } from "@/lib/auth/msalConfig";
@@ -82,6 +82,15 @@ export default function AuthButton() {
             )}
             {themeId === "dark" ? "Thème clair" : "Thème sombre"}
           </button>
+
+          <Link
+            href="/feedback"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+          >
+            <MessageSquareWarning className="h-3.5 w-3.5" aria-hidden="true" />
+            Donner un avis / Signaler un bug
+          </Link>
 
           <div className="mx-2 my-1 h-px bg-card-hover" />
 

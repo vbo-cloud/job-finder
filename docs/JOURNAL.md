@@ -7417,3 +7417,114 @@ sur tous les fichiers touchés (aucun avertissement), deux passes `reviewer-fron
 sur le nommage de fichier, corrigé puis re-soumis, `APPROUVÉ` sans remarque). QA manuelle des 8 events en
 dev déployé non réalisée dans cette session (nécessite les variables de repo GitHub ci-dessus) — à faire
 une fois celles-ci créées.
+
+## PR #222 — feat: formulaire "Donner un avis / Signaler un bug"
+
+**Date :** 2026-07-24
+**Branche :** `feature/feedback-bug-form` → `dev`
+
+### Contexte
+
+Nouveau formulaire d'avis/signalement de bug pour les utilisateurs authentifiés de JobFinder, relayé par
+email. Pas de nouvelle table en base, pas de nouvelle infra email dans ce repo : la fonctionnalité réutilise
+la Function Azure anonyme `sendContactEmail`, déjà déployée par le repo portfolio (contrat générique
+`{name, email, subject, message}` → relais SMTP Zoho vers `contact@vincentboutin.dev`). L'appel se fait
+serveur-à-serveur depuis le backend Python, jamais depuis le frontend, pour deux raisons : éviter un
+changement CORS côté portfolio, et garantir que `name`/`email` proviennent du JWT validé plutôt que d'un
+champ contrôlé par le client.
+
+### Ce qui a été fait
+
+- `JobFinder/Terraform/envs/dev/variables.tf` : nouvelle variable `portfolio_contact_function_url`,
+  défaut chaîne vide — même schéma non-fail-fast que `admin_user_ids` dans le même fichier, la valeur
+  réelle n'étant connue qu'après provisionnement manuel de la Function côté portfolio.
+- `JobFinder/Terraform/envs/dev/webapp.tf` : la variable est propagée dans `env_vars` du module `webapp`
+  sous `PORTFOLIO_CONTACT_FUNCTION_URL`.
+- `JobFinder/python/agents/webapp/routers/feedback.py` (nouveau) : `POST /feedback`, `APIRouter(prefix="/feedback")`.
+  Utilise `Depends(get_current_identity)` (et non `get_current_user`) car l'email et le nom affiché sont
+  nécessaires. `_resolve_sender()` fait retomber la résolution nom/email : claims du JWT → `UserProfile`
+  stocké → email placeholder synthétisé (`{user_id}@jobfinder.local`), avec mention "email indisponible"
+  injectée dans le message relayé dans ce dernier cas — la Function portfolio exige des champs `name`/
+  `email` non vides et rejette sinon la requête. `PORTFOLIO_CONTACT_FUNCTION_URL` est lue via
+  `os.environ.get(..., "")` au niveau module, **sans** le `raise` fail-fast habituel (contrairement à
+  `ENTRA_EXTERNAL_TENANT_ID` dans `auth.py`) : la variable est légitimement absente tant que Vincent ne l'a
+  pas provisionnée manuellement après déploiement, et un fail-fast ferait planter tout le webapp au
+  démarrage (`main.py` importe tous les routers sans condition) pour une fonctionnalité annexe — une URL
+  non configurée ne dégrade que cet unique endpoint (502). Utilise `requests` (déjà une dépendance du
+  webapp, même schéma que `agents/offer_fetching/ft_client.py` et la récupération JWKS dans `auth.py`) avec
+  un `try/except requests.RequestException` qui logue via structlog puis relance en `HTTPException(502)`.
+  Le sujet relayé est préfixé `"JOBFINDER - BUG : <subject>"` / `"JOBFINDER - AVIS : <subject>"`, et le
+  corps du message relayé s'ouvre toujours par une première ligne `"RESSENTI POSITIF/NEUTRE/NEGATIF/NON
+  INDIQUE"` (dict `_SENTIMENT_LABELS`, `"NON INDIQUE"` par défaut quand `sentiment` est `None`), suivie
+  d'une ligne vide puis du message réel — pour que Vincent puisse trier son inbox sans ouvrir chaque
+  message.
+- `JobFinder/python/agents/webapp/schemas.py` : nouveau schéma `FeedbackCreate`
+  (`type: Literal["avis","bug"]`, `subject` max_length=200, `message` max_length=5000) — délibérément sans
+  champ email/nom. `sentiment: Literal["positif","neutre","negatif"] | None = None` est le seul champ
+  optionnel (le sélecteur smiley n'est pas obligatoire).
+- `JobFinder/python/agents/webapp/main.py` : enregistre `feedback.router` aux côtés de `cv`/`matches`/`profile`.
+- `JobFinder/python/tests/test_webapp_feedback.py` (nouveau) : 8 tests — préfixage du sujet bug/avis
+  (`"JOBFINDER - BUG : ..."` / `"JOBFINDER - AVIS : ..."`), ligne `RESSENTI ...` (y compris le repli
+  `"RESSENTI NON INDIQUE"` quand `sentiment` est omis), repli JWT → profil stocké, repli vers l'email
+  placeholder synthétisé quand rien n'est disponible, 502 sur échec du relais, 502 quand l'URL n'est pas
+  configurée, 500 sur échec de la lookup profil en DB. Suite complète (`pytest tests/`) : 362 passed.
+- `JobFinder/frontend/app/feedback/page.tsx` (nouveau) : client component, même structure que
+  `app/profile/page.tsx` (état local loading/error, barre de retour à l'accueil, tokens de thème
+  `bg-profile-page`/`bg-profile-surface`). Sélecteur segmenté Avis/Bug (défaut Avis), champ sujet, textarea
+  message, appelle `apiClient.post("/feedback", {...})`. Sous le message, sélecteur "Ressenti (facultatif)"
+  — 3 boutons icônes (`Frown`/`Meh`/`Smile` de lucide-react, labels "Mécontent"/"Neutre"/"Content",
+  `role="radiogroup"`/`role="radio"`/`aria-checked`, clic pour désélectionner puisque le champ est
+  optionnel) — envoie `sentiment` (ou `null`) dans le corps de `POST /feedback`.
+- `JobFinder/frontend/app/_components/AuthButton.tsx` et `MobileNavMenu.tsx` : nouvelle entrée "Donner un
+  avis / Signaler un bug" (icône `MessageSquareWarning` de lucide-react, choisie après vérification par
+  grep qu'aucune icône n'était déjà importée dans le repo pour cet usage). Dans `AuthButton.tsx`, l'entrée
+  est placée après le bouton de bascule de thème (ordre : Mon profil → Thème → Donner un avis/Signaler un
+  bug → séparateur → Se déconnecter). Dans `MobileNavMenu.tsx`, qui n'a pas de bascule de thème, elle reste
+  juste après "Mon profil".
+
+### Décisions techniques
+
+Point ouvert à trancher par Vincent, non résolu par cette PR : il n'existe aujourd'hui aucun mécanisme de
+tfvars ou de variable GitHub pour les variables Terraform non-secrètes de ce repo (confirmé via le
+subagent `explorer` en amont de l'implémentation) — seul un `default` Terraform existe pour des variables
+comme `admin_user_ids`/`frontend_custom_domain`. Provisionner en pratique `portfolio_contact_function_url`
+signifie donc soit éditer directement le `default` dans `variables.tf`, soit introduire un mécanisme par
+environnement qui n'existe pas encore. Cette PR ne tranche pas la question — elle documente la variable
+avec un défaut vide et un endpoint qui dégrade proprement (502) tant qu'elle n'est pas renseignée.
+
+**Suivi manuel requis de la part de Vincent, hors périmètre de cette PR :** (1) récupérer l'URL réelle de
+la Function portfolio (`terraform output default_hostname` dans `portfolio/infra/terraform/`, ou le portail
+Azure) ; (2) la renseigner comme `portfolio_contact_function_url` pour l'environnement dev — voir
+l'ambiguïté sur le mécanisme de provisionnement ci-dessus ; (3) confirmer que le CORS de la Function
+portfolio n'a pas besoin de changement (l'appel est serveur-à-serveur, donc a priori non) une fois testé en
+conditions réelles.
+
+**Suivi post-review (après ouverture de la PR #222) :** trois remarques non-bloquantes relevées par une
+revue indépendante ont été corrigées :
+1. `feedback/page.tsx` : le bouton d'envoi gardait le style/texte "Envoyé ✓" si l'utilisateur modifiait le
+   formulaire après un envoi réussi, pour un brouillon pourtant pas encore soumis. Ajout d'un helper
+   `clearOutcome()` (`setState((s) => (s === "loading" ? s : "idle"))`) câblé sur les cinq handlers éditables
+   (type, sujet, message, ressenti) — même pattern que `handleExperienceChange`/`handleDescriptionChange`
+   dans `app/profile/page.tsx`, qui remettent `saved` à `false` sur édition.
+2. `schemas.py::FeedbackCreate` : `subject`/`message` n'avaient qu'un `max_length`, pas de `min_length` — une
+   valeur uniquement composée d'espaces passait la validation côté API même si le bouton client la bloque.
+   Ajout de `model_config = ConfigDict(str_strip_whitespace=True)` + `min_length=1` sur les deux champs, pour
+   que "obligatoire" soit une vraie garantie serveur et pas seulement un bouton désactivé côté client.
+3. Point relevé mais **non corrigé, délibérément** : l'appel `requests.post` dans `feedback.py` bloque le
+   thread FastAPI jusqu'à `CONTACT_FUNCTION_TIMEOUT_SECONDS` (15s) — sans risque aujourd'hui vu le trafic,
+   migrer vers `httpx.AsyncClient` réglerait le problème sous charge concurrente, mais introduirait une
+   incohérence avec le pattern `requests` synchrone utilisé partout ailleurs côté serveur-à-serveur dans ce
+   repo (`auth.py`, `ft_client.py`) pour un gain non justifié à ce stade.
+
+`reviewer-backend` et `reviewer-frontend` ont re-validé chacun des deux premiers points (`APPROUVÉ`, aucune
+remarque). 2 nouveaux tests ajoutés (`test_defaults_to_non_indique_when_sentiment_omitted` existait déjà ;
+nouveau : `test_rejects_whitespace_only_required_field`, paramétré sujet/message).
+
+**Vérification :** `pytest tests/` (`JobFinder/python`) : 364 passed. `npm run build` (`JobFinder/frontend`)
+compile, route `/feedback` à 3.17 kB. `npm test` (`JobFinder/frontend`) : 155 passed, 16 suites (dont
+`MobileNavMenu.test.tsx`, non affecté par le nouveau lien). `terraform fmt -check -diff` et
+`terraform validate` (`JobFinder/Terraform/envs/dev`) : propre / valide — pas de `plan`/`apply` local
+(CI-only, conforme au Git Flow de ce repo). Test manuel de `POST /feedback` contre la vraie Function
+portfolio **non effectué** dans cette session (aucune URL de Function de test/dev disponible dans cet
+environnement) — à faire avant merge, conforme à la checklist "Vérification avant PR" de ce repo. Confirmé
+qu'aucun fichier du repo `portfolio` (séparé) n'a été touché.

@@ -105,5 +105,12 @@ module "webapp" {
       name  = "ADMIN_USER_IDS"
       value = var.admin_user_ids
     },
+    # Anonymous-auth Azure Function URL (portfolio repo) — semi-public by
+    # design, not a secret. Left empty until Vincent provisions the value
+    # (see docs/JOURNAL.md); POST /feedback degrades to a 502 until then.
+    {
+      name  = "PORTFOLIO_CONTACT_FUNCTION_URL"
+      value = var.portfolio_contact_function_url
+    },
   ]
 }
