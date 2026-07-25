@@ -7815,3 +7815,22 @@ a confirmé que le clic déclenche bien le handler avec `detailRef.current` poin
 offset — seule l'étape d'animation n'a pas pu être observée dans cette session.
 
 `tsc --noEmit` et `eslint` propres après les deux correctifs.
+
+**Second suivi post-review :** Vincent a demandé confirmation qu'il n'est possible ni de scroller sur la
+carte, ni d'afficher le bouton/l'indice "CARTE" et sa flèche, tant que l'utilisateur n'est pas connecté.
+Vérification live (déconnexion réelle via `instance.logoutRedirect()`, puis `WheelEvent` synthétique
+`deltaY: -100` dispatché sur `#home`) : les deux étaient déjà correctement gardés — l'indice `ScrollHint`
+"CARTE" dans `UploadSection.tsx` est conditionné à `isAuthenticated`, et le geste de scroll dans le
+gestionnaire `wheel` de `HomeMapSection.tsx` vérifie `isAuthenticatedRef.current` avant de transitionner
+vers le mode carte ; capture d'écran confirmant qu'on reste sur l'écran d'import de CV après le
+`WheelEvent`.
+
+Point durci à cette occasion : `enterMap()` elle-même n'avait pas de garde interne — elle ne restait
+sûre que parce que ses trois appelants actuels (geste de scroll, pill tactile, indice desktop) la
+gardaient chacun de leur côté. Déplacement de la vérification `isAuthenticatedRef.current` dans
+`enterMap()` et redirection du geste de scroll pour passer par cette même fonction plutôt que
+dupliquer `startTransition("to-map", "map")` — un seul point de décision désormais, pour qu'un futur
+appelant ne puisse pas accidentellement ouvrir la carte (zone géographique liée au profil) sans être
+connecté. Aucun changement de comportement observable pour les trois appelants existants (déjà tous
+correctement gardés) ; re-testé en live après coup (déconnexion + `WheelEvent`, puis reconnexion +
+clic sur l'indice "CARTE") pour confirmer l'absence de régression dans les deux sens.
