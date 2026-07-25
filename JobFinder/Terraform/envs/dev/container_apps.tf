@@ -85,14 +85,6 @@ module "job_matching" {
       value = module.postgresql.connection_string
     },
     {
-      name  = "openai-api-key"
-      value = module.openai.primary_key
-    },
-    {
-      name  = "openai-endpoint"
-      value = module.openai.endpoint
-    },
-    {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
@@ -105,14 +97,6 @@ module "job_matching" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
-    },
-    {
-      name        = "AZURE_OPENAI_ENDPOINT"
-      secret_name = "openai-endpoint"
     },
     {
       name  = "MATCHING_SCORE_THRESHOLD"
