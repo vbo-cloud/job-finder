@@ -33,8 +33,12 @@ function loadApiClientAndErrorClass() {
 }
 
 // Axios threads the request interceptor through several chained promises
-// before invoking it, so a plain `await Promise.resolve()` isn't enough to
-// reach our `catch` branch — flush the microtask queue instead.
+// before invoking it, and our interceptor itself awaits acquireTokenSilent's
+// rejection before reaching the catch branch — a plain `await Promise.resolve()`
+// only drains one microtask level, not that whole chain. `setTimeout` yields to
+// a macrotask instead, and Node/jsdom fully drain the microtask queue (including
+// microtasks scheduled by other microtasks) before running any queued macrotask,
+// so a single flush is enough regardless of how many promise links are involved.
 const flushMicrotasks = () =>
   new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -76,7 +80,6 @@ describe("apiClient request interceptor — single-flight acquireTokenRedirect",
       .catch(() => undefined);
 
     // Let both interceptor callbacks run and hit the InteractionRequiredAuthError branch.
-    await flushMicrotasks();
     await flushMicrotasks();
 
     expect(mockAcquireTokenRedirect).toHaveBeenCalledTimes(1);

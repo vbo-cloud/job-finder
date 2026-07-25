@@ -19,6 +19,12 @@ const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
 });
 
+// Never reset to `null` on success (only on failure, below): this assumes
+// `acquireTokenRedirect` always navigates away on success (full-page
+// redirect), so the module gets reloaded fresh anyway. If a non-navigating
+// auth flow is ever added here (e.g. a popup fallback), this flag would need
+// resetting on success too, or it would permanently block further redirects
+// for the lifetime of this module instance.
 let redirectInFlight: Promise<void> | null = null;
 
 apiClient.interceptors.request.use(async (config) => {
