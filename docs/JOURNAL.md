@@ -8120,3 +8120,66 @@ encore que trois déclencheurs (molette, pilule tactile, indice de scroll), cett
 comme quatrième ; explication margin-vs-padding du `md:ml-24` complétée sur place, au même endroit.
 
 Aucune remarque non-bloquante en attente.
+
+---
+
+## PR #230 — chore: supprimer la queue Service Bus `match-ready` sans consommateur
+
+**Date :** 2026-07-25
+**Branche :** `chore/remove-match-ready-queue` → `dev`
+
+### Contexte
+
+PR 1/6 du plan "notifications" (recap email des nouvelles offres par CV, décidé avec Vincent le
+2026-07-25 — voir `docs/BACKLOG.md` et les entretiens précédents pour le reste du plan, hors périmètre
+de cette tâche). Prompt détaillé préparé avec Claude Cowork :
+`docs/prompts/prompt-remove-match-ready-queue.md`.
+
+La queue `match-ready` (`envs/dev/servicebus.tf`) a été créée pour un design abandonné : le plan initial
+(`docs/ROADMAP.md:168-172`, M2) prévoyait `job-matching → match-ready → job-cv-review → notification
+utilisateur`. Le `job-cv-review` a été remplacé par la table `match_analyses` / la queue
+`match-analysis` (voir `docs/adr/ADR-018-monetization-architecture.md`) — mais `agents/matching/main.py`
+continuait à publier un message (résumé agrégé du run : `run_date`, `cvs_processed`, `new_matches`,
+`offers_available`, sans `user_id`/`cv_id`) que personne n'a jamais consommé. `docs/BACKLOG.md` documentait
+déjà le symptôme dans un item `[optional]` dédié (27 messages actifs / 26 en DLQ constatés le 08/07),
+retiré par cette même PR (voir "Ce qui a été fait" ci-dessous).
+
+### Ce qui a été fait
+
+- `envs/dev/servicebus.tf` : retrait de `"match-ready"` de la liste `queues` et de la ligne
+  correspondante dans le commentaire d'en-tête.
+- `agents/matching/main.py` : retrait de la constante `MATCH_READY_QUEUE` et de l'appel `send_message`
+  associé. `cvs_processed`/`new_matches`/`offers_available` restent utilisées juste après par
+  `logger.info("matching_run_completed", ...)` — aucune variable devenue orpheline.
+- `docs/BACKLOG.md` : suppression de l'item résolu (`[optional] match-ready sans consommateur`).
+  `README.md` mis à jour aussi (liste des queues planifiées, non mentionné dans le prompt d'origine mais
+  doc vivante, pas historique).
+- Historique volontairement laissé tel quel (hors périmètre) : section `[SUPERSEDED]` de
+  `docs/BACKLOG.md:147-172`, toutes les mentions dans `docs/JOURNAL.md`/`docs/adr/`, et `docs/ROADMAP.md`
+  — snapshot de planification daté du 2026-05-18, non maintenu depuis (M2 encore marqué "🎯 en cours",
+  items `[ ]` jamais cochés aux lignes 216/222/228, milestone AKS abandonné par ailleurs) : traité comme
+  un document historique au même titre que les ADRs, pas comme la doc vivante que sont `README.md`/
+  `docs/BACKLOG.md`.
+
+### Vérification
+
+- `pytest JobFinder/python` (suite complète) : 376 passés, aucune régression.
+- `terraform fmt -check` et `terraform validate` sur `envs/dev` : propres.
+- `terraform plan` sur `envs/dev` : un seul destroy imputable à cette PR
+  (`module.servicebus.azurerm_servicebus_queue.this["match-ready"]`) ; les autres diffs affichés
+  (VM jumpbox, container apps, action group) existent déjà à l'identique sur `dev` non modifié — vérifié
+  par un plan comparatif avant/après stash des changements de cette branche, drift préexistant hors
+  périmètre.
+- `grep -rn "match-ready\|MATCH_READY_QUEUE"` sur tout le repo : plus aucune référence dans du code ou de
+  la doc vivante, seulement dans l'historique (`docs/JOURNAL.md`, `docs/adr/`, section `[SUPERSEDED]` de
+  `docs/BACKLOG.md`, et `docs/ROADMAP.md` traité comme historique — voir "Ce qui a été fait" ci-dessus).
+
+Passage doc-writer : `README.md` avait bien retiré `match-ready` de la liste des queues mais avait laissé
+`offer-fetch-request` absent de la même liste (les 4 queues réelles de `envs/dev/servicebus.tf` sont
+`start-matching`, `cv-analysis`, `match-analysis`, `offer-fetch-request`) — corrigé sur place. Docstring de
+module de `agents/matching/main.py` complétée (un résumé d'une ligne suivi d'une ligne vide et des
+guillemets fermants — reliquat de la suppression de la phrase décrivant l'ancien post `match-ready`) pour
+décrire fidèlement le comportement actuel (consomme `start-matching`, purge les matchs obsolètes, enfile
+le top-N sur `match-analysis`).
+
+Aucune remarque non-bloquante en attente.
