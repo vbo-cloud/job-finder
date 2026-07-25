@@ -11,6 +11,7 @@ import CVCard from "./CVCard";
 import CVCardOptimistic from "./CVCardOptimistic";
 import CVCardPlaceholder from "./CVCardPlaceholder";
 import CVCardSkeleton from "./CVCardSkeleton";
+import ScrollHint from "./ScrollHint";
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_CVS = 10;
@@ -48,6 +49,9 @@ interface Props {
    * settled (or immediately if the scroll can't be determined). Owned by the
    * parent so this component doesn't need to know about a sibling's DOM id. */
   onScrollToHome?: (onLanded: () => void) => void;
+  /** Scrolls to the detail section ("OFFRES" hint) — owned by the parent for
+   * the same reason as onScrollToHome. */
+  onScrollToOffers?: () => void;
 }
 
 export default function LibrarySection({
@@ -59,6 +63,7 @@ export default function LibrarySection({
   onCvsChange,
   selectedCvId = null,
   onScrollToHome,
+  onScrollToOffers,
 }: Props) {
   const isAuthenticated        = useIsAuthenticated();
   const [cvs, setCvs]          = useState<CVData[]>([]);
@@ -163,6 +168,9 @@ export default function LibrarySection({
     onScrollToHome(() => fileInputRef.current?.click());
   };
 
+  // "ACCUEIL" hint: same scroll, no follow-up action once landed.
+  const handleAccueilClick = () => onScrollToHome?.(() => {});
+
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -206,20 +214,34 @@ export default function LibrarySection({
     >
       {/* Scroll hints — meaningless below md, where swipe navigation is off
           (the pinned mobile menu navigates instead) and the bar covers the top. */}
-      <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
-        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
-        <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
-      </div>
+      <ScrollHint
+        direction="up"
+        label="ACCUEIL"
+        ariaLabel="Retour à l'accueil"
+        onClick={handleAccueilClick}
+        className="absolute top-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+      />
 
-      <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
-        <span className="text-[9px] tracking-widest text-label">OFFRES</span>
-        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
-      </div>
+      {/* Hidden without a selected CV: the detail section it scrolls to
+          isn't mounted yet (HomeClient only renders it once selectedCvId is
+          set), so the click would silently no-op otherwise. */}
+      {selectedCvId && (
+        <ScrollHint
+          direction="down"
+          label="OFFRES"
+          ariaLabel="Voir les offres"
+          onClick={onScrollToOffers}
+          className="absolute bottom-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+        />
+      )}
 
       {/* Header is taken out of flow (absolute) so its own vertical offset
           doesn't push the grid below down — the grid stays centered in the
-          full section regardless of how far down the header sits. */}
-      <div className="absolute inset-x-0 top-0 px-4 pt-24 md:px-10 md:pt-40">
+          full section regardless of how far down the header sits.
+          pointer-events-none: this box's top edge sits at inset-x-0 top-0,
+          overlapping the ACCUEIL hint button above — nothing inside it is
+          interactive, so it must not intercept that click. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 px-4 pt-24 md:px-10 md:pt-40">
         <div className="mx-auto w-full max-w-[1080px]">
           <div className="flex items-end justify-between gap-5">
             <div className="min-w-0">

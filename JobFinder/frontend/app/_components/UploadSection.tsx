@@ -9,6 +9,7 @@ import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
 
 import OrbitAnimation from "./OrbitAnimation";
+import ScrollHint from "./ScrollHint";
 
 type AnimState = "idle" | "uploaded" | "done";
 
@@ -18,9 +19,19 @@ interface Props {
   onUploadComplete?: (cvId: string) => void;
   onAnimationComplete?: (thumbnailUrl: string) => void;
   libraryAccessible?: boolean;
+  /** Enters the map mode — owned by HomeMapSection, which controls the CV/map layer switch. */
+  onEnterMap?: () => void;
+  /** Scrolls to the library section — owned by HomeClient, which knows about the sibling's DOM id. */
+  onScrollToLibrary?: () => void;
 }
 
-export default function UploadSection({ onUploadComplete, onAnimationComplete, libraryAccessible = false }: Props) {
+export default function UploadSection({
+  onUploadComplete,
+  onAnimationComplete,
+  libraryAccessible = false,
+  onEnterMap,
+  onScrollToLibrary,
+}: Props) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -149,18 +160,24 @@ export default function UploadSection({ onUploadComplete, onAnimationComplete, l
           Hidden below md too: the mobile bar covers that area and swipe
           navigation is disabled there anyway. */}
       {isAuthenticated && (
-        <div className="pointer-events-none absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden [@media(any-pointer:coarse)]:hidden">
-          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
-          <span className="text-[9px] tracking-widest text-label">CARTE</span>
-        </div>
+        <ScrollHint
+          direction="up"
+          label="CARTE"
+          ariaLabel="Afficher la carte"
+          onClick={onEnterMap}
+          className="absolute top-[18px] left-1/2 -translate-x-1/2 max-md:hidden [@media(any-pointer:coarse)]:hidden"
+        />
       )}
 
       {/* Scroll hint — meaningless below md where swipe navigation is off. */}
       {libraryAccessible && (
-        <div className="pointer-events-none absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 max-md:hidden">
-          <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
-          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
-        </div>
+        <ScrollHint
+          direction="down"
+          label="BIBLIOTHÈQUE"
+          ariaLabel="Aller à la bibliothèque"
+          onClick={onScrollToLibrary}
+          className="absolute bottom-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+        />
       )}
     </div>
   );

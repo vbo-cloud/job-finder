@@ -7740,3 +7740,100 @@ appels OpenAI réels facturés — à faire par Vincent avant ou après merge, c
 "Vérification avant PR" du prompt source. Rappel : les profils déjà contaminés par une extraction
 antérieure ne seront pas corrigés rétroactivement — observer l'effet sur un profil réel demande de
 supprimer puis ré-uploader le CV concerné après déploiement.
+
+## PR #226 — feat(frontend): rendre cliquables les indices de navigation scroll (Carte/Bibliothèque)
+
+**Date :** 2026-07-25
+**Branche :** `feature/clickable-nav-scroll-hints` → `dev`
+
+### Contexte
+
+Vincent a remarqué que sur la vue "Vos correspondances" (`CVDetailSection`), l'indice "BIBLIOTHÈQUE"
+(texte + flèche qui rebondit) en haut de page est cliquable et déclenche un scroll smooth vers la
+bibliothèque, alors que les indices visuellement identiques présents sur les autres pages — "CARTE" et
+"BIBLIOTHÈQUE" sur l'écran d'import de CV, "ACCUEIL" et "OFFRES" sur la bibliothèque — étaient purement
+décoratifs (`pointer-events-none`, aucun `onClick`). Demande : aligner le comportement de tous ces
+indices sur celui déjà en place dans `CVDetailSection`, et ajouter un nouveau footer "ACCUEIL" (flèche
+vers le bas) sur la page Carte, qui n'en avait aucun.
+
+### Ce qui a été fait
+
+- `UploadSection.tsx` — l'indice "CARTE" (haut) devient un bouton qui appelle `onEnterMap` (nouvelle
+  prop) ; l'indice "BIBLIOTHÈQUE" (bas) devient un bouton qui appelle `onScrollToLibrary` (nouvelle
+  prop). Les deux gardent leurs classes de visibilité existantes (`max-md:hidden`,
+  `[@media(any-pointer:coarse)]:hidden` pour CARTE).
+- `HomeMapSection.tsx` — passe `enterMap` (déjà utilisé par le pill tactile "Carte") à `UploadSection`
+  via `onEnterMap`. Ajoute un nouveau bouton "ACCUEIL" (texte + flèche vers le bas, `animate-bounce`) en
+  mode carte, appelant `exitMap` — équivalent souris du pill tactile "Terminé" déjà existant, avec les
+  mêmes classes de visibilité inversées (`max-md:hidden [@media(any-pointer:coarse)]:hidden`) pour ne
+  jamais s'afficher en même temps que lui.
+- `HomeClient.tsx` — `handleCloseDetail` (déjà utilisé par `CVDetailSection`) est réutilisé tel quel comme
+  `onScrollToLibrary` pour `UploadSection` (même destination, pas de duplication). Nouvelle fonction
+  `handleScrollToDetail` pour l'indice "OFFRES" de `LibrarySection`, qui scrolle vers la section détail
+  déjà montée (un CV y est auto-sélectionné dès que la bibliothèque en contient un).
+- `LibrarySection.tsx` — l'indice "ACCUEIL" (haut) devient un bouton réutilisant la prop `onScrollToHome`
+  existante (déjà utilisée par "Ajouter un CV" pour scroller avant d'ouvrir le sélecteur de fichier) ;
+  l'indice "OFFRES" (bas) devient un bouton appelant la nouvelle prop `onScrollToOffers`.
+
+**Bug trouvé et corrigé en testant "ACCUEIL" dans le navigateur :** le bloc d'en-tête de la bibliothèque
+(titre + compteur de CVs), positionné en `absolute inset-x-0 top-0` avec un `padding-top` important
+(`pt-24`/`md:pt-40`), arrive après le bouton "ACCUEIL" dans le DOM et — sans `pointer-events-none` —
+capturait silencieusement les clics sur la zone du bouton malgré son contenu visuel décalé plus bas par
+le padding. Rien à l'intérieur de ce bloc n'étant interactif, `pointer-events-none` lui a été ajouté.
+
+### Vérification
+
+`tsc --noEmit` et `eslint` propres sur les quatre fichiers touchés. Test manuel dans Chrome (session
+Google existante, `npm run dev`) : les six comportements (CARTE → mode carte, ACCUEIL carte → sortie
+carte, BIBLIOTHÈQUE upload → scroll bibliothèque, ACCUEIL bibliothèque → scroll accueil, OFFRES → scroll
+détail, BIBLIOTHÈQUE détail → régression non cassée) vérifiés un par un via captures d'écran et lecture
+de `main.scrollTop`.
+
+**Suivi post-review (après ouverture de la PR #226) :** deux remarques de Vincent traitées.
+
+1. **`LibrarySection.tsx` — OFFRES sans CV sélectionné.** `detailRef.current` est `null` tant que
+   `HomeClient` n'a pas monté `CVDetailSection` (uniquement une fois `selectedCvId` non nul) — fenêtre réelle
+   pendant un upload optimiste où la bibliothèque est déjà accessible mais le vrai CV n'est pas encore dans
+   `cvs`. Le clic sur OFFRES ne plantait pas (`?.scrollIntoView` no-op silencieux) mais ne faisait rien
+   d'observable. Le bouton est maintenant conditionné à `selectedCvId`, même garde que celle déjà utilisée
+   par `HomeClient` pour monter `CVDetailSection`.
+2. **Duplication du pattern [texte + flèche `animate-bounce`], répété six fois** dans `UploadSection.tsx`,
+   `HomeMapSection.tsx`, `LibrarySection.tsx` et `CVDetailSection.tsx`. Extraction d'un composant partagé
+   `ScrollHint.tsx` (`direction`, `label`, `ariaLabel`, `onClick`, `className` pour le positionnement propre à
+   chaque appelant) — les six occurrences pointent maintenant vers la même implémentation, y compris le bouton
+   déjà présent dans `CVDetailSection` (qui n'avait au passage jamais eu l'anneau de focus des cinq autres :
+   uniformisé par la même occasion).
+
+Note de vérification pour ce suivi : le scroll `smooth` déclenché par clic n'a pas pu être ré-observé
+visuellement pendant le débogage (`document.visibilityState` de l'onglet Chrome de test est passé à
+`"hidden"` en cours de session malgré `document.hasFocus() === true`, ce qui suspend l'avancement des
+animations pilotées par `requestAnimationFrame` — reproduit même sur un `main.scrollTo({behavior:"smooth"})`
+brut, indépendant de tout code de cette PR, et même dans un nouvel onglet fraîchement ouvert). Le
+comportement de la fonction elle-même reste vérifié : un `console.log` temporaire dans `handleScrollToDetail`
+a confirmé que le clic déclenche bien le handler avec `detailRef.current` pointant sur le bon nœud
+`section#cv-detail`, et un `scrollIntoView({behavior:"auto"})` vers la même cible saute correctement au bon
+offset — seule l'étape d'animation n'a pas pu être observée dans cette session.
+
+`tsc --noEmit` et `eslint` propres après les deux correctifs.
+
+**Second suivi post-review :** Vincent a demandé confirmation qu'il n'est possible ni de scroller sur la
+carte, ni d'afficher le bouton/l'indice "CARTE" et sa flèche, tant que l'utilisateur n'est pas connecté.
+Vérification live (déconnexion réelle via `instance.logoutRedirect()`, puis `WheelEvent` synthétique
+`deltaY: -100` dispatché sur `#home`) : les deux étaient déjà correctement gardés — l'indice `ScrollHint`
+"CARTE" dans `UploadSection.tsx` est conditionné à `isAuthenticated`, et le geste de scroll dans le
+gestionnaire `wheel` de `HomeMapSection.tsx` vérifie `isAuthenticatedRef.current` avant de transitionner
+vers le mode carte ; capture d'écran confirmant qu'on reste sur l'écran d'import de CV après le
+`WheelEvent`.
+
+Point durci à cette occasion : `enterMap()` elle-même n'avait pas de garde interne — elle ne restait
+sûre que parce que ses trois appelants actuels (geste de scroll, pill tactile, indice desktop) la
+gardaient chacun de leur côté. Ajout d'une garde `isAuthenticatedRef.current` interne à `enterMap()`
+(en plus de celle déjà présente dans chacun des trois appelants, qui reste en place — garde redondante
+par construction, notamment côté geste de scroll où elle conditionne aussi le `preventDefault()`) et
+redirection du geste de scroll pour passer par cette même fonction plutôt que dupliquer
+`startTransition("to-map", "map")` — un seul point de décision désormais pour l'action de transition
+elle-même, pour qu'un futur appelant ne puisse pas accidentellement ouvrir la carte (zone géographique
+liée au profil) sans être connecté. Aucun changement de comportement observable pour les trois
+appelants existants (déjà tous correctement gardés) ; re-testé en live après coup (déconnexion +
+`WheelEvent`, puis reconnexion + clic sur l'indice "CARTE") pour confirmer l'absence de régression
+dans les deux sens.

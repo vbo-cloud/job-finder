@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import CorrespondancesPanel from "./CorrespondancesPanel";
 import CvAnalysisCard from "./CvAnalysisCard";
 import RomeReanalysisButton from "./RomeReanalysisButton";
+import ScrollHint from "./ScrollHint";
 
 // Bornes du redimensionnement manuel de la zone d'analyse (drag sur le bandeau).
 const ANALYSIS_MIN_HEIGHT_PX = 140;
@@ -177,14 +178,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
             Masqué sous md : la navigation passe par le menu épinglé, et le
             geste de scroll vers la bibliothèque n'existe plus sur mobile. */}
         <div className="flex-none flex justify-center pt-[3px] max-md:hidden">
-          <button
-            onClick={onClose}
-            aria-label="Retour à la bibliothèque"
-            className="flex flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer focus-visible:outline-none"
-          >
-            <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
-            <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
-          </button>
+          <ScrollHint direction="up" label="BIBLIOTHÈQUE" ariaLabel="Retour à la bibliothèque" onClick={onClose} />
         </div>
 
         {/* Body — stacked below lg (selector + analysis on top, matches under),

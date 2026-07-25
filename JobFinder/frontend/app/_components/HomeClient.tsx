@@ -84,9 +84,16 @@ export default function HomeClient() {
     });
   }, []);
 
-  // Back action from CVDetailSection: scroll to library without unmounting the section.
+  // Back action from CVDetailSection (and the library-bound hint in
+  // UploadSection): scroll to library without unmounting the section.
   const handleCloseDetail = useCallback(() => {
     document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, []);
+
+  // "OFFRES" hint in LibrarySection: scroll down to the already-mounted
+  // detail section (a CV is auto-selected as soon as the library has one).
+  const handleScrollToDetail = useCallback(() => {
+    detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
   // Scrolls to the home/upload section, then calls onLanded once the scroll
@@ -140,6 +147,7 @@ export default function HomeClient() {
           onUploadComplete: handleUploadComplete,
           onAnimationComplete: handleAnimationComplete,
           libraryAccessible,
+          onScrollToLibrary: handleCloseDetail,
         }}
         onZoneSaved={handleZoneSaved}
       />
@@ -152,6 +160,7 @@ export default function HomeClient() {
         onCvsChange={setCvList}
         selectedCvId={selectedCvId}
         onScrollToHome={handleScrollToHome}
+        onScrollToOffers={handleScrollToDetail}
       />
       {selectedCvId && (
         <CVDetailSection
