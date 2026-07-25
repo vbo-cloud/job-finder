@@ -8523,7 +8523,7 @@ obstacle, seulement une étape manuelle après cette PR.
   domaine vérifié à la ressource parente). `azurerm_communication_service` et le domaine portent
   `prevent_destroy = true` + `protect = "true"` — une destruction accidentelle du domaine imposerait de
   refaire la vérification DNS manuelle, pas juste un nouvel apply.
-- **`envs/dev/communication_email.tf`** : nouveau fichier, appelle le module avec
+- **`envs/dev/email_communication.tf`** : nouveau fichier, appelle le module avec
   `data_location = "France"` (cohérent avec la position RGPD déjà actée du projet, ADR-006).
 - **`envs/dev/outputs.tf`** : deux nouvelles sorties, `email_verification_records` (les enregistrements
   DNS à ajouter manuellement chez l'hébergeur de `vincentboutin.dev` — Domain, DKIM, DKIM2, SPF, DMARC)
