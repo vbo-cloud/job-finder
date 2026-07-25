@@ -9,6 +9,7 @@ import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
 
 import OrbitAnimation from "./OrbitAnimation";
+import ScrollHint from "./ScrollHint";
 
 type AnimState = "idle" | "uploaded" | "done";
 
@@ -159,28 +160,24 @@ export default function UploadSection({
           Hidden below md too: the mobile bar covers that area and swipe
           navigation is disabled there anyway. */}
       {isAuthenticated && (
-        <button
-          type="button"
+        <ScrollHint
+          direction="up"
+          label="CARTE"
+          ariaLabel="Afficher la carte"
           onClick={onEnterMap}
-          aria-label="Afficher la carte"
-          className="absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden [@media(any-pointer:coarse)]:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-        >
-          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
-          <span className="text-[9px] tracking-widest text-label">CARTE</span>
-        </button>
+          className="absolute top-[18px] left-1/2 -translate-x-1/2 max-md:hidden [@media(any-pointer:coarse)]:hidden"
+        />
       )}
 
       {/* Scroll hint — meaningless below md where swipe navigation is off. */}
       {libraryAccessible && (
-        <button
-          type="button"
+        <ScrollHint
+          direction="down"
+          label="BIBLIOTHÈQUE"
+          ariaLabel="Aller à la bibliothèque"
           onClick={onScrollToLibrary}
-          aria-label="Aller à la bibliothèque"
-          className="absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-        >
-          <span className="text-[9px] tracking-widest text-label">BIBLIOTHÈQUE</span>
-          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
-        </button>
+          className="absolute bottom-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+        />
       )}
     </div>
   );

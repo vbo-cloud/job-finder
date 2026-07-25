@@ -11,6 +11,7 @@ import CVCard from "./CVCard";
 import CVCardOptimistic from "./CVCardOptimistic";
 import CVCardPlaceholder from "./CVCardPlaceholder";
 import CVCardSkeleton from "./CVCardSkeleton";
+import ScrollHint from "./ScrollHint";
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_CVS = 10;
@@ -213,29 +214,25 @@ export default function LibrarySection({
     >
       {/* Scroll hints — meaningless below md, where swipe navigation is off
           (the pinned mobile menu navigates instead) and the bar covers the top. */}
-      <button
-        type="button"
+      <ScrollHint
+        direction="up"
+        label="ACCUEIL"
+        ariaLabel="Retour à l'accueil"
         onClick={handleAccueilClick}
-        aria-label="Retour à l'accueil"
-        className="absolute top-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-      >
-        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
-        <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
-      </button>
+        className="absolute top-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+      />
 
       {/* Hidden without a selected CV: the detail section it scrolls to
           isn't mounted yet (HomeClient only renders it once selectedCvId is
           set), so the click would silently no-op otherwise. */}
       {selectedCvId && (
-        <button
-          type="button"
+        <ScrollHint
+          direction="down"
+          label="OFFRES"
+          ariaLabel="Voir les offres"
           onClick={onScrollToOffers}
-          aria-label="Voir les offres"
-          className="absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-        >
-          <span className="text-[9px] tracking-widest text-label">OFFRES</span>
-          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
-        </button>
+          className="absolute bottom-[18px] left-1/2 -translate-x-1/2 max-md:hidden"
+        />
       )}
 
       {/* Header is taken out of flow (absolute) so its own vertical offset
