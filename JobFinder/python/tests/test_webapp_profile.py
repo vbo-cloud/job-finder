@@ -36,6 +36,7 @@ def _make_profile() -> MagicMock:
     profile.rome_codes = {}
     profile.commune_codes = ["75101", "75102"]
     profile.experience_level = None
+    profile.notification_days = [7]
     profile.candidate_description = None
     profile.analysis_credits_remaining = 30
     # ProfileOut declares is_admin (computed field, not a DB column) — without a
@@ -89,6 +90,7 @@ class TestGetProfile:
         body = resp.json()
         assert body["user_id"] == TEST_USER_ID
         assert body["commune_codes"] == ["75101", "75102"]
+        assert body["notification_days"] == [7]
         assert body["analysis_credits_remaining"] == 30
 
     def test_creates_profile_with_defaults_on_first_get(self, test_client, mock_session):
@@ -104,6 +106,7 @@ class TestGetProfile:
         assert resp.status_code == 200
         body = resp.json()
         assert body["analysis_credits_remaining"] == 30
+        assert body["notification_days"] == [7]
         mock_session.commit.assert_called_once()
 
     def test_does_not_create_when_profile_exists(self, test_client, mock_session):
@@ -180,6 +183,50 @@ class TestPutProfile:
 
         assert resp.status_code == 200
         mock_embed.assert_not_called()
+
+    def test_only_notification_days_does_not_recompute_intent(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"notification_days": [1, 3, 5]})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_notification_days_empty_list_disables_without_reverting_to_default(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.notification_days = []
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"notification_days": []})
+
+        assert resp.status_code == 200
+        assert resp.json()["notification_days"] == []
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["notification_days"] == []
+
+    def test_notification_days_absent_defaults_insert_values_to_sunday(
+        self, test_client, mock_session
+    ):
+        """A PUT that never mentions notification_days (e.g. commune_codes
+        only) must still carry the [7] default in the INSERT .values() clause
+        — `updated.get("notification_days") or []` would collapse "key
+        absent" into "[]" here, the exact trap documented in
+        routers/profile.py, and clobber a brand-new profile's default on the
+        insert path."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        insert_values = stmt.compile().params
+        assert insert_values["notification_days"] == [7]
 
     def test_experience_and_candidate_description_recomputes_intent_embedding(
         self, test_client, mock_session

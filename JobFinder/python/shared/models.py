@@ -175,6 +175,12 @@ class UserProfile(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     rome_codes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     commune_codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # Jours de la semaine (ISO 8601 : 1=lundi ... 7=dimanche) où l'utilisateur reçoit le récap email
+    # des nouvelles offres par CV (agent de notification planifié, pas encore livré — voir migration
+    # 033). [] = notifications désactivées, pas de booléen séparé. Défaut [7] (dimanche uniquement).
+    notification_days: Mapped[list[int]] = mapped_column(
+        ARRAY(SmallInteger), nullable=False, default=lambda: [7]
+    )
     experience_level: Mapped[str | None] = mapped_column(String, nullable=True)
     candidate_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     intent_embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)

@@ -25,7 +25,8 @@ def default_profile_values(identity: UserIdentity) -> dict:
 
     Returns:
         dict with keys id, user_id, email, display_name, rome_codes,
-        analysis_credits_remaining, analysis_credits_reset_at, created_at.
+        analysis_credits_remaining, analysis_credits_reset_at, notification_days,
+        created_at.
     """
     return {
         "id": uuid.uuid4(),
@@ -35,5 +36,6 @@ def default_profile_values(identity: UserIdentity) -> dict:
         "rome_codes": {},
         "analysis_credits_remaining": 30,
         "analysis_credits_reset_at": None,
+        "notification_days": [7],
         "created_at": datetime.now(timezone.utc),
     }

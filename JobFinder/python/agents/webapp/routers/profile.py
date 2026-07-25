@@ -216,6 +216,10 @@ def put_profile(
         # commune_codes is NOT NULL in the DB — a null-clear over the wire
         # normalizes to "no codes" instead of hitting a DB constraint error.
         updated["commune_codes"] = []
+    if "notification_days" in updated and updated["notification_days"] is None:
+        # notification_days is NOT NULL in the DB — same null-clear normalization
+        # as commune_codes above.
+        updated["notification_days"] = []
 
     # Defaults (id, identity claims, rome_codes, credits, created_at) are only
     # meaningful on the INSERT path: on conflict, set_ only contains `updated`,
@@ -223,6 +227,11 @@ def put_profile(
     insert_values = {
         **default_profile_values(identity),
         "commune_codes": updated.get("commune_codes") or [],
+        # Deliberately not `updated.get("notification_days") or []`: that would
+        # collapse "key absent" (new profile, keep the [7] default) into the
+        # same case as "key present with []" (explicit opt-out), clobbering the
+        # default on any PUT that doesn't mention notification_days.
+        "notification_days": updated.get("notification_days", [7]),
         "experience_level": updated.get("experience_level"),
         "candidate_description": updated.get("candidate_description"),
         "intent_embedding": intent_embedding,

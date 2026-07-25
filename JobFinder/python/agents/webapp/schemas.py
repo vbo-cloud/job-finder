@@ -24,6 +24,18 @@ class ProfileUpdate(BaseModel):
     commune_codes: list[str] | None = None
     experience_level: Literal["0-2", "2-5", "5+"] | None = None
     candidate_description: str | None = Field(default=None, max_length=1000)
+    notification_days: list[Literal[1, 2, 3, 4, 5, 6, 7]] | None = None
+
+    # Canonical, duplicate-free order regardless of how the caller submitted the
+    # list — the frontend toggle already sends a sorted, dupe-free array, but a
+    # direct API caller isn't guaranteed to, and the column has no DB-level
+    # uniqueness/order constraint to fall back on.
+    @field_validator("notification_days")
+    @classmethod
+    def _dedupe_sort_days(cls, v: list[int] | None) -> list[int] | None:
+        if v is None:
+            return None
+        return sorted(set(v))
 
 
 class FeedbackCreate(BaseModel):
@@ -165,6 +177,10 @@ class ProfileOut(BaseModel):
     commune_codes: list[str]
     experience_level: Literal["0-2", "2-5", "5+"] | None
     candidate_description: str | None
+    # list[int], not the narrower Literal[1..7] used by ProfileUpdate — this is read
+    # back from a column already bounded by ck_user_profiles_notification_days
+    # (migration 033), so re-validating each element on every read is redundant.
+    notification_days: list[int]
     analysis_credits_remaining: int
     # Not a DB column — computed from ADMIN_USER_IDS by the profile endpoints
     # (model_validate leaves the default; the router overrides via model_copy).
