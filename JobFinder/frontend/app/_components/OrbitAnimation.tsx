@@ -212,7 +212,11 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
     function drawClickRipple() {
       const flash = clickFlashRef.current;
       if (flash <= 0) return;
-      clickFlashRef.current = Math.max(0, flash - 0.055);
+      // Decay rate tuned for a ~150ms shockwave at 60fps (was 0.055, ~300ms —
+      // halved on request). The ripple radius below, (1-flash)*65, scales
+      // automatically with this rate: no separate change needed there if the
+      // decay is retuned again.
+      clickFlashRef.current = Math.max(0, flash - 0.11);
       ctx.save();
       ctx.beginPath(); ctx.arc(CX, CY, (1 - flash) * 65, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(170,210,255,${flash * 0.55})`; ctx.lineWidth = 1.5; ctx.stroke();
