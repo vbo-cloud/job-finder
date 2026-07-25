@@ -7580,3 +7580,84 @@ régression. `/feedback` ne sera fonctionnel qu'une fois le secret créé ET cet
 propre / valide, l'ajout de `sensitive = true` ne casse pas la validation. Relecture manuelle des deux
 fichiers YAML modifiés (indentation cohérente avec les lignes voisines). Pas de `plan`/`apply` local
 (CI-only, conforme au Git Flow de ce repo).
+
+---
+
+## PR #224 — fix(frontend): sérialiser acquireTokenRedirect entre appels concurrents de l'intercepteur
+
+**Date :** 2026-07-25
+**Branche :** `fix/msal-redirect-race` → `dev`
+
+*Numéro provisoire — `gh` indisponible dans cette session pour vérifier le prochain numéro réel
+(issues + PRs) ; dérivé du dernier numéro utilisé dans ce journal (#223) + 1. À corriger après coup si la
+PR ouverte sur GitHub prend en fait un autre numéro.*
+
+### Contexte
+
+Bug diagnostiqué lors d'une session Cowork antérieure (non ré-investigué ici) : après une première
+connexion réussie (« rester connecté »), fermer le navigateur puis le rouvrir plus tard fait
+systématiquement échouer la reconnexion via Google/CIAM à la première tentative — une reconnexion manuelle
+depuis l'écran d'accueil réussit toujours à la deuxième tentative.
+
+Cause racine : l'intercepteur axios partagé (`lib/api/client.ts`) appelle
+`msalInstance.acquireTokenSilent(...)` sur chaque requête API et retombe sur
+`msalInstance.acquireTokenRedirect(apiTokenRequest)` (redirection pleine page vers la CIAM) dès que
+l'acquisition silencieuse lève `InteractionRequiredAuthError`. Deux composants montés ensemble sur la page
+d'accueil déclenchent chacun un appel API dès que `isAuthenticated` devient vrai : `CreditsBadge.tsx`
+(`/profile`) et `LibrarySection.tsx` (liste des CV). Quand le navigateur est rouvert avec un compte MSAL en
+cache dont le refresh token a en réalité expiré côté serveur, les deux fetchs échouent avec
+`InteractionRequiredAuthError` quasiment au même tick, et appellent tous deux `acquireTokenRedirect` sur la
+même instance MSAL en concurrence — chacun écrivant son propre `state`/`nonce` OAuth dans le même
+`sessionStorage` avant que l'autre n'ait fini de naviguer. Au retour de Google vers la CIAM, le `state` de
+l'URL ne correspond plus à ce qui reste en `sessionStorage` (écrasé par le second appel), donc la CIAM
+rejette la réponse. Une reconnexion manuelle ultérieure est un unique appel `loginRedirect` propre, donc
+elle réussit toujours.
+
+### Ce qui a été fait
+
+- `JobFinder/frontend/lib/api/client.ts` : la redirection est désormais « single-flight » — une variable
+  module-level `redirectInFlight: Promise<void> | null` est posée au premier appel concurrent de
+  `acquireTokenRedirect` et attendue (pas répétée) par tout autre appelant concurrent de l'intercepteur. Le
+  flag ne se réinitialise à `null` que si `acquireTokenRedirect` lui-même est rejeté (pour qu'une redirection
+  échouée ne bloque pas définitivement les tentatives de reconnexion suivantes) ; il ne se réinitialise
+  volontairement pas au succès, puisqu'une redirection réussie quitte la page et recharge de toute façon le
+  module JS. Docstring de module et commentaire WHY déjà en place sur le bloc single-flight, complétés pour
+  que la description en tête de fichier mentionne explicitement la déduplication (elle ne parlait
+  auparavant que du fallback redirect, pas de son sérialisation).
+- Nouveau test `JobFinder/frontend/__tests__/client.test.ts` : mocke directement `@/lib/auth/msalInstance`
+  et `@/lib/auth/msalConfig` (évite d'avoir besoin des vraies variables d'env `NEXT_PUBLIC_ENTRA_*`, absentes
+  en CI). Deux cas : (1) deux requêtes concurrentes partagent un unique appel `acquireTokenRedirect` ; (2)
+  une requête après une tentative de redirection précédente échouée relance correctement l'acquisition
+  (couvre la branche reset-à-`null`-sur-échec).
+- `JobFinder/frontend/__tests__/README.md` : ligne `client.test.ts` ajoutée à « Modules covered », puce
+  « Design decisions » sur l'approche de mock choisie, et correction de la section « Intentionally
+  excluded » qui affirmait à tort que `lib/api/client.ts` n'avait aucune couverture de test.
+
+### Décisions techniques
+
+Aucun autre appel direct à `acquireTokenRedirect`/`acquireTokenSilent` ailleurs dans le frontend (vérifié
+par grep) — les appels `loginRedirect` de `AuthButton.tsx`/`UploadSection.tsx` sont déclenchés par un geste
+utilisateur explicite et non concernés par cette race, donc non modifiés.
+
+**Vérification :** le test (1) a été confirmé comme détectant réellement la régression — revert temporaire
+de `client.ts` vers l'ancien code (via `git stash`, jamais laissé dans le diff final) fait échouer le test
+avec « 2 appels » au lieu de « 1 ». Suite `jest` complète non ré-exécutée dans cette session de revue
+documentaire (accès en lecture/écriture de fichiers uniquement, pas d'exécution shell) — à relancer
+(`npm test` dans `JobFinder/frontend/`) avant merge.
+
+**Suivi post-review (après ouverture de la PR #224) :** deux remarques non-bloquantes relevées par une
+revue indépendante ont été traitées :
+1. `client.ts` : le fait que `redirectInFlight` ne se réinitialise jamais à `null` en cas de succès (seulement
+   en cas d'échec) reposait sur une hypothèse implicite non documentée — `acquireTokenRedirect` navigue
+   toujours hors de la page en cas de succès, donc le module JS est de toute façon rechargé. Ajout d'un
+   commentaire au-dessus de la déclaration du flag documentant cette hypothèse et le risque si un flow
+   d'authentification non-navigant (ex. popup fallback) était introduit un jour.
+2. `client.test.ts` : le test appelait `flushMicrotasks()` deux fois de suite avec un commentaire justifiant
+   les deux appels comme nécessaires. Vérification empirique (5 exécutions locales) qu'un seul appel suffit
+   et n'introduit aucune instabilité — le second appel était un reliquat du débogage initial du bug
+   `instanceof`/registre de modules (voir plus haut), jamais nettoyé. Supprimé, et commentaire de
+   `flushMicrotasks` réécrit pour expliquer correctement pourquoi un seul flush (macrotask via `setTimeout`)
+   suffit à vider une chaîne de microtasks quelle que soit sa profondeur.
+
+`reviewer-frontend` a re-validé les deux points (`APPROUVÉ`, aucune remarque). Suite `jest` complète (17
+suites / 157 tests) et `npm run lint` relancés après chaque changement — propres.
