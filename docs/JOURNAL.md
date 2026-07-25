@@ -8183,3 +8183,90 @@ décrire fidèlement le comportement actuel (consomme `start-matching`, purge le
 le top-N sur `match-analysis`).
 
 Aucune remarque non-bloquante en attente.
+
+---
+
+## PR #231 — feat: préférence de notification_days sur le profil (PR 2/6 du plan notifications)
+
+**Date :** 2026-07-26
+**Branche :** `feat/profile-notification-days` → `dev`
+
+### Contexte
+
+Deuxième PR d'un plan en 6 étapes visant à envoyer, par email, un récapitulatif périodique des nouvelles
+offres correspondant à chaque CV d'un utilisateur. Cette PR ne fait qu'ajouter le stockage de la
+préférence et son réglage dans l'UI profil — quels jours de la semaine (ISO 8601, 1=lundi ... 7=dimanche)
+l'utilisateur souhaite recevoir ce récap. Aucun email n'est envoyé à ce stade : l'agent de notification
+planifié qui lira ce champ est la PR 6/6 du plan, pas encore construite. Tableau vide = notifications
+désactivées, pas de booléen séparé.
+
+### Ce qui a été fait
+
+- **`shared/models.py`** : nouvelle colonne `notification_days: Mapped[list[int]]` sur `UserProfile`
+  (`ARRAY(SmallInteger)`, `nullable=False`, défaut `[7]`), juste après `commune_codes`.
+- **Migration 033** (`down_revision="032"`) : ajoute la colonne avec `server_default="{7}"` pour
+  initialiser les profils existants sur « dimanche uniquement ».
+- **`profile_defaults.py`** : `default_profile_values()` inclut désormais `notification_days: [7]` pour
+  tout profil neuf (upload CV, PUT ou GET créant paresseusement la ligne).
+- **`schemas.py`** : `ProfileUpdate.notification_days` typé `list[Literal[1..7]] | None`, avec un
+  `field_validator` qui déduplique et trie ; `ProfileOut.notification_days: list[int]` ajouté à la réponse.
+- **`routers/profile.py`** : un `null` explicite dans le body PUT est normalisé en `[]` (colonne NOT NULL,
+  même traitement que `commune_codes`) ; le chemin INSERT de l'upsert utilise
+  `updated.get("notification_days", [7])` et non `... or []`.
+- **Frontend** : `ProfileData.notification_days: number[]` (`lib/api/types.ts`) ; nouveau composant
+  `NotificationDaysToggle.tsx` (multi-sélection des jours, calqué sur `ExperienceToggle.tsx`) ; nouveau
+  bloc « Notifications » sur `/profile`, entre les crédits d'analyse et le bloc Expérience, qui partage le
+  bouton « Enregistrer » et l'appel PUT existants du bloc Expérience plutôt que d'avoir les siens.
+- **Tests** : 6 cas nouveaux/mis à jour dans `test_webapp_profile.py` (défauts, non-interférence d'un PUT
+  partiel avec le recalcul d'intention, désactivation par tableau vide, piège du défaut à l'INSERT),
+  validation `Literal` + dédup/tri dans `test_schemas.py`, 5 cas pour `NotificationDaysToggle.test.tsx`.
+
+### Décisions techniques
+
+- **`updated.get("notification_days", [7])` plutôt que `... or []`** : un PUT partiel qui ne mentionne pas
+  `notification_days` (ex. ne modifie que `commune_codes`) doit conserver le défaut `[7]` sur le chemin
+  INSERT (nouveau profil) ; `... or []` aurait confondu « clé absente de la requête » avec « clé présente
+  et vide » (opt-out explicite), écrasant le défaut sur tout PUT partiel qui ne cite pas le champ. Commenté
+  in situ dans le router, testé explicitement.
+- **`[]` = désactivé, pas de booléen séparé** : un utilisateur qui décoche tous les jours n'a simplement
+  aucun jour dans le tableau — évite un état incohérent où un flag `enabled=true` coexisterait avec un
+  tableau vide.
+- **Bouton « Enregistrer » partagé avec le bloc Expérience** : décision produit délibérée pour éviter un
+  second aller-retour réseau et un second bouton sur la même page.
+- **Entiers ISO 8601 (`isoweekday()`)** plutôt qu'un mapping de noms de jours : le futur agent de
+  notification (PR 6/6) comparera directement `datetime.now().isoweekday()` au tableau, sans table de
+  correspondance.
+
+### Vérification
+
+- Backend : suite pytest complète verte (370 passed).
+- Frontend : suite jest complète verte (161 passed), `npm run build` sans erreur TypeScript.
+- Migration : la chaîne Alembic résout bien 033 comme head ; DDL compilé isolément et inspecté
+  (`SMALLINT[] DEFAULT '{7}' NOT NULL`).
+- Vérification manuelle sur serveur de dev (connexion via session Google) : interaction du toggle,
+  round-trip d'enregistrement contre le backend de dev réel (qui n'a pas encore cette colonne — confirmé
+  ignoré silencieusement côté serveur, sans erreur), et vérification responsive à 375px (iframe injectée).
+
+Passage doc-writer : commentaire WHY ajouté au-dessus du `field_validator _dedupe_sort_days`
+(`schemas.py`) — absent jusqu'ici, alors que les autres validators du même fichier en portent un ; le
+reste (commentaires sur `notification_days` dans `models.py`, docstring de la migration 033, commentaire
+du piège `insert_values` dans `routers/profile.py`, docstring de `default_profile_values`) était déjà
+présent et fidèle au comportement actuel, aucune correction nécessaire.
+
+### Reviewers
+
+- **reviewer-infra** : APPROUVÉ. Remarque initiale (rien ne borne `notification_days` à 1-7 au niveau
+  base) traitée en ajoutant `ck_user_profiles_notification_days` (même pattern que `ck_cvs_status`,
+  migration 010) à la migration 033. Deux remarques de suivi sur cette contrainte (tableau vide
+  autorisé, doublons non empêchés) confirmées comme des états métier voulus (`[]` = désactivé) et déjà
+  neutralisés en amont (dédup/tri dans `ProfileUpdate`) — verdict final : aucune remarque non-bloquante.
+- **reviewer-backend** : APPROUVÉ. Une remarque non-bloquante maintenue délibérément : `put_profile`
+  (`routers/profile.py:130-287`) dépasse le seuil de 40 lignes du skill, mais c'est une dette
+  préexistante (~120 lignes avant cette branche) que les ~9 lignes ajoutées par cette PR n'aggravent
+  pas — traitement dans un futur refactor dédié, hors périmètre de cette tâche.
+- **reviewer-frontend** : APPROUVÉ. Deux remarques corrigées directement (accessibilité :
+  `role="group"` + `aria-label` sur le groupe de boutons de `NotificationDaysToggle.tsx` ; documentation :
+  ligne ajoutée dans `__tests__/README.md` pour le nouveau fichier de test). Une remarque non-bloquante
+  maintenue délibérément, même raisonnement que reviewer-backend : `page.tsx` (~247 lignes, 5+
+  préoccupations mélangées) est une dette préexistante que cette PR ne fait qu'étendre en suivant le
+  pattern d'extraction déjà en place pour `ExperienceToggle`.
