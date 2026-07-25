@@ -7952,3 +7952,74 @@ occupé par le serveur de dev d'un autre worktree — terminer cette connexion l
 le serveur d'une autre session, donc volontairement non poursuivi dans cette session. À faire avant merge :
 se connecter réellement, cliquer "Ajouter un CV" depuis la bibliothèque, confirmer que l'animation
 fly-down joue et que le sélecteur de fichier s'ouvre rapidement.
+
+---
+
+## PR #228 — feat(frontend): bouton "Marquer tout comme vu" sur la liste des offres
+
+**Date :** 2026-07-25
+**Branche :** `feature/mark-all-offers-seen` → `dev`
+
+### Contexte
+
+Vincent a demandé un bouton dans la barre de filtres de la page des offres (`CorrespondancesPanel`,
+onglet "Offres"), aligné au bord droit, qui marque toutes les offres du CV courant comme "vues" en un
+clic — pour pouvoir purger d'un coup les badges "Nouveau" une fois toutes les offres intéressantes
+survolées, et ne voir aux prochaines connexions que les offres réellement nouvelles.
+
+Exploration préalable (`explorer`) : le backend exposait déjà tout le nécessaire —
+`PATCH /cv/{cv_id}/mark-all-seen` (`JobFinder/python/agents/webapp/routers/cv.py:959-994`), qui met
+`seen_at = now()` sur tous les matchs non vus du CV. Aucune modification backend requise, la feature est
+purement frontend.
+
+### Ce qui a été fait
+
+- Nouveau composant `MarkAllSeenButton.tsx` (`app/_components/`), calqué sur le pattern déjà en place
+  dans `RomeReanalysisButton.tsx` (état `loading`/erreur local, `apiClient.patch` direct, bouton
+  `disabled` pendant la requête). Style texte souligné, cohérent avec le bouton "Réafficher" de
+  `MatchList.tsx`, plutôt que le style bordé de `RomeReanalysisButton` — action secondaire dans une barre
+  déjà dense.
+- `CorrespondancesPanel.tsx` : ajout du bouton dans la barre de filtres, positionné à droite via
+  `ml-auto` sur le conteneur du bouton (le parent est déjà `flex`). Nouvelle fonction `markAllSeen()` qui
+  ajoute tous les `offer.id` de `matches` à l'état local `seenIds`, persiste dans le cache localStorage
+  `jf_seen_${cvId}` (réutilise `persistSeenId`, déjà utilisé par le marquage individuel dans
+  `toggleExpand`), puis appelle `onMatchSeen?.()` pour rafraîchir le compteur `unseen_count` du parent —
+  même pattern que le marquage individuel, appliqué en masse plutôt qu'à une seule offre, à ceci près
+  que `markAllSeen` n'est déclenché qu'après confirmation serveur du PATCH (passé en callback
+  `onMarkedAllSeen` à `MarkAllSeenButton`), contrairement au marquage individuel qui met à jour
+  `seenIds` de façon optimiste avant même l'appel réseau. Le bouton est désactivé (`hasUnseen`) quand
+  aucune offre "Nouvelle" n'est présente.
+
+### Vérification
+
+`tsc --noEmit` et `eslint` propres sur les deux fichiers touchés. Test manuel dans Chrome (session
+Google existante, `npm run dev` pointant vers le backend dev déployé) sur un CV réel de test
+(1003 correspondances, toutes "Nouveau" au départ) : clic sur "Marquer tout comme vu" → tous les badges
+"Nouveau" disparaissent immédiatement, le bouton passe en état désactivé. Rechargement complet de la
+page (nouvelle session, cache localStorage non réutilisé côté vérification serveur) : le badge
+`unseen_count` de la carte CV dans la bibliothèque reste à zéro et aucune offre ne réaffiche "Nouveau" —
+confirme que `seen_at` a bien été persisté côté serveur, pas seulement en local.
+
+**Suivi (après ouverture de la PR #228) :** deux remarques traitées.
+
+1. **Revue de code (`.then()` vs `async/await`, `hasUnseen` non mémoïsé, message d'erreur figé).**
+   `hasUnseen` (`CorrespondancesPanel.tsx`) était recalculé à chaque rendu via un `matches.some(...)` en
+   scope de rendu — `matches` pouvant monter à plusieurs milliers d'éléments, passé dans un `useMemo`
+   (deps `[matches, seenIds]`), aligné avec le `useMemo` `filtered` juste en dessous. Dans
+   `MarkAllSeenButton.tsx`, le message "Échec — réessayez" restait affiché si `disabled` passait à `true`
+   entre-temps par un autre biais (ex. offres marquées vues depuis un autre onglet) — désormais masqué
+   dans ce cas (`failed && !disabled`). En revanche, la suggestion de remplacer `.then()/.catch()/.finally()`
+   par `async/await` dans `handleClick` n'a pas été suivie : vérification faite sur le codebase
+   (`RomeReanalysisButton.tsx` — le modèle suivi pour ce bouton —, `toggleExpand`/`requestAnalysis` dans
+   `CorrespondancesPanel.tsx`, `CVDetailSection.tsx`, `HomeMapSection.tsx`...), le pattern `.then()` est en
+   fait dominant dans ce fichier et ses voisins ; seul `CVCard.tsx` utilise `await` sur un appel isolé.
+   Garder `.then()` ici reste plus cohérent avec l'existant qu'un changement vers la minorité.
+2. **Tiret affiché dans la bibliothèque quand un CV n'a aucune nouvelle offre.** Vincent a signalé que
+   `CVCard.tsx` affichait un `—` (em dash, `text-label`) à la place du badge vert `+N` quand
+   `unseen_count` vaut 0 — visible immédiatement après un "Marquer tout comme vu". Le badge entier
+   (span + `title`) est désormais conditionné à `unseenCount > 0` : rien ne s'affiche à côté du compteur
+   de matchs quand il n'y a aucune offre non vue, plutôt qu'un signe indéfini. Test existant
+   `__tests__/CVCard.test.tsx` ("does not show unseen badge when unseen_count is 0") complété d'une
+   assertion sur l'absence du `—`. Vérifié en live : la carte du CV déjà entièrement marqué vu
+   (1003 matchs) n'affiche plus aucun signe à côté du compteur, contrairement à une carte voisine avec un
+   badge `+377` intact.

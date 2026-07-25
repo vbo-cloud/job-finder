@@ -86,6 +86,7 @@ describe("CVCard", () => {
         <CVCard cv={{ ...baseCV, unseen_count: 0 }} onDeleted={jest.fn()} />
       );
       expect(screen.queryByText(/^\+/)).not.toBeInTheDocument();
+      expect(screen.queryByText("—")).not.toBeInTheDocument();
     });
 
     it("falls back to 'CV sans nom' when name is null", () => {

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
 import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
 import { notifyCreditsConsumed, notifyCreditsReleased, notifyCreditsReserved } from "@/lib/creditsBus";
+import MarkAllSeenButton from "./MarkAllSeenButton";
 import MatchList from "./MatchList";
 import PaginationBar from "./PaginationBar";
 import { type MatchItemData } from "./MatchItem";
@@ -226,6 +227,29 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     setSaved((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
+  // Called by MarkAllSeenButton only after its PATCH succeeds (not
+  // optimistically, unlike the single-offer path in toggleExpand below) —
+  // local state here mirrors the server state that already changed.
+  function markAllSeen() {
+    setSeenIds((prev) => {
+      const next = new Set(prev);
+      matches.forEach((m) => next.add(m.offer.id));
+      persistSeenId(cvId, next);
+      return next;
+    });
+    onMatchSeen?.();
+  }
+
+  // Duplicates the "novel" predicate used inside the `filtered` useMemo below —
+  // needed here against the full unfiltered `matches` to decide whether the
+  // "Marquer tout comme vu" button has anything to act on. Keep both in sync.
+  // matches can run into the thousands — memoized like `filtered` below rather
+  // than recomputed inline on every render.
+  const hasUnseen = useMemo(
+    () => matches.some((m) => m.is_new && !seenIds.has(m.offer.id)),
+    [matches, seenIds],
+  );
+
   const filtered = useMemo(() => {
     let arr = matches.filter((m) => !rejected.has(m.offer.id));
     const q = query.trim().toLowerCase();
@@ -367,6 +391,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
               </label>
             ))}
           </div>
+          <MarkAllSeenButton cvId={cvId} disabled={!hasUnseen} onMarkedAllSeen={markAllSeen} />
         </div>
       )}
 
