@@ -207,9 +207,12 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
     startTransition("to-cv", "cv");
   }, [flushSave, startTransition]);
 
-  // Touch entry point — the wheel gesture below has no finger equivalent.
+  // Entry point shared by the wheel gesture, the touch pill and the desktop
+  // scroll hint — the auth check lives here rather than only at each caller
+  // so a future caller can't accidentally open the map (profile-backed zone)
+  // for a signed-out user.
   const enterMap = useCallback(() => {
-    if (modeRef.current !== "cv") return;
+    if (modeRef.current !== "cv" || !isAuthenticatedRef.current) return;
     startTransition("to-map", "map");
   }, [startTransition]);
 
@@ -235,7 +238,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
         // from and saved to the profile, which requires being signed in.
         if (e.deltaY < 0 && isAuthenticatedRef.current) {
           e.preventDefault();
-          startTransition("to-map", "map");
+          enterMap();
         }
         return;
       }
@@ -263,7 +266,7 @@ export default function HomeMapSection({ uploadProps, onZoneSaved }: HomeMapSect
 
     section.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => section.removeEventListener("wheel", onWheel, { capture: true });
-  }, [exitMap, startTransition]);
+  }, [enterMap, exitMap]);
 
   // Unmount: drop a pending mode timer, flush a pending save (best effort).
   useEffect(() => {
