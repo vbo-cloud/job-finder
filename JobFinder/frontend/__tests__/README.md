@@ -25,6 +25,7 @@ npm run test:watch
 | `MatchItem.test.tsx` | `app/_components/MatchItem.tsx` | Score colour bands, expired badge, link vs text, expand/collapse, ROME label |
 | `MatchList.test.tsx` | `app/_components/MatchList.tsx` | Loading skeleton, empty state, list rendering |
 | `client.test.ts` | `lib/api/client.ts` | Request interceptor single-flight `acquireTokenRedirect`: concurrent callers share one in-flight redirect; a prior failed redirect doesn't block a later retry |
+| `LibrarySection.test.tsx` | `app/_components/LibrarySection.tsx` | "Ajouter un CV" calls the `onAddCv` prop (no direct upload call — upload/validation live in `UploadSection.handleFile`); `onCvsChange` fires on local deletion, not just fetches; add-CV slot hidden once the CV quota is reached |
 
 ## Design decisions
 

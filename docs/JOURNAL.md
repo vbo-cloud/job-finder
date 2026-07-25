@@ -7837,3 +7837,118 @@ liée au profil) sans être connecté. Aucun changement de comportement observab
 appelants existants (déjà tous correctement gardés) ; re-testé en live après coup (déconnexion +
 `WheelEvent`, puis reconnexion + clic sur l'indice "CARTE") pour confirmer l'absence de régression
 dans les deux sens.
+
+---
+
+## PR #227 — fix(frontend): brancher "Ajouter un CV" de la bibliothèque sur le pipeline d'upload de UploadSection
+
+**Date :** 2026-07-25
+**Branche :** `fix/library-cv-add-animation-timing` → `dev`
+
+### Contexte
+
+Bug signalé par Vincent : cliquer sur "Ajouter un CV" depuis la bibliothèque (`LibrarySection.tsx`) fait
+bien défiler jusqu'à la section d'accueil et ouvre bien le sélecteur de fichier natif, mais l'animation
+« fly-down » qui joue normalement après un upload (l'icône CV qui s'anime en vignette puis descend,
+pilotée par `OrbitAnimation.tsx` via la machine à états `animState` de `UploadSection.tsx`) ne jouait
+jamais pour cette entrée.
+
+Cause racine : `LibrarySection.tsx` possédait son propre pipeline d'upload entièrement séparé (son propre
+`<input type="file">` caché, son propre `handleFileChange`, son propre appel `apiClient.post("/cv/upload",
+...)`, son propre état `uploading`/`uploadError`) qui ne touchait jamais à `animState`/`OrbitAnimation` de
+`UploadSection`. Seul le chemin clic-sur-l'icône (`UploadSection.handleClick` → `handleFile`) déclenchait
+l'animation.
+
+Second signalement lié : le sélecteur de fichier natif ("popup") mettait du temps à apparaître depuis ce
+bouton — l'ancien `handleScrollToHome` attendait un événement `scrollend` ou un `setTimeout` de repli de
+900ms avant d'ouvrir le propre input de `LibrarySection`.
+
+### Ce qui a été fait
+
+- `UploadSection.tsx` : converti en `forwardRef`, expose un handle impératif (`UploadSectionHandle` avec
+  `openPicker(): void`) via `useImperativeHandle`, gardé par la même condition `animState === "idle"` que
+  le clic sur l'icône — no-op silencieux sinon. Contrairement au clic sur l'icône, un appel non
+  authentifié est ici un simple no-op (pas de `loginRedirect` déclenché) : le slot d'ajout qui pilote
+  `openPicker` ne s'affiche de toute façon que pour un utilisateur connecté. Ceci permet à un composant
+  frère de déclencher le même sélecteur de fichier + upload + animation que le chemin clic-icône utilisait
+  déjà. JSDoc de `openPicker` complétée pour documenter explicitement ces conditions de no-op silencieux
+  (invisibles pour l'appelant) et cette différence avec le clic sur l'icône.
+- `JobFinder/frontend/__tests__/README.md` : ligne `LibrarySection.test.tsx` ajoutée à « Modules covered »
+  (le fichier de test existait déjà mais n'y avait jamais été référencé) — décrit le nouveau périmètre du
+  test : `onAddCv`, propagation de la suppression à `onCvsChange`, masquage du slot d'ajout à quota
+  atteint.
+- `HomeMapSection.tsx` : nouvelle prop `uploadSectionRef?: Ref<UploadSectionHandle>`, transmise à
+  `<UploadSection ref={uploadSectionRef} .../>`.
+- `HomeClient.tsx` : `uploadSectionRef` créé et transmis à `HomeMapSection`. L'ancien `handleScrollToHome`
+  (attente de `scrollend` ou du `setTimeout` de 900ms avant d'ouvrir l'input de `LibrarySection`) remplacé
+  par `handleAddCv`, qui fait défiler jusqu'à `#home` ET appelle `uploadSectionRef.current?.openPicker()`
+  de façon synchrone dans le même handler — plus d'attente artificielle. Corrige aussi le second
+  signalement : le sélecteur de fichier s'ouvre désormais quasi instantanément au lieu d'attendre que le
+  défilement se stabilise visuellement.
+- `LibrarySection.tsx` : suppression complète de son pipeline d'upload autonome (`fileInputRef`,
+  `handleFileChange`, `<input type="file">`, état `uploading`/`uploadError`, constante `MAX_PDF_BYTES`,
+  effet de nettoyage `uploadErrorTimerRef`). Le bouton "Ajouter un CV" appelle désormais simplement la
+  nouvelle prop `onAddCv` (remplace l'ancienne prop `onScrollToHome`). Le refetch après upload continue de
+  fonctionner sans changement : `HomeClient.handleUploadComplete` incrémente déjà `libraryRefreshTrigger`,
+  que l'effet `fetchCvs` existant de `LibrarySection` consomme déjà (déjà câblé pour le chemin
+  clic-icône, et couvre maintenant aussi le chemin bibliothèque puisque les deux passent par le même
+  `UploadSection.handleFile`).
+- `OrbitAnimation.tsx` : taux de décroissance de l'onde de choc (click-ripple) dans `drawClickRipple()`
+  doublé, de `flash - 0.055` à `flash - 0.11` par frame — c'est la demande « onde de choc 50 % plus
+  rapide » (réduit sa durée d'environ 300ms à environ 150ms ; la formule de rayon `(1-flash)*65` s'ajuste
+  automatiquement à la valeur de `flash`, aucun changement séparé nécessaire côté rayon). Commentaire WHY
+  ajouté au-dessus de la ligne pour documenter ce lien entre le taux et la durée visée, afin qu'un futur
+  réglage du rayon ne compense pas involontairement ce taux.
+- `__tests__/LibrarySection.test.tsx` : les deux tests qui exerçaient l'ancien pipeline d'upload de
+  `LibrarySection` (qui n'existe plus) sont réécrits en un seul test vérifiant que cliquer sur "Ajouter un
+  CV" appelle la nouvelle prop `onAddCv` et n'appelle PAS directement l'endpoint d'upload (la
+  validation/l'upload vivent désormais uniquement dans `UploadSection.handleFile`). Les deux tests non liés
+  (propagation de la suppression d'un CV, masquage du slot d'ajout à quota atteint) sont inchangés.
+
+### Suivi après rebase sur `dev` (PR #226 mergée entre-temps)
+
+`dev` avait entre-temps reçu la PR #226 (indices de navigation cliquables), qui touchait les mêmes
+fichiers via une prop `onScrollToHome?: (onLanded: () => void) => void` partagée par l'indice "ACCUEIL"
+et (avant cette PR) le bouton "Ajouter un CV". Après rebase et résolution des conflits, `onScrollToHome`
+ne sert plus qu'à l'indice "ACCUEIL" — qui l'appelait déjà avec un callback vide (`() => {}`), puisqu'un
+simple scroll sans action de suivi. Le paramètre `onLanded` et le mécanisme `handleScrollToHome`
+(listener `scrollend` + `setTimeout` de repli 900ms dans `HomeClient.tsx`) devenaient donc de la
+complexité morte suite à cette PR — signalé en remarque non-bloquante par `reviewer-frontend` lors de la
+review post-rebase. Simplifié : `onScrollToHome` est maintenant `() => void`, `handleScrollToHome` un
+simple `scrollIntoView`, et `mainRef` (uniquement utilisée par l'ancien listener `scrollend`) supprimée
+de `HomeClient.tsx`.
+
+### Décisions techniques
+
+**Régression de comportement assumée, non corrigée ici :** l'ancien pipeline `LibrarySection` affichait
+un message d'erreur (état `uploadError`) quand le fichier choisi n'était pas un PDF ou dépassait la taille
+max — ajouté suite à un retour de revue sur la PR #159 (`fix(frontend): apply PR #159 review feedback —
+upload feedback, scrollend, a11y`). Le chemin unifié passe désormais entièrement par
+`UploadSection.handleFile`, qui retourne silencieusement dans ces deux cas (`if (file.type !==
+"application/pdf") return;` / `if (file.size > MAX_PDF_BYTES) return;`), sans aucun retour visuel, pour
+les deux points d'entrée (icône ET bibliothèque). Le chemin icône n'a jamais eu ce retour d'erreur — ce
+n'est donc pas une régression introduite par erreur — mais unifier les deux pipelines fait perdre au
+chemin bibliothèque le comportement que la PR #159 avait spécifiquement ajouté à sa demande. À évaluer
+séparément : soit accepter la perte, soit ajouter un retour d'erreur visible dans
+`UploadSection.handleFile` lui-même pour les deux points d'entrée — non fait ici, hors périmètre du bug de
+timing d'animation rapporté par Vincent.
+
+### Vérification
+
+- `npx jest` (`JobFinder/frontend`) : 17 suites / 156 tests passés (156 et non 157 comme sur la PR
+  précédente : deux tests `LibrarySection` exerçant l'ancien pipeline d'upload ont été consolidés en un
+  seul, voir ci-dessus — pas un test perdu).
+- `npx tsc --noEmit` : propre (après un `npm install` ayant résolu une dépendance `posthog-js` manquante
+  dans `node_modules`, sans rapport avec ce changement).
+- `npx eslint` sur tous les fichiers touchés : propre.
+- Vérification manuelle dans le navigateur : serveur de dev démarré sur un port alternatif (3010, pour ne
+  pas entrer en conflit avec le serveur déjà lancé sur le port 3000 dans un autre worktree/session), la
+  page d'accueil se charge correctement avec les changements en place, aucune erreur console sur la page
+  non authentifiée.
+
+**Non vérifié :** le flux complet d'upload de CV authentifié, de bout en bout, dans un vrai navigateur. La
+redirection de connexion est câblée en dur vers `localhost:3000` via `NEXT_PUBLIC_REDIRECT_URI`, déjà
+occupé par le serveur de dev d'un autre worktree — terminer cette connexion là-bas aurait signifié agir sur
+le serveur d'une autre session, donc volontairement non poursuivi dans cette session. À faire avant merge :
+se connecter réellement, cliquer "Ajouter un CV" depuis la bibliothèque, confirmer que l'animation
+fly-down joue et que le sélecteur de fichier s'ouvre rapidement.
