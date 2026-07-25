@@ -7499,11 +7499,32 @@ l'ambiguïté sur le mécanisme de provisionnement ci-dessus ; (3) confirmer que
 portfolio n'a pas besoin de changement (l'appel est serveur-à-serveur, donc a priori non) une fois testé en
 conditions réelles.
 
-**Vérification :** `pytest tests/` (`JobFinder/python`) : 362 passed. `npm run build` (`JobFinder/frontend`)
-compile, nouvelle route `/feedback` listée dans le build (3.14 kB). `npm test` (`JobFinder/frontend`) : 155
-passed, 16 suites (dont `MobileNavMenu.test.tsx`, non affecté par le nouveau lien). `terraform fmt
--check -diff` et `terraform validate` (`JobFinder/Terraform/envs/dev`) : propre / valide — pas de
-`plan`/`apply` local (CI-only, conforme au Git Flow de ce repo). Test manuel de `POST /feedback` contre la
-vraie Function portfolio **non effectué** dans cette session (aucune URL de Function de test/dev disponible
-dans cet environnement) — à faire avant merge, conforme à la checklist "Vérification avant PR" de ce repo.
-Confirmé qu'aucun fichier du repo `portfolio` (séparé) n'a été touché.
+**Suivi post-review (après ouverture de la PR #222) :** trois remarques non-bloquantes relevées par une
+revue indépendante ont été corrigées :
+1. `feedback/page.tsx` : le bouton d'envoi gardait le style/texte "Envoyé ✓" si l'utilisateur modifiait le
+   formulaire après un envoi réussi, pour un brouillon pourtant pas encore soumis. Ajout d'un helper
+   `clearOutcome()` (`setState((s) => (s === "loading" ? s : "idle"))`) câblé sur les cinq handlers éditables
+   (type, sujet, message, ressenti) — même pattern que `handleExperienceChange`/`handleDescriptionChange`
+   dans `app/profile/page.tsx`, qui remettent `saved` à `false` sur édition.
+2. `schemas.py::FeedbackCreate` : `subject`/`message` n'avaient qu'un `max_length`, pas de `min_length` — une
+   valeur uniquement composée d'espaces passait la validation côté API même si le bouton client la bloque.
+   Ajout de `model_config = ConfigDict(str_strip_whitespace=True)` + `min_length=1` sur les deux champs, pour
+   que "obligatoire" soit une vraie garantie serveur et pas seulement un bouton désactivé côté client.
+3. Point relevé mais **non corrigé, délibérément** : l'appel `requests.post` dans `feedback.py` bloque le
+   thread FastAPI jusqu'à `CONTACT_FUNCTION_TIMEOUT_SECONDS` (15s) — sans risque aujourd'hui vu le trafic,
+   migrer vers `httpx.AsyncClient` réglerait le problème sous charge concurrente, mais introduirait une
+   incohérence avec le pattern `requests` synchrone utilisé partout ailleurs côté serveur-à-serveur dans ce
+   repo (`auth.py`, `ft_client.py`) pour un gain non justifié à ce stade.
+
+`reviewer-backend` et `reviewer-frontend` ont re-validé chacun des deux premiers points (`APPROUVÉ`, aucune
+remarque). 2 nouveaux tests ajoutés (`test_defaults_to_non_indique_when_sentiment_omitted` existait déjà ;
+nouveau : `test_rejects_whitespace_only_required_field`, paramétré sujet/message).
+
+**Vérification :** `pytest tests/` (`JobFinder/python`) : 364 passed. `npm run build` (`JobFinder/frontend`)
+compile, route `/feedback` à 3.17 kB. `npm test` (`JobFinder/frontend`) : 155 passed, 16 suites (dont
+`MobileNavMenu.test.tsx`, non affecté par le nouveau lien). `terraform fmt -check -diff` et
+`terraform validate` (`JobFinder/Terraform/envs/dev`) : propre / valide — pas de `plan`/`apply` local
+(CI-only, conforme au Git Flow de ce repo). Test manuel de `POST /feedback` contre la vraie Function
+portfolio **non effectué** dans cette session (aucune URL de Function de test/dev disponible dans cet
+environnement) — à faire avant merge, conforme à la checklist "Vérification avant PR" de ce repo. Confirmé
+qu'aucun fichier du repo `portfolio` (séparé) n'a été touché.
