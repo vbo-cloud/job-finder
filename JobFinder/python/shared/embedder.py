@@ -5,6 +5,7 @@ import time
 
 import openai
 import structlog
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
 BATCH_SIZE = 100
@@ -18,13 +19,13 @@ _endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
 if not _endpoint:
     raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is not set")
 
-_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-if not _api_key:
-    raise ValueError("AZURE_OPENAI_API_KEY environment variable is not set")
+_token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+)
 
 _client = AzureOpenAI(
     azure_endpoint=_endpoint,
-    api_key=_api_key,
+    azure_ad_token_provider=_token_provider,
     api_version=_API_VERSION,
     max_retries=10,
 )
