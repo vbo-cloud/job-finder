@@ -36,6 +36,13 @@ export default function FeedbackPage() {
 
   const microLabel = "text-[10.5px] font-bold uppercase tracking-[.09em] text-profile-muted";
 
+  // Any edit after a "sent"/"error" outcome must drop back to "idle" — otherwise
+  // the submit button keeps showing "Envoyé ✓" for a new, unsubmitted draft.
+  // Same pattern as ExperienceToggle/candidate_description on app/profile/page.tsx.
+  function clearOutcome() {
+    setState((s) => (s === "loading" ? s : "idle"));
+  }
+
   async function handleSubmit() {
     setState("loading");
     try {
@@ -94,7 +101,10 @@ export default function FeedbackPage() {
               type="button"
               role="radio"
               aria-checked={type === "avis"}
-              onClick={() => setType("avis")}
+              onClick={() => {
+                setType("avis");
+                clearOutcome();
+              }}
               className={cn(
                 "flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                 type === "avis"
@@ -108,7 +118,10 @@ export default function FeedbackPage() {
               type="button"
               role="radio"
               aria-checked={type === "bug"}
-              onClick={() => setType("bug")}
+              onClick={() => {
+                setType("bug");
+                clearOutcome();
+              }}
               className={cn(
                 "flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                 type === "bug"
@@ -128,7 +141,10 @@ export default function FeedbackPage() {
               id="feedback-subject"
               type="text"
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                clearOutcome();
+              }}
               maxLength={SUBJECT_MAX_LENGTH}
               placeholder={type === "bug" ? "Ex : Le bouton d'envoi ne répond pas" : "Ex : Idée d'amélioration"}
               className="mt-2.5 w-full rounded-xl border border-profile bg-profile-page p-3.5 text-[13.5px] text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -142,7 +158,10 @@ export default function FeedbackPage() {
             <textarea
               id="feedback-message"
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={(e) => {
+                setMessage(e.target.value);
+                clearOutcome();
+              }}
               rows={6}
               maxLength={MESSAGE_MAX_LENGTH}
               placeholder={
@@ -173,7 +192,10 @@ export default function FeedbackPage() {
                     type="button"
                     aria-pressed={selected}
                     aria-label={label}
-                    onClick={() => setSentiment(selected ? null : value)}
+                    onClick={() => {
+                      setSentiment(selected ? null : value);
+                      clearOutcome();
+                    }}
                     className={cn(
                       "flex flex-1 items-center justify-center rounded-xl border py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                       selected
