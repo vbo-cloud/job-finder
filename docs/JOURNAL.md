@@ -8270,3 +8270,67 @@ présent et fidèle au comportement actuel, aucune correction nécessaire.
   maintenue délibérément, même raisonnement que reviewer-backend : `page.tsx` (~247 lignes, 5+
   préoccupations mélangées) est une dette préexistante que cette PR ne fait qu'étendre en suivant le
   pattern d'extraction déjà en place pour `ExperienceToggle`.
+
+## PR #232 — feat(openai): rôle Cognitive Services OpenAI User pour la UAMI caj + variable local_auth_enabled
+
+**Date :** 2026-07-26
+**Branche :** `feat/openai-managed-identity-rbac` → `dev`
+
+### Contexte
+
+Rattachée au plan "notifications" (décidé avec Vincent le 2026-07-25/26) ; le décompte total du plan a
+bougé (6 → 7 PR, voir le prompt Cowork `prompt-openai-rbac-role.md`, hors de ce repo — le rôle RBAC pour
+la future ressource Azure Communication Services Email ne peut être posé qu'une fois cette ressource
+créée, donc il devient sa propre PR après la 5) et n'est pas figé à ce stade. `docs/BACKLOG.md:394-406`
+liste l'item hardening "Passer `local_auth_enabled = false` + Managed Identity sur OpenAI" en 4 étapes ;
+cette PR pose les étapes 2
+(assigner le rôle `Cognitive Services OpenAI User` à la UAMI `caj`) et 4 (exposer `local_auth_enabled`
+comme variable du module) — sans toucher aux étapes 1 (flip `local_auth_enabled = false`) et 3 (retrait
+des secrets `openai-api-key`), qui restent des PR ultérieures du plan. Cette PR ne bascule donc rien :
+l'authentification par clé API reste active partout, `local_auth_enabled` garde sa valeur par défaut
+`true`.
+
+### Ce qui a été fait
+
+- `modules/openai/variables.tf` : nouvelle variable `local_auth_enabled` (bool, default `true`), avec une
+  description qui pointe vers l'item BACKLOG et rappelle la condition du flip (une fois tous les
+  consommateurs migrés vers Managed Identity).
+- `modules/openai/main.tf` : `azurerm_cognitive_account.this` passe désormais
+  `local_auth_enabled = var.local_auth_enabled` au lieu d'une valeur implicite.
+- `envs/dev/openai.tf` : volontairement non touché — le module y est appelé sans le nouvel argument, donc
+  le défaut (`true`) s'applique implicitement ; aucun diff fonctionnel sur le compte existant.
+- `envs/lz_dev/rbac.tf` : nouveau bloc `data "azurerm_cognitive_account" "openai"` (lookup du compte créé
+  dans `envs/dev`) + `azurerm_role_assignment.caj_openai_user`, rôle `Cognitive Services OpenAI User`,
+  assigné à `azurerm_user_assigned_identity.caj` — même pattern que `caj_acr_pull` et
+  `caj_servicebus_owner` déjà présents dans ce fichier.
+
+### Décisions techniques
+
+- Variable additive avec `default = true` : la RBAC atterrit avec zéro diff fonctionnel sur le compte
+  OpenAI existant. Le flip vers `false` (et le retrait des secrets) est différé à une PR ultérieure du
+  plan, une fois la RBAC en place et vérifiée.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/dev` et `envs/lz_dev`.
+- `terraform plan` sur `envs/dev` (avec un `alert_email` substitué localement, absent du tfvars
+  gitignored) : grep confirme qu'`azurerm_cognitive_account.this` et
+  `azurerm_cognitive_deployment.this[*]` n'apparaissent pas dans la liste des actions du plan — no-op
+  confirmé. Les autres diffs affichés dans ce run (VM jumpbox, container apps, action group) sont un
+  drift local préexistant causé par d'autres variables locales substituées, sans rapport avec cette PR.
+- `terraform plan` sur `envs/lz_dev` (avec le vrai `sp_github_object_id`, récupéré via le diff
+  "Refreshing state" d'un premier plan à variable factice) : réduit à exactement
+  `Plan: 1 to add, 0 to change, 0 to destroy` — seul `azurerm_role_assignment.caj_openai_user` est créé,
+  confirmé contre le compte réel `oai-jf-dev-frc` via la data source.
+- Aucun `apply` effectué (CI-only, convention du projet). Vérification manuelle dans le portail (blade
+  IAM du compte OpenAI, présence de l'identité `caj` avec le nouveau rôle) différée après merge + apply
+  CI.
+
+Passage doc-writer : `modules/openai/variables.tf` et `envs/lz_dev/rbac.tf` relus — la description de
+`local_auth_enabled` porte déjà le WHY nécessaire (condition du flip + pointeur BACKLOG), et le nouveau
+bloc `rbac.tf` suit exactement le pattern des blocs `caj_acr_pull`/`caj_servicebus_owner` existants (data
+source + role_assignment, sans commentaire par bloc) ; le rationale "pourquoi lz_dev gère la RBAC
+applicative" est déjà posé une fois dans l'en-tête du fichier (lignes 82-93). Rien à corriger — aucun
+fichier Python n'est touché par cette PR (uniquement du Terraform).
+
+Aucune remarque non-bloquante en attente.
