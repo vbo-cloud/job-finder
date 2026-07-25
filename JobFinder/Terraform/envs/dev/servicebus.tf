@@ -6,7 +6,6 @@
 #                              d'intention) + agent cv-analysis (nouveau CV) → job-matching
 #                              (renommage de offer-ready : granularité par événement déclencheur,
 #                              jamais par offre — voir docs/prompts/prompt-remove-offer-distillation.md)
-#   match-ready               — job-matching → notification utilisateur
 #   cv-analysis               — POST /cv/upload → agent cv-analysis (codes ROME + qualité du CV)
 #   match-analysis            — job-matching (top N auto) + POST /matches/.../analyze → agent match-analysis
 #   offer-fetch-request       — offer_fetch_scheduler (relais planifié 12h/20h) + agent cv-analysis
@@ -27,7 +26,6 @@ module "servicebus" {
 
   queues = [
     "start-matching",
-    "match-ready",
     "cv-analysis",
     "match-analysis",
     "offer-fetch-request",
