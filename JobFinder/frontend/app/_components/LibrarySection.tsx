@@ -161,7 +161,8 @@ export default function LibrarySection({
     <section
       id="library"
       className={cn(
-        "relative h-dvh bg-page flex flex-col",
+        // md:ml-24 clears LeftNavRail (fixed left-4, ~52px wide, plus breathing room) — must stay ≥ its right edge.
+        "relative h-dvh bg-page flex flex-col md:ml-24",
         accessible ? "snap-start" : "hidden",
       )}
     >

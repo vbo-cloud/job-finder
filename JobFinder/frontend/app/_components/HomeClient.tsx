@@ -1,9 +1,11 @@
 "use client";
 
+import { useIsAuthenticated } from "@azure/msal-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CVData } from "@/lib/api/types";
 import CVDetailSection from "./CVDetailSection";
-import HomeMapSection from "./HomeMapSection";
+import HomeMapSection, { type HomeMapSectionHandle, type Mode } from "./HomeMapSection";
+import LeftNavRail, { type ActiveSection } from "./LeftNavRail";
 import LibrarySection from "./LibrarySection";
 import type { UploadSectionHandle } from "./UploadSection";
 
@@ -32,8 +34,13 @@ export default function HomeClient() {
   const [selectedCvId, setSelectedCvId]           = useState<string | null>(null);
   const [cvList, setCvList]                       = useState<CVData[]>([]);
   const [zoneVersion, setZoneVersion]             = useState(0);
+  const [mode, setMode]                           = useState<Mode>("cv");
+  const [activeSection, setActiveSection]         = useState<ActiveSection>("home");
   const detailRef                                  = useRef<HTMLElement>(null);
   const uploadSectionRef                           = useRef<UploadSectionHandle>(null);
+  const homeMapSectionRef                          = useRef<HomeMapSectionHandle>(null);
+  const mainRef                                    = useRef<HTMLElement>(null);
+  const isAuthenticated                            = useIsAuthenticated();
 
   // Holds the cv_id from POST /cv/upload so we can set it on the optimistic
   // entry even if the POST response arrives before the animation ends.
@@ -55,6 +62,30 @@ export default function HomeClient() {
     if (selectedCvId && cvList.some((cv) => cv.id === selectedCvId)) return;
     setSelectedCvId(cvList[0].id);
   }, [cvList, selectedCvId]);
+
+  // Drives LeftNavRail's active icon from actual scroll position rather than
+  // from the last click — a manual wheel/swipe between sections must still
+  // move the highlight. Re-run when selectedCvId toggles cv-detail's mount.
+  useEffect(() => {
+    const ids: ActiveSection[] = ["home", "library", "cv-detail"];
+    const sections = ids
+      .map((id) => ({ id, el: document.getElementById(id) }))
+      .filter((entry): entry is { id: ActiveSection; el: HTMLElement } => entry.el !== null);
+    if (sections.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const mostVisible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        const match = sections.find((section) => section.el === mostVisible?.target);
+        if (match) setActiveSection(match.id);
+      },
+      { root: mainRef.current, threshold: 0.5 },
+    );
+    sections.forEach(({ el }) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [selectedCvId]);
 
   const handleUploadComplete = useCallback((cvId: string) => {
     uploadedCvIdRef.current = cvId;
@@ -129,48 +160,85 @@ export default function HomeClient() {
     setLibraryRefreshTrigger((n) => n + 1);
   }, []);
 
+  // LeftNavRail's CV/Accueil icon: unlike handleScrollToHome above (only
+  // ever reached from the library, where the map is never focused), this one
+  // can fire while the map layer is focused — leave it first so landing on
+  // "home" always shows the CV layer, not the map.
+  const handleGoHome = useCallback(() => {
+    if (mode === "map" || mode === "to-map") homeMapSectionRef.current?.exitMap();
+    document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, [mode]);
+
+  // LeftNavRail's Carte icon: enterMap() no-ops while signed out or already
+  // transitioning, same gate the wheel gesture and the "Carte" pill go through.
+  const handleGoMap = useCallback(() => {
+    document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+    homeMapSectionRef.current?.enterMap();
+  }, []);
+
+  // LeftNavRail's Bibliothèque icon.
+  const handleGoLibrary = useCallback(() => {
+    document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, []);
+
   return (
-    // Below md the swipe/scroll navigation between the full-screen sections
-    // is disabled (overflow-hidden): moving around goes through the pinned
-    // mobile menu (layout.tsx), which scrolls this container programmatically
-    // — scrollIntoView still scrolls an overflow-hidden box.
-    <main
-      className="h-dvh overflow-hidden md:snap-y md:snap-mandatory md:overflow-y-scroll"
-    >
-      <HomeMapSection
-        uploadProps={{
-          onUploadComplete: handleUploadComplete,
-          onAnimationComplete: handleAnimationComplete,
-          libraryAccessible,
-          onScrollToLibrary: handleCloseDetail,
-        }}
-        uploadSectionRef={uploadSectionRef}
-        onZoneSaved={handleZoneSaved}
+    <>
+      <LeftNavRail
+        activeSection={activeSection}
+        mapActive={mode === "map" || mode === "to-map"}
+        mapAvailable={isAuthenticated}
+        libraryAvailable={libraryAccessible}
+        offersAvailable={!!selectedCvId}
+        onGoHome={handleGoHome}
+        onGoMap={handleGoMap}
+        onGoLibrary={handleGoLibrary}
+        onGoOffers={handleScrollToDetail}
       />
-      <LibrarySection
-        refreshTrigger={libraryRefreshTrigger}
-        onAccessibilityChange={setLibraryAccessible}
-        optimisticUpload={optimisticUpload}
-        onOptimisticConsumed={handleOptimisticConsumed}
-        onCvSelect={handleCvSelect}
-        onCvsChange={setCvList}
-        selectedCvId={selectedCvId}
-        onScrollToHome={handleScrollToHome}
-        onScrollToOffers={handleScrollToDetail}
-        onAddCv={handleAddCv}
-      />
-      {selectedCvId && (
-        <CVDetailSection
-          ref={detailRef}
-          cvs={cvList}
-          selectedCvId={selectedCvId}
-          onCvChange={setSelectedCvId} // arrow nav: already on section, no scroll needed
-          onClose={handleCloseDetail}
-          zoneVersion={zoneVersion}
-          onMatchSeen={handleMatchSeen}
-          onRomeReanalyzed={handleRomeReanalyzed}
+      {/* Below md the swipe/scroll navigation between the full-screen sections
+          is disabled (overflow-hidden): moving around goes through the pinned
+          mobile menu (layout.tsx), which scrolls this container programmatically
+          — scrollIntoView still scrolls an overflow-hidden box. */}
+      <main
+        ref={mainRef}
+        className="h-dvh overflow-hidden md:snap-y md:snap-mandatory md:overflow-y-scroll"
+      >
+        <HomeMapSection
+          ref={homeMapSectionRef}
+          uploadProps={{
+            onUploadComplete: handleUploadComplete,
+            onAnimationComplete: handleAnimationComplete,
+            libraryAccessible,
+            onScrollToLibrary: handleCloseDetail,
+          }}
+          uploadSectionRef={uploadSectionRef}
+          onZoneSaved={handleZoneSaved}
+          onModeChange={setMode}
         />
-      )}
-    </main>
+        <LibrarySection
+          refreshTrigger={libraryRefreshTrigger}
+          onAccessibilityChange={setLibraryAccessible}
+          optimisticUpload={optimisticUpload}
+          onOptimisticConsumed={handleOptimisticConsumed}
+          onCvSelect={handleCvSelect}
+          onCvsChange={setCvList}
+          selectedCvId={selectedCvId}
+          onScrollToHome={handleScrollToHome}
+          onScrollToOffers={handleScrollToDetail}
+          onAddCv={handleAddCv}
+        />
+        {selectedCvId && (
+          <CVDetailSection
+            ref={detailRef}
+            cvs={cvList}
+            selectedCvId={selectedCvId}
+            onCvChange={setSelectedCvId} // arrow nav: already on section, no scroll needed
+            onClose={handleCloseDetail}
+            zoneVersion={zoneVersion}
+            onMatchSeen={handleMatchSeen}
+            onRomeReanalyzed={handleRomeReanalyzed}
+          />
+        )}
+      </main>
+    </>
   );
 }

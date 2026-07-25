@@ -8023,3 +8023,100 @@ confirme que `seen_at` a bien été persisté côté serveur, pas seulement en l
    assertion sur l'absence du `—`. Vérifié en live : la carte du CV déjà entièrement marqué vu
    (1003 matchs) n'affiche plus aucun signe à côté du compteur, contrairement à une carte voisine avec un
    badge `+377` intact.
+
+---
+
+## PR #229 — feat(frontend): ajouter une barre de navigation latérale (pilule) entre les 4 pages de la home
+
+**Date :** 2026-07-25
+**Branche :** `feature/left-nav-rail` → `dev`
+
+### Contexte
+
+Demande de Vincent : une barre de navigation en forme de pilule sur le bord gauche de l'écran, permettant
+de sauter en un clic entre les « pages » de la home (import de CV, carte, bibliothèque, offres), chacune
+symbolisée par une icône — carte en tête de pilule, l'icône de la page courante en bleu, les autres
+grisées, blanches au survol. L'ajout de la barre nécessite de décaler l'interface des offres et de
+l'affichage du CV pour ne rien superposer — Vincent proposait que la section des offres démarre à
+mi-écran (coupée en deux de façon égale) et que la home laisse un peu plus de place pour se décaler.
+
+Constat d'architecture fait avant d'implémenter (via l'agent `explorer`) : il n'existe pas 4 routes Next.js
+distinctes. Tout vit dans une seule page `/` (`HomeClient.tsx`), organisée en 3 sections de scroll-snap
+(`#home`, `#library`, `#cv-detail`) — et à l'intérieur même de `#home`, la carte et le CV sont deux
+« layers » superposés pilotés par la machine à états `Mode` de `HomeMapSection.tsx` (`cv`/`to-map`/`map`/
+`to-cv`), pas deux sections séparées. La nouvelle barre devait donc composer avec cette réalité plutôt
+qu'avec 4 routes.
+
+### Ce qui a été fait
+
+- `HomeMapSection.tsx` : converti en `forwardRef`, expose un handle impératif (`HomeMapSectionHandle` avec
+  `enterMap()`/`exitMap()`) via `useImperativeHandle` — même pattern que `UploadSectionHandle` (PR #227) —
+  et une nouvelle prop `onModeChange?: (mode: Mode) => void` appelée à chaque changement de `mode`. `Mode`
+  est maintenant exporté. Nécessaire car `LeftNavRail` vit en dehors de ce composant (monté depuis
+  `HomeClient`) et ne peut pas atteindre `modeRef` directement ; lever entièrement l'état `Mode` dans
+  `HomeClient` a été écarté — trop de refs/timers/listener wheel internes sont couplés à `mode` dans
+  `HomeMapSection` pour le déplacer sans risque.
+- `app/_components/LeftNavRail.tsx` (nouveau) : composant client, pilule fixe `hidden md:flex` (desktop
+  uniquement — le menu burger `MobileNavMenu` existant couvre déjà le mobile), 4 boutons dans l'ordre
+  Carte / Accueil / Bibliothèque / Offres : `FranceMapIcon`, une icône custom dont le tracé SVG (fourni
+  par Vincent, `france-contour.svg`) est repris tel quel — recoloré en `currentColor` pour suivre les
+  mêmes états idle/hover/actif que les autres icônes plutôt que le contour blanc d'origine, et avec une
+  épaisseur de trait (`strokeWidth="14.67"` sur un viewBox `176`) calculée pour rendre le même trait
+  physique que les icônes lucide (`strokeWidth="2"` sur viewBox `24` : `2/24 === 14.67/176`) ; `FileText`
+  (lucide) pour l'accueil/CV ; `LayoutGrid` (lucide) pour la bibliothèque ; une icône custom « grand
+  rectangle à gauche + 3 lignes à droite » pour les offres (mirroring la mise en page réelle de
+  `CVDetailSection`). Couleurs via tokens du thème uniquement : idle `text-muted`, hover `text-strong`,
+  actif `text-accent` (le hover reste blanc en dark et redevient noir-92% en light — volontaire, un blanc
+  pur forcé casserait le thème clair). Fond de la pilule en `bg-scrim` (`rgba(0, 0, 0, 0.40)` dans les
+  deux thèmes, token déjà existant) pour un rendu sombre et quasi transparent, pilule étroite et allongée
+  (`px-1 py-6 gap-5`). Boutons `disabled` (pas seulement grisés) quand la page n'existe pas encore (carte
+  hors connexion, bibliothèque/offres sans CV) — `disabled` supprime aussi tout effet `:hover`,
+  comportement natif du navigateur et non un bug.
+- `HomeClient.tsx` : rendu `<LeftNavRail>` (pas dans `layout.tsx` — la pilule a besoin d'un état qui
+  n'existe que dans cet arbre, et les 4 destinations n'existent que sur `/`, contrairement à
+  `MobileNavMenu` qui reste joignable depuis `/profile`/`/feedback`). Nouvel état `mode` (peuplé par
+  `onModeChange`) et `activeSection` (`"home" | "library" | "cv-detail"`), ce dernier piloté par un
+  `IntersectionObserver` (root = nouveau `mainRef` sur le conteneur de scroll-snap, threshold 0.5) et non
+  par le dernier clic — un défilement manuel à la molette doit aussi faire bouger le surlignage actif.
+  Trois nouveaux handlers pour la pilule : `handleGoHome` (sort du mode carte si besoin puis scroll vers
+  `#home`), `handleGoMap` (scroll puis `enterMap()`, no-op interne si non connecté), `handleGoLibrary` ;
+  `onGoOffers` réutilise le `handleScrollToDetail` existant.
+- Décalage de mise en page : `md:ml-24` ajouté directement sur les 3 sections racines (`#home` dans
+  `HomeMapSection.tsx`, `#library` dans `LibrarySection.tsx`, `#cv-detail` dans `CVDetailSection.tsx`).
+  Un `margin-left` (pas un `padding-left`) a été choisi délibérément : sur un élément `position: relative`
+  qui sert de containing block à des enfants `absolute inset-0`, seul le margin déplace réellement la
+  boîte (et donc le containing block) — un padding aurait laissé les enfants absolus non décalés pendant
+  que le contenu en flux normal bougeait, désynchronisant les deux. Aucune modification nécessaire dans
+  `OrbitAnimation.tsx` : son `ResizeObserver` sur le canvas recalcule déjà `CX = W / 2` à chaque
+  changement de taille du conteneur, donc le canvas se recentre tout seul dans la boîte rétrécie.
+- `CVDetailSection.tsx` : colonne CV `lg:w-[38%] lg:shrink` → `lg:w-1/2 lg:shrink-0`, pour la demande
+  explicite de Vincent (« page coupée en 2 de façon égale ») — la colonne de droite (`flex-1`) occupe déjà
+  automatiquement l'autre moitié.
+
+### Vérification
+
+- `npx tsc --noEmit` : propre.
+- `npx eslint` sur tous les fichiers touchés : propre.
+- `npx jest` (`JobFinder/frontend`) : 17 suites / 156 tests passés, sans régression.
+- Vérification manuelle dans le navigateur à chaque itération (serveur de dev sur le port 3000) :
+  - Non connecté : la pilule affiche l'icône Accueil active en bleu, les 3 autres grisées et `disabled`
+    (carte : non connecté ; bibliothèque/offres : pas de CV) — vérifié via les styles calculés
+    (`getComputedStyle`), pas seulement visuellement.
+  - Test 375px (iframe injectée same-origin, technique validée sur la PR #203) : la pilule est bien
+    `display: none`, le menu burger mobile reste fonctionnel, aucun scroll horizontal
+    (`scrollWidth === clientWidth`).
+  - Connecté (session Google existante, compte réel avec CVs déjà en bibliothèque) : clic sur l'icône
+    Carte → la carte de France apparaît en plein écran et l'icône passe au bleu ; clic sur l'icône
+    Accueil → retour à l'écran d'import de CV, carte floutée derrière ; clic Bibliothèque → défilement
+    vers la grille de CV, icône bibliothèque activée automatiquement (IntersectionObserver) ; clic Offres
+    → défilement vers `#cv-detail`, colonnes mesurées à 1104.5px chacune de part et d'autre (split 50/50
+    exact dans la largeur restante après la pilule).
+  - Tracé `FranceMapIcon` : un premier tracé approximatif (à la main) jugé pas assez reconnaissable par
+    Vincent a été remplacé par le tracé exact qu'il a fourni (`france-contour.svg`, path recopié tel quel,
+    seule la couleur a changé).
+
+Passage doc-writer : commentaire au-dessus de `enterMap` (`HomeMapSection.tsx`) corrigé — n'énumérait
+encore que trois déclencheurs (molette, pilule tactile, indice de scroll), cette PR ajoute `LeftNavRail`
+comme quatrième ; explication margin-vs-padding du `md:ml-24` complétée sur place, au même endroit.
+
+Aucune remarque non-bloquante en attente.

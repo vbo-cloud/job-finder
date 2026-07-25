@@ -172,7 +172,8 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
         ref={ref}
         id="cv-detail"
         // max-md:pt-14 : dégage la barre mobile épinglée (opaque, h-14).
-        className="h-dvh snap-start bg-page flex flex-col max-md:pt-14"
+        // md:ml-24 : dégage LeftNavRail (fixed left-4, ~52px de large, plus une marge confortable).
+        className="h-dvh snap-start bg-page flex flex-col max-md:pt-14 md:ml-24"
       >
         {/* BIBLIOTHÈQUE — dans le flux, centré, pousse le body en dessous.
             Masqué sous md : la navigation passe par le menu épinglé, et le
@@ -185,7 +186,7 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
             side-by-side columns from lg up (the original desktop layout). */}
         <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
           {/* Left — CV thumbnail */}
-          <div className="w-full shrink-0 border-b border-faint flex flex-col items-center gap-2 px-3 pt-2 pb-3 overflow-hidden lg:w-[38%] lg:shrink lg:border-b-0 lg:border-r lg:gap-4 lg:px-6 lg:pt-5 lg:pb-6">
+          <div className="w-full shrink-0 border-b border-faint flex flex-col items-center gap-2 px-3 pt-2 pb-3 overflow-hidden lg:w-1/2 lg:border-b-0 lg:border-r lg:gap-4 lg:px-6 lg:pt-5 lg:pb-6">
             {/* Document selector — +50% */}
             <div className="flex items-center gap-2 bg-chip border border-faint rounded-full py-[6px] pl-[18px] pr-[6px] shrink-0">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
