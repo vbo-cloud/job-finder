@@ -12,9 +12,13 @@
 # the commands you type next.
 #
 # Requires: already logged in via `az login` on the jumpbox (or the VM's managed identity has Key
-# Vault read access) with permission to read secrets from kv-jf-dev-frc. Azure OpenAI calls
-# authenticate via that same identity through DefaultAzureCredential (Managed Identity flip) — no
-# API key secret to fetch here anymore; it must carry the "Cognitive Services OpenAI User" role.
+# Vault read access) with permission to read secrets from kv-jf-dev-frc. No API key secret to
+# fetch here anymore (Managed Identity flip) — any future script that calls Azure OpenAI directly
+# from this shell would authenticate via that same `az login` identity through
+# DefaultAzureCredential, and would need the "Cognitive Services OpenAI User" role on the account.
+# Not currently granted to any interactive user principal (only to the caj UAMI used by the
+# Container App Jobs/webapp) — no jumpbox script calls Azure OpenAI today, so this is a known gap
+# to close if/when one does, not a regression from this change.
 
 KEY_VAULT_NAME="kv-jf-dev-frc"
 
