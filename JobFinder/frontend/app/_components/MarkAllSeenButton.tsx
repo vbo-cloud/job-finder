@@ -37,7 +37,9 @@ export default function MarkAllSeenButton({ cvId, disabled, onMarkedAllSeen }: P
     // ml-auto pushes this flush right — only works because the caller
     // (CorrespondancesPanel's filter bar) renders it inside a flex row.
     <div className="ml-auto flex items-center gap-2">
-      {failed && <span className="text-[12px] text-destructive">Échec — réessayez</span>}
+      {/* Suppressed once nothing is left to mark (e.g. cleared from another tab) —
+       * a stale failure message about a mark-all attempt no longer applies. */}
+      {failed && !disabled && <span className="text-[12px] text-destructive">Échec — réessayez</span>}
       <button
         onClick={handleClick}
         disabled={disabled || loading}

@@ -243,7 +243,12 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   // Duplicates the "novel" predicate used inside the `filtered` useMemo below —
   // needed here against the full unfiltered `matches` to decide whether the
   // "Marquer tout comme vu" button has anything to act on. Keep both in sync.
-  const hasUnseen = matches.some((m) => m.is_new && !seenIds.has(m.offer.id));
+  // matches can run into the thousands — memoized like `filtered` below rather
+  // than recomputed inline on every render.
+  const hasUnseen = useMemo(
+    () => matches.some((m) => m.is_new && !seenIds.has(m.offer.id)),
+    [matches, seenIds],
+  );
 
   const filtered = useMemo(() => {
     let arr = matches.filter((m) => !rejected.has(m.offer.id));
