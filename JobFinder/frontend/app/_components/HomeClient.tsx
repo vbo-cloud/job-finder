@@ -183,17 +183,21 @@ export default function HomeClient() {
 
   return (
     <>
-      <LeftNavRail
-        activeSection={activeSection}
-        mapActive={mode === "map" || mode === "to-map"}
-        mapAvailable={isAuthenticated}
-        libraryAvailable={libraryAccessible}
-        offersAvailable={!!selectedCvId}
-        onGoHome={handleGoHome}
-        onGoMap={handleGoMap}
-        onGoLibrary={handleGoLibrary}
-        onGoOffers={handleScrollToDetail}
-      />
+      {/* Guests previously got a degraded rail (icons dimmed via mapAvailable) —
+          now hidden entirely, consistent with the rest of the guest experience. */}
+      {isAuthenticated && (
+        <LeftNavRail
+          activeSection={activeSection}
+          mapActive={mode === "map" || mode === "to-map"}
+          mapAvailable
+          libraryAvailable={libraryAccessible}
+          offersAvailable={!!selectedCvId}
+          onGoHome={handleGoHome}
+          onGoMap={handleGoMap}
+          onGoLibrary={handleGoLibrary}
+          onGoOffers={handleScrollToDetail}
+        />
+      )}
       {/* Below md the swipe/scroll navigation between the full-screen sections
           is disabled (overflow-hidden): moving around goes through the pinned
           mobile menu (layout.tsx), which scrolls this container programmatically
