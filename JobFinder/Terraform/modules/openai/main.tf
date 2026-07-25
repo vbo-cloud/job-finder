@@ -11,6 +11,7 @@ resource "azurerm_cognitive_account" "this" {
   # Public access required for agents running outside the VNet (M1).
   # Restrict via private endpoint when self-hosted runners are available.
   public_network_access_enabled = true
+  local_auth_enabled            = var.local_auth_enabled
 
   tags = {
     environment = var.environment

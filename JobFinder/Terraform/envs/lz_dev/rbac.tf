@@ -143,3 +143,18 @@ resource "azurerm_role_assignment" "caj_servicebus_owner" {
   role_definition_name = "Azure Service Bus Data Owner"
   principal_id         = azurerm_user_assigned_identity.caj.principal_id
 }
+
+# ==============================================================================
+# Role — Cognitive Services OpenAI User (Azure OpenAI, migration Managed Identity)
+# ==============================================================================
+
+data "azurerm_cognitive_account" "openai" {
+  name                = "oai-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_app.name
+}
+
+resource "azurerm_role_assignment" "caj_openai_user" {
+  scope                = data.azurerm_cognitive_account.openai.id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}

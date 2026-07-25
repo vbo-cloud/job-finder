@@ -39,6 +39,12 @@ variable "owner" {
   description = "Owner email address applied to resource tags."
 }
 
+variable "local_auth_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether API-key (local) authentication remains allowed on the account, in addition to Entra ID. Set to false once every consumer has migrated to Managed Identity — see docs/BACKLOG.md hardening item."
+}
+
 variable "deployments" {
   description = "Map of model deployments. Key = deployment name."
   type = map(object({
