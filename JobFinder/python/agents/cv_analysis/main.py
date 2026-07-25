@@ -215,9 +215,20 @@ ROME_EXTRACTION_SYSTEM_PROMPT = (
     "responsabilité/encadrement supérieur à celui de l'expérience réellement démontrée dans le "
     "CV (ex. ne retourne pas un code d'architecte, de chef de chantier ou de conducteur de "
     "travaux pour un dessinateur-projeteur ou technicien sans expérience d'encadrement "
-    "explicitement décrite). Ne retourne un second ou troisième code que si le CV démontre une "
-    "expérience réelle et distincte à ce niveau, jamais par simple proximité de secteur avec le "
-    "code principal. "
+    "explicitement décrite). Cette exigence de preuve — une expérience réelle et distincte, pas "
+    "une simple proximité de secteur — s'applique UNIQUEMENT à un code qui représenterait une "
+    "direction de carrière DIFFÉRENTE de l'objectif principal déjà identifié (voir la RÈGLE — "
+    "famille de métiers cible ci-dessous pour le cas contraire). "
+    "RÈGLE — famille de métiers cible : une fois la direction de carrière principale établie "
+    "(objectif de poste explicite en tête de CV, intention de recherche transmise séparément, "
+    "ou métier dominant du parcours), inclure TOUTES les fiches ROME de la liste ci-dessus qui "
+    "décrivent cette même direction au même niveau de qualification — même quand le référentiel "
+    "la découpe en plusieurs fiches voisines plutôt qu'une seule (ex. un objectif Cloud "
+    "Engineer/DevOps peut être couvert par plusieurs fiches administrateur systèmes, technicien "
+    "cloud, ingénieur cloud selon le découpage du référentiel : ce sont des variantes du même "
+    "objectif, pas des codes 'supplémentaires' à justifier séparément). Ne confonds pas cette "
+    "situation avec une expérience annexe hors direction de carrière (voir la RÈGLE sur les "
+    "expériences annexes ci-dessus), qui reste soumise à l'exigence de preuve. "
     "Ne retourne rien d'autre que le JSON."
 )
 
@@ -259,6 +270,22 @@ def _extract_rome_codes(raw_text: str, candidate_description: str | None = None)
     ordering, which was tested and ruled out first). The current date is also
     passed in the user message (not the system prompt, to keep it cache-eligible)
     so the model has a real anchor for chronological-coherence judgments.
+
+    A fifth invariant, added because the qualification-level rule conflated two
+    distinct situations: the system prompt now distinguishes sibling ROME codes
+    that describe the same target occupation at the same qualification level
+    — which the referential happens to split across several neighboring
+    fiches (included together without separate proof) — from codes
+    representing a genuinely different career direction (still requiring
+    distinct proof). This was found while investigating the same real CV
+    producing disjoint code sets (89/131/214 matches) across three
+    consecutive uploads despite determinism pinning — partly explained by
+    MODELS_WITHOUT_TEMPERATURE_SEED silently neutralizing the first invariant
+    for gpt-5-mini, which rejects temperature/seed outright, but this
+    invariant does not itself eliminate that residual sampling noise, only
+    the flawed judgment the model had to make on every call regardless of
+    sampling — see docs/prompts/prompt-cv-analysis-rome-code-family-coverage.md
+    for the full diagnostic.
 
     Retries up to MAX_ATTEMPTS times on JSON parse errors or empty results.
     OpenAI API errors are not retried — they are fatal.
