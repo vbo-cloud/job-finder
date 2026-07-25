@@ -8271,6 +8271,8 @@ présent et fidèle au comportement actuel, aucune correction nécessaire.
   préoccupations mélangées) est une dette préexistante que cette PR ne fait qu'étendre en suivant le
   pattern d'extraction déjà en place pour `ExperienceToggle`.
 
+---
+
 ## PR #232 — feat(openai): rôle Cognitive Services OpenAI User pour la UAMI caj + variable local_auth_enabled
 
 **Date :** 2026-07-26
@@ -8334,3 +8336,42 @@ applicative" est déjà posé une fois dans l'en-tête du fichier (lignes 82-93)
 fichier Python n'est touché par cette PR (uniquement du Terraform).
 
 Aucune remarque non-bloquante en attente.
+
+---
+
+## PR #233 — fix(frontend): masquer la barre de navigation latérale pour les visiteurs non connectés
+
+**Date :** 2026-07-26
+**Branche :** `feature/hide-navbar-unauthenticated` → `dev`
+
+### Contexte
+
+`LeftNavRail` (ajoutée en PR #229) s'affichait pour tout le monde, y compris les visiteurs non connectés :
+l'icône Carte apparaissait grisée (`disabled`) via `mapAvailable={isAuthenticated}`, mais le reste de la
+pilule (Accueil, Bibliothèque, Offres) restait visible. Incohérent avec le reste de l'expérience visiteur,
+qui ne montre aucun élément de navigation propre aux utilisateurs connectés. Périmètre volontairement
+limité à la pilule desktop (`LeftNavRail`) — le menu burger mobile (`MobileNavMenu`) n'est pas concerné.
+
+### Ce qui a été fait
+
+- **`HomeClient.tsx`** : tout le bloc `<LeftNavRail>` est désormais conditionné à `isAuthenticated && (...)`
+  plutôt que de laisser le composant s'afficher avec des icônes partiellement grisées. `mapAvailable={isAuthenticated}`
+  simplifié en raccourci JSX `mapAvailable` (toujours vrai maintenant que tout le bloc n'est rendu que
+  connecté), même style que le raccourci déjà utilisé sur la prop `available` dans `LeftNavRail.tsx`.
+- **`__tests__/HomeClient.test.tsx`** (nouveau) : première couverture de test pour `HomeClient`. Deux cas —
+  la pilule est absente quand `useIsAuthenticated()` renvoie `false`, présente quand elle renvoie `true`.
+  Mocks `@azure/msal-react`, `@/lib/api/client`, et stub des sections lourdes (`HomeMapSection`,
+  `LibrarySection`) pour isoler le comportement testé.
+
+### Vérification
+
+- `npx tsc --noEmit` : propre.
+- `npx eslint` : propre.
+- `npx jest` (`JobFinder/frontend`) : suite complète verte, sans régression.
+- Deux passages `reviewer-frontend` : verdict final APPROUVÉ, aucune remarque non-bloquante.
+- Vérification manuelle sur serveur de dev : visiteur non connecté → aucune pilule visible ; connecté →
+  pilule affichée comme avant.
+
+Passage doc-writer : commentaire WHY ajouté au-dessus du bloc `{isAuthenticated && (...)}` dans
+`HomeClient.tsx` — explique pourquoi la pilule est entièrement masquée plutôt que partiellement grisée
+comme avant cette PR. Aucune autre correction nécessaire dans les deux fichiers touchés.
