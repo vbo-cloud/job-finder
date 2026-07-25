@@ -119,6 +119,7 @@ jobs:
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+      TF_VAR_portfolio_contact_function_url: ${{ secrets.PORTFOLIO_CONTACT_FUNCTION_URL }}
 
     defaults:
       run:

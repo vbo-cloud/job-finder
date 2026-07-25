@@ -7528,3 +7528,55 @@ compile, route `/feedback` à 3.17 kB. `npm test` (`JobFinder/frontend`) : 155 p
 portfolio **non effectué** dans cette session (aucune URL de Function de test/dev disponible dans cet
 environnement) — à faire avant merge, conforme à la checklist "Vérification avant PR" de ce repo. Confirmé
 qu'aucun fichier du repo `portfolio` (séparé) n'a été touché.
+
+## PR #223 — fix(ci): provision PORTFOLIO_CONTACT_FUNCTION_URL as a GitHub secret, mark Terraform var sensitive
+
+**Date :** 2026-07-25
+**Branche :** `fix/portfolio-contact-function-url-secret` → `dev`
+
+### Contexte
+
+Suite à la PR #222 : `POST /feedback` renvoie 502 en dev/prod parce que `portfolio_contact_function_url`
+reste à son défaut vide (`""`) — comportement voulu et déjà documenté dans PR #222, rien à corriger côté
+logique applicative. Ce qui manquait, c'est le câblage CI/CD pour faire passer la vraie valeur (désormais
+connue de Vincent) jusqu'à `terraform apply`.
+
+Décision actée avec Vincent (via Claude Cowork, `docs/prompts/prompt-portfolio-contact-function-url-github-var.md`) :
+cette URL devient un **secret GitHub** (`secrets.*`), pas une **variable GitHub** (`vars.*`), bien qu'elle ne
+soit pas elle-même confidentielle (Function déjà anonyme, appelée depuis le navigateur du visiteur sur le
+site portfolio statique — voir PR #222). Le point décisif est que ce repo `job-finder` est **public** :
+`terraform plan`/`apply` imprime la valeur d'une `vars.*` en clair dans son diff, donc dans des logs
+GitHub Actions publics et indexés ; `secrets.*` la masque automatiquement (`***`) partout où elle apparaît
+dans ces logs. Éviter cette valeur de reconnaissance pour un scraper reste utile même si l'information
+existe déjà ailleurs publiquement (site portfolio).
+
+### Ce qui a été fait
+
+- `.github/workflows/terraformApply.yml` (job `apply-dev`) et `.github/workflows/terraformPlan.yml`
+  (job `plan-app`) : ajout de `TF_VAR_portfolio_contact_function_url: ${{ secrets.PORTFOLIO_CONTACT_FUNCTION_URL }}`
+  juste après `TF_VAR_alert_email`, même schéma déjà en place pour ce secret. Ajouté aux deux workflows
+  (pas seulement `apply`) pour que le `terraform plan` des PR touchant `dev` reflète la vraie valeur plutôt
+  que de planifier contre une valeur vide, qui aurait rendu les plans de PR trompeurs pour toute review
+  future.
+- `JobFinder/Terraform/envs/dev/variables.tf` : `sensitive = true` sur la variable
+  `portfolio_contact_function_url`. Protection complémentaire au secret GitHub, pas redondante — le masquage
+  GitHub agit sur le texte brut des logs, tandis que `sensitive = true` empêche Terraform lui-même
+  d'imprimer la valeur dans le diff formaté de `terraform plan`.
+- `CLAUDE.md` : `PORTFOLIO_CONTACT_FUNCTION_URL` ajouté à la liste "GitHub secrets (sensitive)".
+- Aucun changement dans `terraform.tfvars` ni `webapp.tf` : la consommation de la variable côté Container
+  App (`env_vars` classique, pas un secret Container-App-side) ne change pas, seul le câblage CI/Terraform
+  devait être masqué.
+- La valeur réelle de l'URL n'apparaît nulle part dans ce repo (fichiers, commits, message de PR) —
+  uniquement le nom du secret `PORTFOLIO_CONTACT_FUNCTION_URL`.
+
+### Suivi manuel requis de la part de Vincent, hors périmètre de cette PR
+
+Créer le secret de repo GitHub `PORTFOLIO_CONTACT_FUNCTION_URL` (Settings → Secrets and variables → Actions
+→ onglet Secrets, pas Variables) avec la valeur déjà connue. Peut être fait avant ou après le merge de cette
+PR — tant que le secret n'existe pas, `terraform apply` continue d'appliquer la valeur vide par défaut, sans
+régression. `/feedback` ne sera fonctionnel qu'une fois le secret créé ET cette PR mergée sur `dev`.
+
+**Vérification :** `terraform fmt -check -diff` et `terraform validate` (`JobFinder/Terraform/envs/dev`) :
+propre / valide, l'ajout de `sensitive = true` ne casse pas la validation. Relecture manuelle des deux
+fichiers YAML modifiés (indentation cohérente avec les lignes voisines). Pas de `plan`/`apply` local
+(CI-only, conforme au Git Flow de ce repo).
