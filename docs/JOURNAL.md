@@ -7827,10 +7827,13 @@ vers le mode carte ; capture d'écran confirmant qu'on reste sur l'écran d'impo
 
 Point durci à cette occasion : `enterMap()` elle-même n'avait pas de garde interne — elle ne restait
 sûre que parce que ses trois appelants actuels (geste de scroll, pill tactile, indice desktop) la
-gardaient chacun de leur côté. Déplacement de la vérification `isAuthenticatedRef.current` dans
-`enterMap()` et redirection du geste de scroll pour passer par cette même fonction plutôt que
-dupliquer `startTransition("to-map", "map")` — un seul point de décision désormais, pour qu'un futur
-appelant ne puisse pas accidentellement ouvrir la carte (zone géographique liée au profil) sans être
-connecté. Aucun changement de comportement observable pour les trois appelants existants (déjà tous
-correctement gardés) ; re-testé en live après coup (déconnexion + `WheelEvent`, puis reconnexion +
-clic sur l'indice "CARTE") pour confirmer l'absence de régression dans les deux sens.
+gardaient chacun de leur côté. Ajout d'une garde `isAuthenticatedRef.current` interne à `enterMap()`
+(en plus de celle déjà présente dans chacun des trois appelants, qui reste en place — garde redondante
+par construction, notamment côté geste de scroll où elle conditionne aussi le `preventDefault()`) et
+redirection du geste de scroll pour passer par cette même fonction plutôt que dupliquer
+`startTransition("to-map", "map")` — un seul point de décision désormais pour l'action de transition
+elle-même, pour qu'un futur appelant ne puisse pas accidentellement ouvrir la carte (zone géographique
+liée au profil) sans être connecté. Aucun changement de comportement observable pour les trois
+appelants existants (déjà tous correctement gardés) ; re-testé en live après coup (déconnexion +
+`WheelEvent`, puis reconnexion + clic sur l'indice "CARTE") pour confirmer l'absence de régression
+dans les deux sens.
