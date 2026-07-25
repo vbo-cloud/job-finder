@@ -7788,3 +7788,30 @@ Google existante, `npm run dev`) : les six comportements (CARTE → mode carte, 
 carte, BIBLIOTHÈQUE upload → scroll bibliothèque, ACCUEIL bibliothèque → scroll accueil, OFFRES → scroll
 détail, BIBLIOTHÈQUE détail → régression non cassée) vérifiés un par un via captures d'écran et lecture
 de `main.scrollTop`.
+
+**Suivi post-review (après ouverture de la PR #226) :** deux remarques de Vincent traitées.
+
+1. **`LibrarySection.tsx` — OFFRES sans CV sélectionné.** `detailRef.current` est `null` tant que
+   `HomeClient` n'a pas monté `CVDetailSection` (uniquement une fois `selectedCvId` non nul) — fenêtre réelle
+   pendant un upload optimiste où la bibliothèque est déjà accessible mais le vrai CV n'est pas encore dans
+   `cvs`. Le clic sur OFFRES ne plantait pas (`?.scrollIntoView` no-op silencieux) mais ne faisait rien
+   d'observable. Le bouton est maintenant conditionné à `selectedCvId`, même garde que celle déjà utilisée
+   par `HomeClient` pour monter `CVDetailSection`.
+2. **Duplication du pattern [texte + flèche `animate-bounce`], répété six fois** dans `UploadSection.tsx`,
+   `HomeMapSection.tsx`, `LibrarySection.tsx` et `CVDetailSection.tsx`. Extraction d'un composant partagé
+   `ScrollHint.tsx` (`direction`, `label`, `ariaLabel`, `onClick`, `className` pour le positionnement propre à
+   chaque appelant) — les six occurrences pointent maintenant vers la même implémentation, y compris le bouton
+   déjà présent dans `CVDetailSection` (qui n'avait au passage jamais eu l'anneau de focus des cinq autres :
+   uniformisé par la même occasion).
+
+Note de vérification pour ce suivi : le scroll `smooth` déclenché par clic n'a pas pu être ré-observé
+visuellement pendant le débogage (`document.visibilityState` de l'onglet Chrome de test est passé à
+`"hidden"` en cours de session malgré `document.hasFocus() === true`, ce qui suspend l'avancement des
+animations pilotées par `requestAnimationFrame` — reproduit même sur un `main.scrollTo({behavior:"smooth"})`
+brut, indépendant de tout code de cette PR, et même dans un nouvel onglet fraîchement ouvert). Le
+comportement de la fonction elle-même reste vérifié : un `console.log` temporaire dans `handleScrollToDetail`
+a confirmé que le clic déclenche bien le handler avec `detailRef.current` pointant sur le bon nœud
+`section#cv-detail`, et un `scrollIntoView({behavior:"auto"})` vers la même cible saute correctement au bon
+offset — seule l'étape d'animation n'a pas pu être observée dans cette session.
+
+`tsc --noEmit` et `eslint` propres après les deux correctifs.
