@@ -251,15 +251,14 @@ export default function CVCard({ cv, onDeleted, onSelect, active = false }: CVCa
               <span className="text-[12.5px] font-medium text-secondary">
                 {cv.match_count} match{cv.match_count !== 1 ? "s" : ""}
               </span>
-              <span
-                title={unseenCount > 0 ? `+${unseenCount} correspondances depuis la dernière analyse` : "Analyse en attente"}
-                className={cn(
-                  "text-[11.5px] font-light tabular-nums",
-                  unseenCount > 0 ? "text-success" : "text-label",
-                )}
-              >
-                {unseenCount > 0 ? `+${unseenCount}` : "—"}
-              </span>
+              {unseenCount > 0 && (
+                <span
+                  title={`+${unseenCount} correspondances depuis la dernière analyse`}
+                  className="text-[11.5px] font-light tabular-nums text-success"
+                >
+                  +{unseenCount}
+                </span>
+              )}
             </div>
           )}
         </div>

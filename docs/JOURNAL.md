@@ -7999,3 +7999,27 @@ Google existante, `npm run dev` pointant vers le backend dev déployé) sur un C
 page (nouvelle session, cache localStorage non réutilisé côté vérification serveur) : le badge
 `unseen_count` de la carte CV dans la bibliothèque reste à zéro et aucune offre ne réaffiche "Nouveau" —
 confirme que `seen_at` a bien été persisté côté serveur, pas seulement en local.
+
+**Suivi (après ouverture de la PR #228) :** deux remarques traitées.
+
+1. **Revue de code (`.then()` vs `async/await`, `hasUnseen` non mémoïsé, message d'erreur figé).**
+   `hasUnseen` (`CorrespondancesPanel.tsx`) était recalculé à chaque rendu via un `matches.some(...)` en
+   scope de rendu — `matches` pouvant monter à plusieurs milliers d'éléments, passé dans un `useMemo`
+   (deps `[matches, seenIds]`), aligné avec le `useMemo` `filtered` juste en dessous. Dans
+   `MarkAllSeenButton.tsx`, le message "Échec — réessayez" restait affiché si `disabled` passait à `true`
+   entre-temps par un autre biais (ex. offres marquées vues depuis un autre onglet) — désormais masqué
+   dans ce cas (`failed && !disabled`). En revanche, la suggestion de remplacer `.then()/.catch()/.finally()`
+   par `async/await` dans `handleClick` n'a pas été suivie : vérification faite sur le codebase
+   (`RomeReanalysisButton.tsx` — le modèle suivi pour ce bouton —, `toggleExpand`/`requestAnalysis` dans
+   `CorrespondancesPanel.tsx`, `CVDetailSection.tsx`, `HomeMapSection.tsx`...), le pattern `.then()` est en
+   fait dominant dans ce fichier et ses voisins ; seul `CVCard.tsx` utilise `await` sur un appel isolé.
+   Garder `.then()` ici reste plus cohérent avec l'existant qu'un changement vers la minorité.
+2. **Tiret affiché dans la bibliothèque quand un CV n'a aucune nouvelle offre.** Vincent a signalé que
+   `CVCard.tsx` affichait un `—` (em dash, `text-label`) à la place du badge vert `+N` quand
+   `unseen_count` vaut 0 — visible immédiatement après un "Marquer tout comme vu". Le badge entier
+   (span + `title`) est désormais conditionné à `unseenCount > 0` : rien ne s'affiche à côté du compteur
+   de matchs quand il n'y a aucune offre non vue, plutôt qu'un signe indéfini. Test existant
+   `__tests__/CVCard.test.tsx` ("does not show unseen badge when unseen_count is 0") complété d'une
+   assertion sur l'absence du `—`. Vérifié en live : la carte du CV déjà entièrement marqué vu
+   (1003 matchs) n'affiche plus aucun signe à côté du compteur, contrairement à une carte voisine avec un
+   badge `+377` intact.
