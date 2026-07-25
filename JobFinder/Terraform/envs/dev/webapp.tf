@@ -43,10 +43,6 @@ module "webapp" {
       value = module.postgresql.connection_string
     },
     {
-      name  = "openai-api-key"
-      value = module.openai.primary_key
-    },
-    {
       name  = "entra-external-client-secret"
       value = data.azurerm_key_vault_secret.entra_client_secret.value
     },
@@ -56,10 +52,6 @@ module "webapp" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
     },
     {
       name  = "AZURE_OPENAI_ENDPOINT"

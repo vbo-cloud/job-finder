@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import structlog
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 from openai import OpenAIError
 from sqlalchemy import select, update
@@ -30,10 +31,6 @@ CV_TEXT_MAX_CHARS = 8000
 OFFER_TEXT_MAX_CHARS = 4000
 MAX_KEY_SKILLS = 10
 
-AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
-if not AZURE_OPENAI_API_KEY:
-    raise ValueError("AZURE_OPENAI_API_KEY")
-
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
 if not AZURE_OPENAI_ENDPOINT:
     raise ValueError("AZURE_OPENAI_ENDPOINT")
@@ -44,8 +41,17 @@ AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_MATCH_ANAL
 
 logger = structlog.get_logger()
 
+# No I/O and no resolvable identity needed at import — the credential chain is only
+# walked on the first token request (the first .chat.completions.create() call below).
+# Unlike AZURE_OPENAI_ENDPOINT above, an unusable identity therefore surfaces at call
+# time, not at module load — this module still imports cleanly with no Azure login
+# available (e.g. under pytest, see conftest.py).
+_openai_token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+)
+
 _openai_client = AzureOpenAI(
-    api_key=AZURE_OPENAI_API_KEY,
+    azure_ad_token_provider=_openai_token_provider,
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_version="2024-02-01",
 )

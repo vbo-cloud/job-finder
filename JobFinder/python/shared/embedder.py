@@ -5,6 +5,7 @@ import time
 
 import openai
 import structlog
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
 BATCH_SIZE = 100
@@ -18,13 +19,19 @@ _endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
 if not _endpoint:
     raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is not set")
 
-_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-if not _api_key:
-    raise ValueError("AZURE_OPENAI_API_KEY environment variable is not set")
+# No I/O and no resolvable identity needed at import — the credential chain is only
+# walked on the first token request (the first .embeddings.create() call below). Unlike
+# AZURE_OPENAI_ENDPOINT above, an unusable identity therefore surfaces at call time, not
+# at module load — this module still imports cleanly with no Azure login available (e.g.
+# under pytest, see conftest.py — this module is also imported transitively by
+# offer_fetching and webapp/routers/cv.py|profile.py via shared.embedder.embed()).
+_token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+)
 
 _client = AzureOpenAI(
     azure_endpoint=_endpoint,
-    api_key=_api_key,
+    azure_ad_token_provider=_token_provider,
     api_version=_API_VERSION,
     max_retries=10,
 )

@@ -10,7 +10,6 @@ from pathlib import Path
 
 _ENV_STUBS: dict[str, str] = {
     "DATABASE_URL": "postgresql://test:test@localhost/testdb",
-    "AZURE_OPENAI_API_KEY": "test-openai-api-key",
     "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
     "FT_CLIENT_ID": "test-ft-client-id",
     "FT_CLIENT_SECRET": "test-ft-client-secret",
