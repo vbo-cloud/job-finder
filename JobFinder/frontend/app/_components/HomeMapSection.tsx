@@ -2,8 +2,10 @@
 
 import { useIsAuthenticated } from "@azure/msal-react";
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type ComponentProps,
@@ -18,7 +20,7 @@ import MapSection from "./MapSection";
 import ScrollHint from "./ScrollHint";
 import UploadSection, { type UploadSectionHandle } from "./UploadSection";
 
-type Mode = "cv" | "to-map" | "map" | "to-cv";
+export type Mode = "cv" | "to-map" | "map" | "to-cv";
 
 /** Duration of the camera focus-pull — single source of truth for the mode
  * timers, the CSS layer transitions and the lens keyframe animation below. */
@@ -104,6 +106,17 @@ interface HomeMapSectionProps {
    * profile — lets the parent invalidate anything derived from it (e.g.
    * the matches list, which stays mounted and won't refetch on its own). */
   onZoneSaved?: () => void;
+  /** Reports every mode change — lets HomeClient know whether the map is
+   * currently focused, to highlight the right icon in LeftNavRail. */
+  onModeChange?: (mode: Mode) => void;
+}
+
+export interface HomeMapSectionHandle {
+  /** Imperative entry into the map mode — used by LeftNavRail, which lives
+   * outside this component and can't reach the mode state directly. */
+  enterMap: () => void;
+  /** Imperative exit from the map mode — same reason as enterMap. */
+  exitMap: () => void;
 }
 
 /**
@@ -116,15 +129,22 @@ interface HomeMapSectionProps {
  * outside the Leaflet container, or over it once the view has been fully
  * zoomed out for a moment (no brush stroke in progress in both cases).
  * On coarse pointers the wheel gesture has no equivalent — pill buttons
- * ("Carte" / "Terminé") enter and leave the map mode instead.
+ * ("Carte" / "Terminé") enter and leave the map mode instead. LeftNavRail's
+ * "Carte" icon (outside this component) drives the same transition via the
+ * imperative handle below.
  * The painted zone is auto-saved to the profile with a debounce, flushed
  * when leaving the map mode.
  */
-export default function HomeMapSection({ uploadProps, uploadSectionRef, onZoneSaved }: HomeMapSectionProps) {
+const HomeMapSection = forwardRef<HomeMapSectionHandle, HomeMapSectionProps>(function HomeMapSection(
+  { uploadProps, uploadSectionRef, onZoneSaved, onModeChange },
+  ref,
+) {
   const isAuthenticated = useIsAuthenticated();
   const sectionRef = useRef<HTMLElement>(null);
   const onZoneSavedRef = useRef(onZoneSaved);
   onZoneSavedRef.current = onZoneSaved;
+  const onModeChangeRef = useRef(onModeChange);
+  onModeChangeRef.current = onModeChange;
 
   const [mode, setMode] = useState<Mode>("cv");
   const [communeCodes, setCommuneCodes] = useState<string[]>([]);
@@ -211,14 +231,26 @@ export default function HomeMapSection({ uploadProps, uploadSectionRef, onZoneSa
     startTransition("to-cv", "cv");
   }, [flushSave, startTransition]);
 
-  // Entry point shared by the wheel gesture, the touch pill and the desktop
-  // scroll hint — the auth check lives here rather than only at each caller
-  // so a future caller can't accidentally open the map (profile-backed zone)
-  // for a signed-out user.
+  // Entry point shared by the wheel gesture, the touch pill, the desktop
+  // scroll hint and LeftNavRail's "Carte" icon (via the imperative handle
+  // below) — the auth check lives here rather than only at each caller so a
+  // future caller can't accidentally open the map (profile-backed zone) for
+  // a signed-out user.
   const enterMap = useCallback(() => {
     if (modeRef.current !== "cv" || !isAuthenticatedRef.current) return;
     startTransition("to-map", "map");
   }, [startTransition]);
+
+  // LeftNavRail lives outside this component (mounted from HomeClient) and
+  // can't reach modeRef directly — enterMap/exitMap are exposed imperatively,
+  // same pattern as UploadSectionHandle.
+  useImperativeHandle(ref, () => ({ enterMap, exitMap }), [enterMap, exitMap]);
+
+  // Mirrors mode to the parent so LeftNavRail can highlight the map icon —
+  // "to-map"/"to-cv" count as map-focused/cv-focused for that purpose.
+  useEffect(() => {
+    onModeChangeRef.current?.(mode);
+  }, [mode]);
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -281,7 +313,14 @@ export default function HomeMapSection({ uploadProps, uploadSectionRef, onZoneSa
   }, [flushSave]);
 
   return (
-    <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page">
+    // md:ml-24 clears LeftNavRail (fixed left-4, ~52px wide, plus breathing room) — must stay ≥ its right edge.
+    // margin, not padding: this section is `relative` and the CV/map layers below
+    // are `absolute inset-0` children of it, so their containing block is this
+    // section's padding box. A padding-left would shift the in-flow content but
+    // leave those absolute layers anchored to the untouched padding edge — margin
+    // moves the whole border box (and with it the padding box the layers anchor
+    // to), keeping both in sync.
+    <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page md:ml-24">
       <div className="absolute inset-0" style={cvLayerStyle(mode)}>
         <UploadSection {...uploadProps} onEnterMap={enterMap} ref={uploadSectionRef} />
       </div>
@@ -337,4 +376,7 @@ export default function HomeMapSection({ uploadProps, uploadSectionRef, onZoneSa
       )}
     </section>
   );
-}
+});
+
+HomeMapSection.displayName = "HomeMapSection";
+export default HomeMapSection;
