@@ -11,6 +11,7 @@ from pathlib import Path
 
 import structlog
 from alembic.util.exc import CommandError
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 from openai import OpenAIError
 from sqlalchemy import select, update
@@ -33,10 +34,6 @@ from shared.telemetry import configure_telemetry
 CV_ANALYSIS_QUEUE = "cv-analysis"
 START_MATCHING_QUEUE = "start-matching"
 OFFER_FETCH_REQUEST_QUEUE = "offer-fetch-request"
-
-AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
-if not AZURE_OPENAI_API_KEY:
-    raise ValueError("AZURE_OPENAI_API_KEY")
 
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
 if not AZURE_OPENAI_ENDPOINT:
@@ -62,8 +59,12 @@ ROME_REFERENTIEL: dict[str, str] = json.loads(
 
 logger = structlog.get_logger()
 
+_openai_token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+)
+
 _openai_client = AzureOpenAI(
-    api_key=AZURE_OPENAI_API_KEY,
+    azure_ad_token_provider=_openai_token_provider,
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_version="2024-02-01",
 )
