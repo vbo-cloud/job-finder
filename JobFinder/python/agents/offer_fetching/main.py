@@ -21,8 +21,7 @@ replacement for the retired agents/matching_heartbeat's periodic catch-up.
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
     AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE: Service Bus namespace host.
-    AZURE_OPENAI_API_KEY: Azure OpenAI API key.
-    AZURE_OPENAI_ENDPOINT: Azure OpenAI endpoint URL.
+    AZURE_OPENAI_ENDPOINT: Azure OpenAI endpoint URL (auth via Managed Identity, shared.embedder).
     FT_CLIENT_ID: France Travail OAuth2 client ID.
     FT_CLIENT_SECRET: France Travail OAuth2 client secret.
 """

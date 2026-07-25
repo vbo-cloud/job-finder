@@ -12,7 +12,9 @@
 # the commands you type next.
 #
 # Requires: already logged in via `az login` on the jumpbox (or the VM's managed identity has Key
-# Vault read access) with permission to read secrets from kv-jf-dev-frc.
+# Vault read access) with permission to read secrets from kv-jf-dev-frc. Azure OpenAI calls
+# authenticate via that same identity through DefaultAzureCredential (Managed Identity flip) — no
+# API key secret to fetch here anymore; it must carry the "Cognitive Services OpenAI User" role.
 
 KEY_VAULT_NAME="kv-jf-dev-frc"
 
@@ -20,18 +22,16 @@ _jf_secret() {
     az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$1" --query value -o tsv
 }
 
-AZURE_OPENAI_API_KEY="$(_jf_secret openai-api-key)"
 AZURE_OPENAI_ENDPOINT="$(_jf_secret openai-endpoint)"
 DATABASE_URL="$(_jf_secret postgresql-connection-string)"
 
-export AZURE_OPENAI_API_KEY
 export AZURE_OPENAI_ENDPOINT
 export DATABASE_URL
 
-if [[ -z "$AZURE_OPENAI_API_KEY" || -z "$AZURE_OPENAI_ENDPOINT" || -z "$DATABASE_URL" ]]; then
+if [[ -z "$AZURE_OPENAI_ENDPOINT" || -z "$DATABASE_URL" ]]; then
     echo "jumpbox_env.sh: one or more secrets came back empty — check 'az login' and read access to Key Vault $KEY_VAULT_NAME." >&2
 else
-    echo "jumpbox_env.sh: AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, DATABASE_URL exported for this shell session."
+    echo "jumpbox_env.sh: AZURE_OPENAI_ENDPOINT, DATABASE_URL exported for this shell session."
 fi
 
 unset -f _jf_secret
