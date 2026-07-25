@@ -32,12 +32,17 @@ class FeedbackCreate(BaseModel):
     No email/name field: the recipient of the relayed email is derived
     server-side from the validated JWT (UserIdentity), never from client input.
     sentiment is the only optional field — the smiley picker is not required.
+    str_strip_whitespace + min_length=1 on subject/message make "required"
+    a real server-side guarantee (not just a disabled submit button on the
+    client) — a whitespace-only value strips down to "" and fails validation.
     """
 
     type: Literal["avis", "bug"]
-    subject: str = Field(max_length=200)
-    message: str = Field(max_length=5000)
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=5000)
     sentiment: Literal["positif", "neutre", "negatif"] | None = None
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class OfferOut(BaseModel):

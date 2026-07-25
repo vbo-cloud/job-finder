@@ -176,3 +176,12 @@ class TestCreateFeedback:
         resp = client.post("/feedback", json={"type": "bug", "subject": "s", "message": "m"})
 
         assert resp.status_code == 500
+
+    @pytest.mark.parametrize("field", ["subject", "message"])
+    def test_rejects_whitespace_only_required_field(self, test_client, field):
+        body = {"type": "bug", "subject": "s", "message": "m"}
+        body[field] = "   "
+
+        resp = test_client.post("/feedback", json=body)
+
+        assert resp.status_code == 422
