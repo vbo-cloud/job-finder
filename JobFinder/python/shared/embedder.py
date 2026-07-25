@@ -19,6 +19,12 @@ _endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
 if not _endpoint:
     raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is not set")
 
+# No I/O and no resolvable identity needed at import — the credential chain is only
+# walked on the first token request (the first .embeddings.create() call below). Unlike
+# AZURE_OPENAI_ENDPOINT above, an unusable identity therefore surfaces at call time, not
+# at module load — this module still imports cleanly with no Azure login available (e.g.
+# under pytest, see conftest.py — this module is also imported transitively by
+# offer_fetching and webapp/routers/cv.py|profile.py via shared.embedder.embed()).
 _token_provider = get_bearer_token_provider(
     DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
 )

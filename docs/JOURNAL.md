@@ -8375,3 +8375,117 @@ limité à la pilule desktop (`LeftNavRail`) — le menu burger mobile (`MobileN
 Passage doc-writer : commentaire WHY ajouté au-dessus du bloc `{isAuthenticated && (...)}` dans
 `HomeClient.tsx` — explique pourquoi la pilule est entièrement masquée plutôt que partiellement grisée
 comme avant cette PR. Aucune autre correction nécessaire dans les deux fichiers touchés.
+
+---
+
+## PR #234 — feat(openai): bascule Azure OpenAI en Managed Identity (PR 4/7 du plan notifications)
+
+**Date :** 2026-07-26
+**Branche :** `feat/openai-managed-identity-flip` → `dev`
+
+### Contexte
+
+PR 4/7 du plan "notifications" (recap email des nouvelles offres par CV + migration RBAC OpenAI,
+décidé avec Vincent le 2026-07-25/26). La PR 3/7 (#232) a posé le rôle `Cognitive Services OpenAI
+User` pour la UAMI partagée `caj` et ajouté la variable additive `local_auth_enabled` (toujours à
+`true` par défaut, sans effet). Cette PR bascule réellement l'authentification : `local_auth_enabled
+= false` sur le compte OpenAI, suppression du secret Key Vault `openai-api-key`, et migration des 3
+vrais clients Python vers l'auth par token Azure AD.
+
+Découverte en préparant cette tâche : `job_matching` n'utilise pas du tout Azure OpenAI (confirmé par
+`grep -in "embed|openai" agents/matching/main.py` — uniquement des lectures SQL de colonnes
+`embedding` déjà calculées). `container_apps.tf` lui injectait quand même les secrets/env vars
+OpenAI — un reliquat de l'ancien pipeline de distillation/reranking LLM (retiré via
+`prompt-remove-offer-distillation.md`, `prompt-matching-remove-lexical-bonus.md`). Cette PR retire
+cette configuration entièrement pour `job_matching`, pas de bascule puisqu'il n'y a rien à basculer.
+
+### Ce qui a été fait
+
+- `envs/dev/openai.tf` : `local_auth_enabled = false` sur `module "openai"` ; suppression du bloc
+  `module "secret_openai_key"`. `module "secret_openai_endpoint"` conservé (l'endpoint n'est pas
+  sensible) — noté ci-dessous comme piste de nettoyage hors périmètre.
+- `envs/dev/container_apps.tf` : retrait de `local.openai_api_key` (locals), et des entrées
+  `secrets`/`env_vars` `openai-api-key`/`AZURE_OPENAI_API_KEY` sur `job_offer_fetching`,
+  `job_cv_analysis`, `job_match_analysis` (`AZURE_OPENAI_ENDPOINT` conservé, déjà en valeur directe
+  non secrète). `job_matching` : retrait complet des deux secrets et des deux env vars OpenAI
+  (`openai-api-key`, `openai-endpoint`), agent confirmé non-consommateur.
+- `envs/dev/webapp.tf` : même retrait (`openai-api-key` secret + `AZURE_OPENAI_API_KEY` env var),
+  `AZURE_OPENAI_ENDPOINT` et `AZURE_CLIENT_ID` conservés.
+- `shared/embedder.py`, `agents/cv_analysis/main.py`, `agents/match_analysis/main.py` : remplacement
+  de la construction `AzureOpenAI(api_key=...)` par `DefaultAzureCredential` +
+  `get_bearer_token_provider(..., "https://cognitiveservices.azure.com/.default")`, suivant l'exemple
+  officiel du SDK (`openai/openai-python`, `examples/azure_ad.py`). `agents/offer_fetching/main.py`
+  n'a pas de client OpenAI propre (consomme via `shared.embedder.embed()`) — seul son docstring
+  d'en-tête listant les variables d'environnement attendues a été mis à jour.
+- `python/tests/conftest.py` : retrait du stub `AZURE_OPENAI_API_KEY` de `_ENV_STUBS`, plus aucun
+  module ne le lit.
+- `python/.env.example`, `python/scripts/jumpbox_env.sh` : nettoyage des références résiduelles à
+  `AZURE_OPENAI_API_KEY` (hors périmètre strict du prompt, mais references directement rendues
+  fausses par cette PR). `jumpbox_env.sh` ne va plus chercher le secret KV supprimé.
+
+### Décisions techniques
+
+- `module "secret_openai_endpoint"` semble inutilisé (aucun `data "azurerm_key_vault_secret"` ne le
+  relit — tous les consommateurs utilisent `module.openai.endpoint` directement) mais n'est pas
+  retiré ici, hors périmètre de cette PR ; à considérer pour un futur nettoyage.
+- Aucun rôle "Cognitive Services OpenAI User" n'est actuellement accordé à un principal
+  interactif (vérifié via `az role assignment list --assignee` sur l'utilisateur Vincent — Owner au
+  niveau subscription, mais `Owner` a `dataActions: []`, donc aucun accès data-plane implicite).
+  Seule la UAMI `caj` (Container App Jobs + webapp) porte ce rôle. Aucun script jumpbox n'appelle
+  Azure OpenAI aujourd'hui, donc ce n'est pas une régression de cette PR — mais un futur script de
+  diagnostic qui appellerait l'API directement depuis le jumpbox aurait besoin d'un rôle dédié.
+
+### Vérification
+
+- `pytest JobFinder/python/tests/ -v` : 370 passed.
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/dev`.
+- `terraform plan` sur `envs/dev` (avec un `alert_email` substitué localement, absent du tfvars
+  gitignored) : `azurerm_cognitive_account.this` montre `local_auth_enabled: true -> false` en
+  **mise à jour en place** (pas de replace) — condition d'arrêt du prompt validée. Destruction du
+  secret KV `openai-api-key` et mises à jour en place sur les Container App Jobs/webapp concernés,
+  conformes à l'attendu. Les diffs affichés sur `module.jumpbox` (VM + schedule), l'action group, et
+  `module.frontend` sont un drift préexistant sur des fichiers non touchés par cette PR — sans
+  rapport.
+- Aucun `apply` effectué (CI-only, convention du projet). Vérification manuelle post-merge des 4
+  chemins touchés (cv_analysis, match_analysis, embedder via offer_fetching et webapp/profile) et
+  confirmation `job_matching` inchangé, différées après merge + apply CI.
+
+Passage doc-writer : `shared/embedder.py`, `agents/cv_analysis/main.py`, `agents/match_analysis/main.py`
+— commentaire WHY ajouté au-dessus de chaque `get_bearer_token_provider(DefaultAzureCredential(), ...)`,
+absent jusqu'ici dans les trois fichiers : la construction ne fait ni I/O ni résolution d'identité (la
+chaîne de credential n'est parcourue qu'au premier appel réel), ce qui tranche avec
+`AZURE_OPENAI_ENDPOINT` juste au-dessus qui lève un `ValueError` fail-fast au chargement du module — sans
+ce commentaire, la tension entre les deux lignes voisines n'est pas évidente, et c'est précisément ce qui
+permet aux imports de ces modules de rester sans erreur sous pytest sans identité Azure disponible
+(confirmé : les tests patchent `_openai_client.chat.completions.create`, jamais la construction du
+client). `agents/offer_fetching/main.py` : docstring d'en-tête déjà à jour (mentionne l'auth via Managed
+Identity côté `shared.embedder`), rien à corriger. Les trois docstrings de module (`embedder.py`,
+`cv_analysis/main.py`, `match_analysis/main.py`) ne mentionnaient pas le mode d'authentification et n'ont
+donc pas eu besoin d'édition. `python/scripts/jumpbox_env.sh` porte déjà, depuis cette même PR, le
+commentaire WHY sur l'absence de rôle `Cognitive Services OpenAI User` pour un principal interactif —
+rien à ajouter.
+
+En vérifiant la portée de la bascule au-delà des fichiers listés dans "Ce qui a été fait" : trouvé
+`.github/workflows/buildAgents.yml` (step "Smoke-test webapp image") avec un commentaire devenu faux —
+"shared/embedder.py reads AZURE_OPENAI_API_KEY at module level and raises ValueError if absent" ne
+correspond plus au code depuis cette PR. Corrigé pour refléter l'auth par Managed Identity actuelle et
+noter que la ligne `-e AZURE_OPENAI_API_KEY=x` du smoke-test est un reliquat inoffensif (jamais lu par
+l'image) plutôt que de le laisser induire en erreur un futur lecteur. Fichier YAML de workflow, hors
+périmètre `.tf`/`.sql`/`.ps1` de l'exclusion de ce rôle, donc traité directement plutôt que signalé à
+`reviewer-infra`. `docs/BACKLOG.md:39` référence aussi `AZURE_OPENAI_API_KEY`, mais dans l'instantané figé
+du plan original de PR #86 (M4 PR1), déjà divergent sur d'autres points sans jamais avoir été mis à jour
+depuis : traité comme un historique, pas une description de l'état actuel, donc non corrigé.
+
+Non vérifié faute d'accès Bash dans ce passage : le chiffre « 370 passed » n'a pas été rejoué (cohérent
+avec les 370 déjà rapportés en sortie de PR #231, et PR #232 ne touchait aucun fichier Python entre les
+deux — donc plausible par continuité, pas confirmé indépendamment). Numéro de PR #234 non plus vérifié
+via `gh` (indisponible dans ce passage) — hérité tel quel de l'entête déjà écrite ; à recontrôler avant
+`gh pr create` si une autre PR a pu prendre ce numéro entre-temps.
+
+Les deux points signalés par doc-writer ont été revérifiés côté Claude Code après son passage :
+`pytest JobFinder/python/tests/ -v` rejoué (370 passed, inchangé après les commentaires WHY ajoutés)
+et `gh pr list --state all --limit 3` confirme que #233 est déjà pris (mergée), #234 est donc bien le
+prochain numéro disponible. `.github/workflows/buildAgents.yml` : la ligne `-e AZURE_OPENAI_API_KEY=x`
+signalée comme reliquat inoffensif par doc-writer a été retirée (plus aucune image ne la lit).
+
+Aucune remarque non-bloquante en attente.

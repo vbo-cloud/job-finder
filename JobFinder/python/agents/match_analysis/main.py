@@ -41,6 +41,11 @@ AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT = os.environ.get("AZURE_OPENAI_MATCH_ANAL
 
 logger = structlog.get_logger()
 
+# No I/O and no resolvable identity needed at import — the credential chain is only
+# walked on the first token request (the first .chat.completions.create() call below).
+# Unlike AZURE_OPENAI_ENDPOINT above, an unusable identity therefore surfaces at call
+# time, not at module load — this module still imports cleanly with no Azure login
+# available (e.g. under pytest, see conftest.py).
 _openai_token_provider = get_bearer_token_provider(
     DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
 )
