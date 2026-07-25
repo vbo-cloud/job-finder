@@ -1,8 +1,9 @@
 """Matching agent — pairs CVs with job offers using pgvector cosine similarity.
 
 Consumes one ``start-matching`` message, (re)computes matches for every CV with an
-embedding, purges matches whose offer no longer belongs to the CV's ROME codes, and
-enqueues each CV's current top-N unanalyzed matches onto ``match-analysis``.
+embedding, purges matches whose offer no longer belongs to the CV's ROME codes,
+advances analyzed CVs from ``done`` to ``matched``, and enqueues each CV's current
+top-N unanalyzed matches onto ``match-analysis``.
 """
 
 import uuid
