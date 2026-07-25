@@ -7905,6 +7905,19 @@ bouton — l'ancien `handleScrollToHome` attendait un événement `scrollend` ou
   validation/l'upload vivent désormais uniquement dans `UploadSection.handleFile`). Les deux tests non liés
   (propagation de la suppression d'un CV, masquage du slot d'ajout à quota atteint) sont inchangés.
 
+### Suivi après rebase sur `dev` (PR #226 mergée entre-temps)
+
+`dev` avait entre-temps reçu la PR #226 (indices de navigation cliquables), qui touchait les mêmes
+fichiers via une prop `onScrollToHome?: (onLanded: () => void) => void` partagée par l'indice "ACCUEIL"
+et (avant cette PR) le bouton "Ajouter un CV". Après rebase et résolution des conflits, `onScrollToHome`
+ne sert plus qu'à l'indice "ACCUEIL" — qui l'appelait déjà avec un callback vide (`() => {}`), puisqu'un
+simple scroll sans action de suivi. Le paramètre `onLanded` et le mécanisme `handleScrollToHome`
+(listener `scrollend` + `setTimeout` de repli 900ms dans `HomeClient.tsx`) devenaient donc de la
+complexité morte suite à cette PR — signalé en remarque non-bloquante par `reviewer-frontend` lors de la
+review post-rebase. Simplifié : `onScrollToHome` est maintenant `() => void`, `handleScrollToHome` un
+simple `scrollIntoView`, et `mainRef` (uniquement utilisée par l'ancien listener `scrollend`) supprimée
+de `HomeClient.tsx`.
+
 ### Décisions techniques
 
 **Régression de comportement assumée, non corrigée ici :** l'ancien pipeline `LibrarySection` affichait

@@ -33,7 +33,6 @@ export default function HomeClient() {
   const [cvList, setCvList]                       = useState<CVData[]>([]);
   const [zoneVersion, setZoneVersion]             = useState(0);
   const detailRef                                  = useRef<HTMLElement>(null);
-  const mainRef                                    = useRef<HTMLElement>(null);
   const uploadSectionRef                           = useRef<UploadSectionHandle>(null);
 
   // Holds the cv_id from POST /cv/upload so we can set it on the optimistic
@@ -98,25 +97,9 @@ export default function HomeClient() {
     detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
-  // "ACCUEIL" hint in LibrarySection: scroll to the home/upload section, then
-  // call onLanded once the scroll has settled — "scrollend" covers both the
-  // animated case and prefers-reduced-motion (an instant jump still fires
-  // it); the timeout is only a safety net for the rare browser without
-  // scrollend support.
-  const handleScrollToHome = useCallback((onLanded: () => void) => {
-    const home = document.getElementById("home");
-    const container = mainRef.current;
-    if (!home || !container) { onLanded(); return; }
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      container.removeEventListener("scrollend", finish);
-      onLanded();
-    };
-    container.addEventListener("scrollend", finish, { once: true });
-    setTimeout(finish, 900);
-    home.scrollIntoView({ behavior: sectionScrollBehavior() });
+  // "ACCUEIL" hint in LibrarySection: scroll to the home/upload section.
+  const handleScrollToHome = useCallback(() => {
+    document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
   // "Ajouter un CV" in LibrarySection: scroll to the home/upload section and
@@ -152,7 +135,6 @@ export default function HomeClient() {
     // mobile menu (layout.tsx), which scrolls this container programmatically
     // — scrollIntoView still scrolls an overflow-hidden box.
     <main
-      ref={mainRef}
       className="h-dvh overflow-hidden md:snap-y md:snap-mandatory md:overflow-y-scroll"
     >
       <HomeMapSection

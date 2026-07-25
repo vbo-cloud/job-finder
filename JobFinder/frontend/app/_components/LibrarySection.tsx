@@ -44,10 +44,9 @@ interface Props {
   onCvsChange?: (cvs: CVData[]) => void;
   /** The CV currently shown in the detail section — highlighted with the accent border. */
   selectedCvId?: string | null;
-  /** Scrolls to the home/upload section; calls onLanded once the scroll has
-   * settled (or immediately if the scroll can't be determined). Owned by the
+  /** Scrolls to the home/upload section ("ACCUEIL" hint) — owned by the
    * parent so this component doesn't need to know about a sibling's DOM id. */
-  onScrollToHome?: (onLanded: () => void) => void;
+  onScrollToHome?: () => void;
   /** Scrolls to the detail section ("OFFRES" hint) — owned by the parent for
    * the same reason as onScrollToHome. */
   onScrollToOffers?: () => void;
@@ -155,8 +154,8 @@ export default function LibrarySection({
   const placeholderCount  = Math.max(0, MAX_CVS - used - (canAdd ? 1 : 0));
   const showGrid          = showOptimistic || cvs.length > 0;
 
-  // "ACCUEIL" hint: scroll home, no follow-up action once landed.
-  const handleAccueilClick = () => onScrollToHome?.(() => {});
+  // "ACCUEIL" hint: scroll home.
+  const handleAccueilClick = () => onScrollToHome?.();
 
   return (
     <section
