@@ -35,7 +35,7 @@ This project is managed by two Claude instances with distinct roles:
 - **PRs** → `.github/workflows/terraformPlan.yml`: runs `fmt -check`, `validate`, and `plan` on `lz_dev` and `dev` (change-detection via git diff).
 - **Push to dev** → `.github/workflows/terraformApply.yml`: applies `lz_dev` then `dev` sequentially (landing zone first).
 
-Authentication uses Azure OIDC (no stored credentials). Required GitHub variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLATFORM_CLIENT_ID`, `SP_GITHUB_OBJECT_ID`. GitHub secrets (sensitive): `CLAUDE_API_KEY`, `REVIEWER_GITHUB_TOKEN`.
+Authentication uses Azure OIDC (no stored credentials). Required GitHub variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLATFORM_CLIENT_ID`, `SP_GITHUB_OBJECT_ID`. GitHub secrets (sensitive): `CLAUDE_API_KEY`, `REVIEWER_GITHUB_TOKEN`, `PORTFOLIO_CONTACT_FUNCTION_URL`.
 
 ## Key Details
 

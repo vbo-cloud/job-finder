@@ -71,7 +71,8 @@ variable "admin_user_ids" {
 variable "portfolio_contact_function_url" {
   type        = string
   default     = ""
-  description = "URL of the portfolio repo's sendContactEmail Azure Function, called server-to-server by the webapp's POST /feedback endpoint. Not a secret — an anonymous-auth HTTP Function URL — but left empty by default since it's only known after that Function is deployed; empty string means the feedback endpoint returns 502 until this is set (see docs/JOURNAL.md)."
+  sensitive   = true
+  description = "URL of the portfolio repo's sendContactEmail Azure Function, called server-to-server by the webapp's POST /feedback endpoint. Not a secret in the confidentiality sense — an anonymous-auth HTTP Function URL — but left empty by default since it's only known after that Function is deployed; empty string means the feedback endpoint returns 502 until this is set (see docs/JOURNAL.md). Marked sensitive = true purely as log hygiene: this repo is public, so it keeps the value out of terraform plan's formatted diff in CI logs, on top of the GitHub Actions secret already masking it at the raw-text level."
 }
 
 variable "frontend_custom_domain" {
