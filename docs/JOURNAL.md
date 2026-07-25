@@ -7661,3 +7661,82 @@ revue indépendante ont été traitées :
 
 `reviewer-frontend` a re-validé les deux points (`APPROUVÉ`, aucune remarque). Suite `jest` complète (17
 suites / 157 tests) et `npm run lint` relancés après chaque changement — propres.
+
+---
+
+## PR #224 — fix(cv-analysis): distinguish target-occupation sibling ROME codes from different-direction codes requiring proof
+
+**Date :** 2026-07-25
+**Branche :** `fix/cv-analysis-rome-code-family-coverage` → `dev`
+
+### Contexte
+
+Suite à `prompt-cv-analysis-rome-code-determinism-and-precision.md` (PR mergée, commit `128c298`) : le
+pinning température/seed et la règle anti-confusion secteur/occupation avaient été ajoutés à
+`_extract_rome_codes`. Trois jours plus tard, `5dc96aa` a changé le déploiement par défaut de
+`gpt-4o-mini` vers `gpt-5-mini` pour corriger un autre bug réel (recall libre sur ~1911 codes sans
+référentiel affiché) — mais `gpt-5-mini` rejette `temperature`/`seed` (erreur 400), donc
+`MODELS_WITHOUT_TEMPERATURE_SEED` neutralise silencieusement le pinning pour le modèle réellement utilisé
+en prod depuis le 22/07.
+
+Preuve constatée par Vincent le 25/07 : un même CV publié 3 fois a produit 89 / 131 / 214 matches selon
+l'upload, avec des domaines ciblés très différents (un upload penche devops sans aucune offre cloud
+engineer, un autre ramène des compétences dev sans rapport avec le profil). Cause aval :
+`_get_all_matches` (`agents/matching/main.py`) filtre les offres de façon binaire sur les codes ROME
+extraits pour ce `cv_id` précis (PR #211) — un jeu de codes différent à chaque extraction produit un pool
+d'offres éligibles entièrement différent.
+
+Cette PR ne traite pas le non-déterminisme d'échantillonnage de `gpt-5-mini` lui-même (décision actée
+avec Vincent le 25/07, hors périmètre). Elle corrige un problème distinct trouvé en creusant la logique
+du prompt : la RÈGLE — niveau de qualification de `ROME_EXTRACTION_SYSTEM_PROMPT` confondait deux
+situations sous une seule règle — l'escalade de responsabilité non démontrée (ex. dessinateur-projeteur
+→ chef de chantier, usage prévu, à garder tel quel) et les fiches ROME sœurs qui décrivent ensemble un
+seul objectif cible parce que le référentiel ROME n'a pas toujours une fiche unique par métier réel du
+marché (ex. "Cloud Engineer/DevOps" éclaté, au même niveau de qualification, sur `M1801`
+(administrateur systèmes), `M1876` (technicien cloud) et `M1879` (ingénieur cloud) — exactement
+l'exemple donné dans `ROME_EXTRACTION_SYSTEM_PROMPT`). La règle exigeait une "preuve distincte"
+pour chacune de ces fiches comme s'il s'agissait d'expériences séparées à justifier une par une, ce qui
+aggrave l'instabilité pour les profils couvrant légitimement plusieurs fiches ROME voisines (dont Vincent
+lui-même). Voir `docs/prompts/prompt-cv-analysis-rome-code-family-coverage.md` pour le diagnostic complet.
+
+### Ce qui a été fait
+
+- `agents/cv_analysis/main.py` — la fin de `ROME_EXTRACTION_SYSTEM_PROMPT` (RÈGLE — niveau de
+  qualification) est réécrite en deux règles distinctes : l'exigence de preuve (expérience réelle et
+  distincte, pas simple proximité de secteur) s'applique désormais uniquement à un code représentant une
+  direction de carrière différente de l'objectif principal ; une nouvelle RÈGLE — famille de métiers
+  cible demande d'inclure toutes les fiches ROME de la liste affichée qui décrivent la même direction au
+  même niveau de qualification, même quand le référentiel la découpe en plusieurs fiches voisines.
+- Docstring de `_extract_rome_codes` : cinquième invariant documenté (même style que les quatre
+  existants — déterminisme, occupation propre au candidat, priorisation de l'objectif déclaré,
+  référentiel affiché), renvoyant vers le fichier prompt ci-dessus pour le diagnostic complet.
+
+### Décisions actées avec Vincent (25/07, non rouvertes dans cette PR)
+
+- Ne pas ajouter de vote majoritaire multi-appels, ne pas toucher au filtre dur du matching
+  (`matching/main.py`) — mesures complémentaires envisagées mais reportées à une tâche séparée si ce fix
+  seul ne suffit pas.
+- Ne pas revenir à `gpt-4o-mini` — risque de perdre la qualité de jugement sur le niveau de qualification
+  que `5dc96aa` visait aussi à améliorer.
+
+### Limite connue, héritée, toujours hors scope
+
+`_merge_rome_codes` n'ajoute des codes que par union (sauf reconciliation par `cv_id`, déjà en place,
+PR #213) — un profil déjà contaminé par une extraction passée imprécise garde ses codes erronés tant que
+le CV concerné n'est pas supprimé puis ré-uploadé.
+
+### Vérification
+
+`pytest tests/test_cv_analysis.py -v` (`JobFinder/python`) : 69 passed. Aucun test n'asserte sur le texte
+exact de la RÈGLE — niveau de qualification modifiée (recherche `ROME_EXTRACTION_SYSTEM_PROMPT` dans
+`tests/` : deux assertions existantes portent sur `F1104:` et sur l'interdiction d'inventer un code hors
+liste, ni l'une ni l'autre dans le bloc réécrit).
+
+**Test manuel décisif non effectué dans cette session** (comparer 3-5 extractions avant/après sur un des
+trois `cv_id` réels du 25/07 à 89/131/214 matches, sur le modèle de `test_rome_extraction_nicolas_no_temp.py`) :
+nécessite un `cv_id` que Vincent n'a pas encore communiqué à cette session, plus un accès Key Vault et
+probablement réseau au Postgres dev (vraisemblablement privé) pour lire `cvs.raw_text`, ainsi que des
+appels OpenAI réels facturés — à faire par Vincent avant ou après merge, conformément à la checklist
+"Vérification avant PR" du prompt source. Rappel : les profils déjà contaminés par une extraction
+antérieure ne seront pas corrigés rétroactivement — observer l'effet sur un profil réel demande de
+supprimer puis ré-uploader le CV concerné après déploiement.
