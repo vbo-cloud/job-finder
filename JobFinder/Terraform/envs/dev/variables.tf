@@ -86,6 +86,28 @@ variable "frontend_custom_domain" {
   }
 }
 
+variable "notification_sender_domain" {
+  type        = string
+  default     = "vincentboutin.dev"
+  description = "Custom domain used as the sender for the notification agent's digest emails (Azure Communication Services Email, CustomerManaged domain). DNS records proving ownership (see the email_verification_records output) must be added manually at the domain's DNS host before Azure marks it Verified — same pattern as frontend_custom_domain (PR #191)."
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.notification_sender_domain))
+    error_message = "notification_sender_domain must be a valid DNS hostname (e.g. vincentboutin.dev)."
+  }
+}
+
+variable "notification_sender_username" {
+  type        = string
+  default     = "jobfinder"
+  description = "Local part of the notification digest sender address (e.g. jobfinder for jobfinder@vincentboutin.dev)."
+
+  validation {
+    condition     = can(regex("^[a-z0-9._-]+$", var.notification_sender_username))
+    error_message = "notification_sender_username must contain only lowercase letters, digits, dots, underscores, or hyphens."
+  }
+}
+
 variable "budget_amount" {
   type = number
   # Azure bills in the subscription's billing currency (check the portal —
