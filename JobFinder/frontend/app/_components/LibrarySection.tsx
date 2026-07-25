@@ -223,15 +223,20 @@ export default function LibrarySection({
         <span className="text-[9px] tracking-widest text-label">ACCUEIL</span>
       </button>
 
-      <button
-        type="button"
-        onClick={onScrollToOffers}
-        aria-label="Voir les offres"
-        className="absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
-      >
-        <span className="text-[9px] tracking-widest text-label">OFFRES</span>
-        <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
-      </button>
+      {/* Hidden without a selected CV: the detail section it scrolls to
+          isn't mounted yet (HomeClient only renders it once selectedCvId is
+          set), so the click would silently no-op otherwise. */}
+      {selectedCvId && (
+        <button
+          type="button"
+          onClick={onScrollToOffers}
+          aria-label="Voir les offres"
+          className="absolute bottom-[18px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 bg-transparent border-0 p-0 cursor-pointer max-md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+        >
+          <span className="text-[9px] tracking-widest text-label">OFFRES</span>
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌄</span>
+        </button>
+      )}
 
       {/* Header is taken out of flow (absolute) so its own vertical offset
           doesn't push the grid below down — the grid stays centered in the
