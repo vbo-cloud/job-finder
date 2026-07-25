@@ -90,6 +90,12 @@ export default function HomeClient() {
     document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, []);
 
+  // "OFFRES" hint in LibrarySection: scroll down to the already-mounted
+  // detail section (a CV is auto-selected as soon as the library has one).
+  const handleScrollToDetail = useCallback(() => {
+    detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, []);
+
   // Scrolls to the home/upload section, then calls onLanded once the scroll
   // has settled — "scrollend" covers both the animated case and
   // prefers-reduced-motion (an instant jump still fires it); the timeout is
@@ -154,6 +160,7 @@ export default function HomeClient() {
         onCvsChange={setCvList}
         selectedCvId={selectedCvId}
         onScrollToHome={handleScrollToHome}
+        onScrollToOffers={handleScrollToDetail}
       />
       {selectedCvId && (
         <CVDetailSection
