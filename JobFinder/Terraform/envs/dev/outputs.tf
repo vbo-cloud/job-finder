@@ -37,3 +37,13 @@ output "action_group_id" {
   description = "Resource ID of the owner alert action group."
   value       = azurerm_monitor_action_group.owner.id
 }
+
+output "email_verification_records" {
+  description = "DNS records to add manually at vincentboutin.dev's DNS host to verify the notification sender domain (Domain, DKIM, DKIM2, SPF, DMARC) — see modules/email_communication for details."
+  value       = module.email_communication.verification_records
+}
+
+output "email_sender_address" {
+  description = "Full sender address for the notification agent's digest emails."
+  value       = module.email_communication.sender_address
+}
