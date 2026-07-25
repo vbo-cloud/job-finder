@@ -177,6 +177,9 @@ class ProfileOut(BaseModel):
     commune_codes: list[str]
     experience_level: Literal["0-2", "2-5", "5+"] | None
     candidate_description: str | None
+    # list[int], not the narrower Literal[1..7] used by ProfileUpdate — this is read
+    # back from a column already bounded by ck_user_profiles_notification_days
+    # (migration 033), so re-validating each element on every read is redundant.
     notification_days: list[int]
     analysis_credits_remaining: int
     # Not a DB column — computed from ADMIN_USER_IDS by the profile endpoints
