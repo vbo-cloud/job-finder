@@ -2,10 +2,10 @@
 # Azure Communication Services — Email
 # ==============================================================================
 # Sender for the notification agent's digest emails (PR 7/7 of the notifications
-# plan — see docs/prompts/prompt-*.md). No RBAC granted here: an
-# azurerm_role_assignment's scope must already exist at apply time, so the role
-# for caj is PR 6/7, applied after this resource exists (see docs/prompts/
-# prompt-acs-email-resource.md for the full ordering rationale).
+# plan — see the Cowork prompt files for this plan, outside this repo). No RBAC
+# granted here: an azurerm_role_assignment's scope must already exist at apply
+# time, so the role for caj is PR 6/7, applied after this resource exists (same
+# ordering rationale, see docs/JOURNAL.md PR #235).
 
 module "email_communication" {
   source = "../../modules/email_communication"

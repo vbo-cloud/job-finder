@@ -22,7 +22,10 @@ resource "azurerm_communication_service" "this" {
 }
 
 # ==============================================================================
-# Email Communication Service
+# Email Communication Service — sits between the parent Communication Service
+# and the domain (email_service_id below). Protected for the same reason as
+# the domain itself: destroying it cascades into destroying the domain, which
+# means redoing the manual DNS verification step, not just a terraform apply.
 # ==============================================================================
 resource "azurerm_email_communication_service" "this" {
   name                = var.email_service_name
@@ -33,6 +36,11 @@ resource "azurerm_email_communication_service" "this" {
     environment = var.environment
     project     = var.project
     owner       = var.owner
+    protect     = "true"
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 

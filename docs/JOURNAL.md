@@ -8489,3 +8489,84 @@ prochain numéro disponible. `.github/workflows/buildAgents.yml` : la ligne `-e 
 signalée comme reliquat inoffensif par doc-writer a été retirée (plus aucune image ne la lit).
 
 Aucune remarque non-bloquante en attente.
+
+---
+
+## PR #235 — feat(dev): provisionner la ressource email Azure Communication Services
+
+**Date :** 2026-07-26
+**Branche :** `feat/acs-email-resource` → `dev`
+
+### Contexte
+
+PR 5/7 du plan "notifications" (recap email des nouvelles offres par CV, décidé avec Vincent le
+2026-07-25/26). Cette PR provisionne uniquement la ressource d'envoi d'email — pas de RBAC (PR 6/7,
+doit venir après puisqu'un `azurerm_role_assignment` a besoin que sa cible existe déjà), pas d'agent
+consommateur (PR 7/7). Rien n'envoie encore d'email à l'issue de cette PR.
+
+Décision produit actée avec Vincent : domaine personnalisé (`vincentboutin.dev`), pas de domaine géré
+par Azure. Adresse d'expéditeur : `jobfinder@vincentboutin.dev`. Vincent gère déjà le DNS de ce domaine
+pour ce même projet (`frontend_custom_domain`, PR #191) — la propriété du domaine n'est donc pas un
+obstacle, seulement une étape manuelle après cette PR.
+
+### Ce qui a été fait
+
+- **`envs/dev/variables.tf`** : deux nouvelles variables, `notification_sender_domain` (défaut
+  `vincentboutin.dev`) et `notification_sender_username` (défaut `jobfinder`), sur le modèle de
+  `frontend_custom_domain`.
+- **Nouveau module `modules/email_communication/`** : 5 ressources —
+  `azurerm_communication_service` (parent, hostname = endpoint du SDK `EmailClient`, futur scope RBAC
+  de la PR 6/7), `azurerm_email_communication_service`, `azurerm_email_communication_service_domain`
+  (`domain_management = "CustomerManaged"` — Azure ne touche pas au DNS, la preuve de propriété passe
+  par les enregistrements exposés en sortie), `azurerm_email_communication_service_domain_sender_username`
+  (partie locale `jobfinder`), et `azurerm_communication_service_email_domain_association` (lie le
+  domaine vérifié à la ressource parente). `azurerm_communication_service` et le domaine portent
+  `prevent_destroy = true` + `protect = "true"` — une destruction accidentelle du domaine imposerait de
+  refaire la vérification DNS manuelle, pas juste un nouvel apply.
+- **`envs/dev/communication_email.tf`** : nouveau fichier, appelle le module avec
+  `data_location = "France"` (cohérent avec la position RGPD déjà actée du projet, ADR-006).
+- **`envs/dev/outputs.tf`** : deux nouvelles sorties, `email_verification_records` (les enregistrements
+  DNS à ajouter manuellement chez l'hébergeur de `vincentboutin.dev` — Domain, DKIM, DKIM2, SPF, DMARC)
+  et `email_sender_address`.
+
+### Décisions techniques
+
+- Schéma confirmé via la doc officielle du provider `azurerm` (~> 4.0, verrouillé 4.72.0) : 5 ressources,
+  aucune n'a de rôle RBAC à poser dans cette PR.
+- Bug connu côté provider (`hashicorp/terraform-provider-azurerm#29731`) : `verification_records[].dmarc`
+  peut revenir vide selon l'état de l'API Azure au moment de l'apply sur certaines versions 4.x. Si
+  constaté après merge, récupérer la valeur manuellement sur le portail Azure (IAM du domaine) plutôt que
+  de déboguer le provider — les 4 autres enregistrements (Domain, DKIM, DKIM2, SPF) ne sont pas concernés.
+- La vérification du domaine n'est pas instantanée et ne fait pas partie de cette PR : le domaine reste
+  `NotVerified` tant que les enregistrements DNS ne sont pas ajoutés manuellement, avec un délai de
+  propagation non garanti. Ce n'est pas un critère de blocage pour cette PR.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/dev`.
+- `terraform plan` sur `envs/dev` (avec un `alert_email` substitué localement, absent du tfvars
+  gitignored) : grep confirme exactement 5 créations sous `module.email_communication` (les 5 ressources
+  du module), aucune destruction et aucun changement sur des ressources existantes attribuables à cette
+  PR. Les autres diffs affichés dans ce run (VM jumpbox, tags d'images de conteneurs, action group) sont
+  un drift local préexistant causé par d'autres variables locales substituées ou absentes du tfvars
+  gitignored, sans rapport avec cette PR.
+- Aucun `apply` effectué (CI-only, convention du projet). Après merge + apply CI : `terraform output
+  email_verification_records` à vérifier (Domain, DKIM, DKIM2, SPF non vides ; DMARC potentiellement vide,
+  voir bug connu ci-dessus) — les enregistrements à recopier manuellement chez l'hébergeur DNS de
+  `vincentboutin.dev` seront documentés dans la description de la PR pour que Vincent puisse les poser
+  après merge. Passage à `Verified` dans le portail Azure vérifié séparément, hors CI (délai de
+  propagation DNS variable).
+
+Passage doc-writer : commentaire d'en-tête de `communication_email.tf` corrigé (référençait
+`docs/prompts/prompt-*.md`, inexistant dans ce repo — les prompts Cowork vivent hors du repo). Toutes
+les autres descriptions `variable`/`output` et commentaires WHY du module vérifiés exacts, rien d'autre
+à corriger.
+
+Premier passage `reviewer-infra` : verdict APPROUVÉ avec 3 remarques non-bloquantes, toutes traitées :
+`azurerm_email_communication_service` ne portait ni `prevent_destroy` ni `protect = "true"` alors que sa
+destruction force en cascade celle du domaine (même justification DNS que celle déjà invoquée pour
+protéger le domaine) — protection ajoutée pour rester cohérent ; les `validation` de `domain_name` et
+`sender_username` n'existaient qu'au niveau de l'appelant (`envs/dev/variables.tf`) — dupliquées au
+niveau du module lui-même pour rester réutilisable sans dépendre d'un futur appelant discipliné ; le
+fichier `communication_email.tf` renommé en `email_communication.tf` pour reprendre le nom du module à
+l'identique, comme `servicebus.tf`/`openai.tf` le font pour leurs modules respectifs.
