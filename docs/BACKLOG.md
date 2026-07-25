@@ -746,13 +746,6 @@ recalcul des correspondances… » sur la page profil après un enregistrement q
 dispatché, et/ou re-fetch des matchs au retour sur l'accueil (poll léger de quelques
 dizaines de secondes, sur le modèle du polling de `CvAnalysisCard`).
 
-### [optional] `match-ready` sans consommateur — messages qui expirent en DLQ
-La queue `match-ready` (job-matching → notification utilisateur, servicebus.tf) n'a
-aucun consommateur : 27 messages actifs et 26 en dead-letter constatés le 08/07, les
-plus anciens expirant vers la DLQ au fil de l'eau. Sans impact fonctionnel, mais du
-bruit dans les métriques. À purger et/ou à doter d'un TTL court tant que l'agent de
-notification n'existe pas.
-
 ### [optional] Purger la DLQ d'`offer-ready` (50 messages historiques)
 50 messages accumulés en dead-letter sur `offer-ready` (constat du 08/07, antérieurs
 aux fixes de la PR #163). Sans impact — le matching consomme normalement la queue —

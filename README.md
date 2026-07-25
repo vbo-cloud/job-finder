@@ -30,6 +30,6 @@ Two-layer pattern per environment:
 
 - **Compute**: Azure Container Apps (timer and queue-triggered jobs)
 - **Database**: Azure Database for PostgreSQL Flexible Server
-- **Messaging**: Azure Service Bus (start-matching, match-ready, cv-analysis, match-analysis queues)
+- **Messaging**: Azure Service Bus (start-matching, cv-analysis, match-analysis, offer-fetch-request queues)
 - **AI**: Claude API (Anthropic) for agent reasoning and matching logic
 - **Target**: AKS (Kubernetes) post-MVP

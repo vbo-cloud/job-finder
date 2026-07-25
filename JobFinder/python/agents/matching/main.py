@@ -1,5 +1,9 @@
 """Matching agent — pairs CVs with job offers using pgvector cosine similarity.
 
+Consumes one ``start-matching`` message, (re)computes matches for every CV with an
+embedding, purges matches whose offer no longer belongs to the CV's ROME codes,
+advances analyzed CVs from ``done`` to ``matched``, and enqueues each CV's current
+top-N unanalyzed matches onto ``match-analysis``.
 """
 
 import uuid
@@ -26,7 +30,6 @@ from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
 
 START_MATCHING_QUEUE = "start-matching"
-MATCH_READY_QUEUE = "match-ready"
 MATCH_ANALYSIS_QUEUE = "match-analysis"
 
 logger = structlog.get_logger()
@@ -376,16 +379,6 @@ def main() -> None:
                 return
 
             cvs_processed = len({m["cv_id"] for m in all_matches})
-
-            send_message(
-                MATCH_READY_QUEUE,
-                {
-                    "run_date": run_date,
-                    "cvs_processed": cvs_processed,
-                    "new_matches": new_matches,
-                    "offers_available": offers_available,
-                },
-            )
 
             logger.info(
                 "matching_run_completed",
