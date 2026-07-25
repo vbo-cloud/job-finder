@@ -26,7 +26,6 @@ from shared.models import CV, Match, MatchAnalysis, Offer
 from shared.telemetry import configure_telemetry
 
 START_MATCHING_QUEUE = "start-matching"
-MATCH_READY_QUEUE = "match-ready"
 MATCH_ANALYSIS_QUEUE = "match-analysis"
 
 logger = structlog.get_logger()
@@ -376,16 +375,6 @@ def main() -> None:
                 return
 
             cvs_processed = len({m["cv_id"] for m in all_matches})
-
-            send_message(
-                MATCH_READY_QUEUE,
-                {
-                    "run_date": run_date,
-                    "cvs_processed": cvs_processed,
-                    "new_matches": new_matches,
-                    "offers_available": offers_available,
-                },
-            )
 
             logger.info(
                 "matching_run_completed",
