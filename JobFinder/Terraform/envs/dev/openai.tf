@@ -20,6 +20,7 @@ module "openai" {
   environment         = var.env
   project             = var.project
   owner               = var.owner
+  local_auth_enabled  = false
 
   deployments = {
     "gpt-4o-mini" = {
@@ -41,17 +42,6 @@ module "openai" {
       sku_name      = "GlobalStandard"        # Standard not yet available in francecentral for this model
     }
   }
-}
-
-module "secret_openai_key" {
-  source       = "../../modules/keyvault_secret"
-  name         = "openai-api-key"
-  value        = module.openai.primary_key
-  key_vault_id = module.keyvault.id
-  content_type = "text/plain"
-  environment  = var.env
-  project      = var.project
-  owner        = var.owner
 }
 
 module "secret_openai_endpoint" {
