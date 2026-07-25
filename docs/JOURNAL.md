@@ -7740,3 +7740,51 @@ appels OpenAI réels facturés — à faire par Vincent avant ou après merge, c
 "Vérification avant PR" du prompt source. Rappel : les profils déjà contaminés par une extraction
 antérieure ne seront pas corrigés rétroactivement — observer l'effet sur un profil réel demande de
 supprimer puis ré-uploader le CV concerné après déploiement.
+
+## PR #226 — feat(frontend): rendre cliquables les indices de navigation scroll (Carte/Bibliothèque)
+
+**Date :** 2026-07-25
+**Branche :** `feature/clickable-nav-scroll-hints` → `dev`
+
+### Contexte
+
+Vincent a remarqué que sur la vue "Vos correspondances" (`CVDetailSection`), l'indice "BIBLIOTHÈQUE"
+(texte + flèche qui rebondit) en haut de page est cliquable et déclenche un scroll smooth vers la
+bibliothèque, alors que les indices visuellement identiques présents sur les autres pages — "CARTE" et
+"BIBLIOTHÈQUE" sur l'écran d'import de CV, "ACCUEIL" et "OFFRES" sur la bibliothèque — étaient purement
+décoratifs (`pointer-events-none`, aucun `onClick`). Demande : aligner le comportement de tous ces
+indices sur celui déjà en place dans `CVDetailSection`, et ajouter un nouveau footer "ACCUEIL" (flèche
+vers le bas) sur la page Carte, qui n'en avait aucun.
+
+### Ce qui a été fait
+
+- `UploadSection.tsx` — l'indice "CARTE" (haut) devient un bouton qui appelle `onEnterMap` (nouvelle
+  prop) ; l'indice "BIBLIOTHÈQUE" (bas) devient un bouton qui appelle `onScrollToLibrary` (nouvelle
+  prop). Les deux gardent leurs classes de visibilité existantes (`max-md:hidden`,
+  `[@media(any-pointer:coarse)]:hidden` pour CARTE).
+- `HomeMapSection.tsx` — passe `enterMap` (déjà utilisé par le pill tactile "Carte") à `UploadSection`
+  via `onEnterMap`. Ajoute un nouveau bouton "ACCUEIL" (texte + flèche vers le bas, `animate-bounce`) en
+  mode carte, appelant `exitMap` — équivalent souris du pill tactile "Terminé" déjà existant, avec les
+  mêmes classes de visibilité inversées (`max-md:hidden [@media(any-pointer:coarse)]:hidden`) pour ne
+  jamais s'afficher en même temps que lui.
+- `HomeClient.tsx` — `handleCloseDetail` (déjà utilisé par `CVDetailSection`) est réutilisé tel quel comme
+  `onScrollToLibrary` pour `UploadSection` (même destination, pas de duplication). Nouvelle fonction
+  `handleScrollToDetail` pour l'indice "OFFRES" de `LibrarySection`, qui scrolle vers la section détail
+  déjà montée (un CV y est auto-sélectionné dès que la bibliothèque en contient un).
+- `LibrarySection.tsx` — l'indice "ACCUEIL" (haut) devient un bouton réutilisant la prop `onScrollToHome`
+  existante (déjà utilisée par "Ajouter un CV" pour scroller avant d'ouvrir le sélecteur de fichier) ;
+  l'indice "OFFRES" (bas) devient un bouton appelant la nouvelle prop `onScrollToOffers`.
+
+**Bug trouvé et corrigé en testant "ACCUEIL" dans le navigateur :** le bloc d'en-tête de la bibliothèque
+(titre + compteur de CVs), positionné en `absolute inset-x-0 top-0` avec un `padding-top` important
+(`pt-24`/`md:pt-40`), arrive après le bouton "ACCUEIL" dans le DOM et — sans `pointer-events-none` —
+capturait silencieusement les clics sur la zone du bouton malgré son contenu visuel décalé plus bas par
+le padding. Rien à l'intérieur de ce bloc n'étant interactif, `pointer-events-none` lui a été ajouté.
+
+### Vérification
+
+`tsc --noEmit` et `eslint` propres sur les quatre fichiers touchés. Test manuel dans Chrome (session
+Google existante, `npm run dev`) : les six comportements (CARTE → mode carte, ACCUEIL carte → sortie
+carte, BIBLIOTHÈQUE upload → scroll bibliothèque, ACCUEIL bibliothèque → scroll accueil, OFFRES → scroll
+détail, BIBLIOTHÈQUE détail → régression non cassée) vérifiés un par un via captures d'écran et lecture
+de `main.scrollTop`.
