@@ -165,13 +165,15 @@ def _load_cv_digest_entries_by_user(
 
     Issues a single batched query across all given users instead of one query per user,
     avoiding an N+1 pattern when a run notifies many profiles. Ranks each CV's unseen
-    matches with `ROW_NUMBER() OVER (PARTITION BY cv_id ORDER BY score DESC)` and counts
-    them with `COUNT(*) OVER (PARTITION BY cv_id)` in the same pass, then keeps only rn=1
-    — one row per CV, carrying both its count and its top match. Built with SQLAlchemy
-    Core's window-function support (func.row_number()/func.count().over(...)) rather than
-    raw SQL specifically so it stays portable to SQLite (matching/main.py's
-    _enqueue_top_n_analyses uses a raw-SQL PostgreSQL-only equivalent; that one is excluded
-    from the SQLite test suite per tests/README.md, this one is not).
+    matches with `ROW_NUMBER() OVER (PARTITION BY cv_id ORDER BY score DESC, id)` — the
+    Match.id tie-break keeps the pick stable when two matches share the same score — and
+    counts them with `COUNT(*) OVER (PARTITION BY cv_id)` in the same pass, then keeps only
+    rn=1 — one row per CV, carrying both its count and its top match. The final result is
+    also ordered by cv_name for a deterministic card order. Built with SQLAlchemy Core's
+    window-function support (func.row_number()/func.count().over(...)) rather than raw SQL
+    specifically so it stays portable to SQLite (matching/main.py's _enqueue_top_n_analyses
+    uses a raw-SQL PostgreSQL-only equivalent; that one is excluded from the SQLite test
+    suite per tests/README.md, this one is not).
 
     Args:
         session: Active SQLAlchemy session.
