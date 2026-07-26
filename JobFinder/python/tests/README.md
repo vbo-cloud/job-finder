@@ -26,9 +26,9 @@ pytest tests/test_cv_analysis.py -v
 | `test_offer_fetch_scheduler.py` | `agents/offer_fetch_scheduler/main.py` | `_is_scheduled_local_hour`, `main()` |
 | `test_match_analysis.py` | `agents/match_analysis/main.py` | `_get_match_context`, `_analyze_match`, `_update_match_analysis` |
 | `test_matching.py` | `agents/matching/main.py` | `_upsert_matches`, `_purge_stale_matches` (call order + returned count only) |
-| `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}`, `POST /matches/{cv_id}/offers/{offer_id}/analyze` |
+| `test_webapp_matches.py` | `agents/webapp/routers/matches.py` | `GET /matches`, `GET /matches/cv/{cv_id}` (incl. `_mark_stale`), `POST /matches/{cv_id}/offers/{offer_id}/analyze` |
 | `test_webapp_profile.py` | `agents/webapp/routers/profile.py` | `GET /profile`, `PUT /profile` |
-| `test_webapp_cv.py` | `agents/webapp/routers/cv.py` | `POST /upload` (validation), `GET /cv/`, `GET /cv/{cv_id}/analysis`, `POST /cv/{cv_id}/analysis/retry`, thumbnail/pdf (404), `PATCH mark-all-seen`, `DELETE` (404) |
+| `test_webapp_cv.py` | `agents/webapp/routers/cv.py` | `POST /upload` (validation), `GET /cv/`, `GET /cv/{cv_id}/analysis` (incl. `_backfill_cv_analysis` self-healing dispatch), thumbnail/pdf (404), `PATCH mark-all-seen`, `DELETE` (404) |
 
 ## Design decisions
 
