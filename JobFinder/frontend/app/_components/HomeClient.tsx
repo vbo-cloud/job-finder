@@ -45,6 +45,17 @@ export default function HomeClient() {
   // entry even if the POST response arrives before the animation ends.
   const uploadedCvIdRef = useRef<string | null>(null);
 
+  // Set by handleGoMap when the rail is clicked from library/cv-detail: entering
+  // map mode is deferred until the scroll has actually landed on "home", so the
+  // user sees the CV layer (and its fade into the map) instead of the two
+  // firing in the same tick and skipping the visual pass through Accueil.
+  const pendingEnterMapRef = useRef(false);
+  // Set by handleGoLibrary/handleGoOffers when clicked while the map is
+  // focused: the section scroll is deferred until the reverse (map → cv)
+  // fade has settled, for the same reason — otherwise the map is silently
+  // backgrounded instead of visibly handing back to Accueil.
+  const pendingExitTargetRef = useRef<"library" | "cv-detail" | null>(null);
+
   // Keep CVDetailSection pre-mounted: auto-select cvList[0] when no valid
   // selection exists, clear to null only when the library is empty.
   useEffect(() => {
@@ -85,6 +96,27 @@ export default function HomeClient() {
     sections.forEach(({ el }) => observer.observe(el));
     return () => observer.disconnect();
   }, [selectedCvId]);
+
+  // Completes handleGoMap's deferred entry once the scroll has actually
+  // landed on "home" (activeSection is the same IntersectionObserver-driven
+  // signal LeftNavRail's highlight relies on, so "arrived" means the same
+  // thing here as it does there).
+  useEffect(() => {
+    if (activeSection !== "home" || !pendingEnterMapRef.current) return;
+    pendingEnterMapRef.current = false;
+    homeMapSectionRef.current?.enterMap();
+  }, [activeSection]);
+
+  // Completes handleGoLibrary/handleGoOffers's deferred scroll once the
+  // reverse fade has settled back on "cv" (mode mirrors HomeMapSection's own
+  // state via onModeChange below).
+  useEffect(() => {
+    if (mode !== "cv" || !pendingExitTargetRef.current) return;
+    const target = pendingExitTargetRef.current;
+    pendingExitTargetRef.current = null;
+    const el = target === "library" ? document.getElementById("library") : detailRef.current;
+    el?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, [mode]);
 
   const handleUploadComplete = useCallback((cvId: string) => {
     uploadedCvIdRef.current = cvId;
@@ -156,23 +188,61 @@ export default function HomeClient() {
   // LeftNavRail's CV/Accueil icon: unlike handleScrollToHome above (only
   // ever reached from the library, where the map is never focused), this one
   // can fire while the map layer is focused — leave it first so landing on
-  // "home" always shows the CV layer, not the map.
+  // "home" always shows the CV layer, not the map. Every rail click is a
+  // fresh intent that supersedes whatever a previous click was waiting on,
+  // so each handler below clears both pending refs before (re)setting one.
   const handleGoHome = useCallback(() => {
+    pendingEnterMapRef.current = false;
+    pendingExitTargetRef.current = null;
     if (mode === "map" || mode === "to-map") homeMapSectionRef.current?.exitMap();
     document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
   }, [mode]);
 
-  // LeftNavRail's Carte icon: enterMap() no-ops while signed out or already
-  // transitioning, same gate the wheel gesture and the "Carte" pill go through.
+  // LeftNavRail's Carte icon. From library/cv-detail this used to scroll to
+  // "home" and call enterMap() in the same tick — the map fade started before
+  // the section had even scrolled into view, so the user landed straight on
+  // the map without ever seeing Accueil pass by. Now enterMap() only fires
+  // once activeSection confirms "home" is actually in view (see the effect
+  // above); already on "home", it fires immediately, same as before.
   const handleGoMap = useCallback(() => {
-    document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+    pendingExitTargetRef.current = null;
+    if (activeSection !== "home") {
+      pendingEnterMapRef.current = true;
+      document.getElementById("home")?.scrollIntoView({ behavior: sectionScrollBehavior() });
+      return;
+    }
+    pendingEnterMapRef.current = false;
     homeMapSectionRef.current?.enterMap();
-  }, []);
+  }, [activeSection]);
 
-  // LeftNavRail's Bibliothèque icon.
+  // LeftNavRail's Bibliothèque icon. Mirrors handleGoMap: if the map is
+  // focused, exitMap() first and defer the scroll to the effect above so the
+  // reverse fade is visible instead of the map silently backgrounding itself
+  // while the page jumps straight to the library.
   const handleGoLibrary = useCallback(() => {
+    pendingEnterMapRef.current = false;
+    if (mode === "map" || mode === "to-map") {
+      pendingExitTargetRef.current = "library";
+      homeMapSectionRef.current?.exitMap();
+      return;
+    }
+    pendingExitTargetRef.current = null;
     document.getElementById("library")?.scrollIntoView({ behavior: sectionScrollBehavior() });
-  }, []);
+  }, [mode]);
+
+  // LeftNavRail's Offres icon — same reasoning as handleGoLibrary above, kept
+  // separate from handleScrollToDetail (used by in-section hints that are
+  // never reachable while the map is focused).
+  const handleGoOffers = useCallback(() => {
+    pendingEnterMapRef.current = false;
+    if (mode === "map" || mode === "to-map") {
+      pendingExitTargetRef.current = "cv-detail";
+      homeMapSectionRef.current?.exitMap();
+      return;
+    }
+    pendingExitTargetRef.current = null;
+    detailRef.current?.scrollIntoView({ behavior: sectionScrollBehavior() });
+  }, [mode]);
 
   return (
     <>
@@ -188,7 +258,7 @@ export default function HomeClient() {
           onGoHome={handleGoHome}
           onGoMap={handleGoMap}
           onGoLibrary={handleGoLibrary}
-          onGoOffers={handleScrollToDetail}
+          onGoOffers={handleGoOffers}
         />
       )}
       {/* Below md the swipe/scroll navigation between the full-screen sections
