@@ -363,21 +363,38 @@ def _add_offer(
     return oid
 
 
-def _add_match(session: Session, cv_id: str, offer_id: str, score: float, seen: bool) -> None:
-    """Insert a minimal `matches` row linking the given cv_id and offer_id."""
+def _add_match(
+    session: Session, cv_id: str, offer_id: str, score: float, seen: bool, match_id: str | None = None
+) -> str:
+    """Insert a minimal `matches` row linking the given cv_id and offer_id.
+
+    Args:
+        session: Active SQLAlchemy session.
+        cv_id: Owning CV's id.
+        offer_id: Matched offer's id.
+        score: Match score.
+        seen: Whether Match.seen_at should be set.
+        match_id: Explicit id to use instead of a random UUID — lets a test control
+            ordering when asserting the query's Match.id tie-break on equal scores.
+
+    Returns:
+        The match's id (generated if match_id wasn't given).
+    """
+    mid = match_id or str(uuid.uuid4())
     session.execute(
         sa.text(
             "INSERT INTO matches (id, cv_id, offer_id, score, seen_at) "
             "VALUES (:id, :cv_id, :offer_id, :score, :seen_at)"
         ),
         {
-            "id": str(uuid.uuid4()),
+            "id": mid,
             "cv_id": cv_id,
             "offer_id": offer_id,
             "score": score,
             "seen_at": "2026-01-01 00:00:00.000000" if seen else None,
         },
     )
+    return mid
 
 
 def test_load_cv_digest_entries_by_user_returns_empty_dict_for_no_user_ids(
@@ -450,22 +467,22 @@ def test_load_cv_digest_entries_by_user_orders_cards_by_cv_name_not_insertion_or
     assert [entry.cv_name for entry in entries["user-1"]] == ["CV A", "CV B"]
 
 
-def test_load_cv_digest_entries_by_user_breaks_score_ties_deterministically(
+def test_load_cv_digest_entries_by_user_breaks_score_ties_by_match_id(
     db_session: Session,
 ) -> None:
-    """Two unseen matches with an identical score must not make the top-match pick flaky
-    across repeated calls — the Match.id tie-break in the window ordering covers this."""
+    """On an equal score, the lower Match.id must win — asserted against explicit ids
+    (rather than just repeated-call equality) so removing the Match.id tie-break from
+    the window's order_by would actually fail this test."""
     cv_id = _add_cv(db_session, "user-1", "CV")
     offer_1 = _add_offer(db_session, title="Offer 1")
     offer_2 = _add_offer(db_session, title="Offer 2")
-    _add_match(db_session, cv_id, offer_1, score=0.8, seen=False)
-    _add_match(db_session, cv_id, offer_2, score=0.8, seen=False)
+    _add_match(db_session, cv_id, offer_1, score=0.8, seen=False, match_id="b" * 32)
+    _add_match(db_session, cv_id, offer_2, score=0.8, seen=False, match_id="a" * 32)
     db_session.flush()
 
-    first = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])["user-1"][0].top_offer_title
-    second = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])["user-1"][0].top_offer_title
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
 
-    assert first == second
+    assert entries["user-1"][0].top_offer_title == "Offer 2"
 
 
 def test_load_cv_digest_entries_by_user_batches_across_multiple_users(db_session: Session) -> None:
