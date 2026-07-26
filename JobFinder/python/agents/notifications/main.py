@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
+from alembic.util.exc import CommandError
 from azure.communication.email import EmailClient
 from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
@@ -98,6 +99,9 @@ def _select_profiles_to_notify(session: Session, today_isoweekday: int) -> list[
 
     Returns:
         UserProfile rows whose notification_days contains today_isoweekday.
+
+    Raises:
+        SQLAlchemyError: If the query fails.
     """
     logger.info("notifications_profile_selection_started", today_isoweekday=today_isoweekday)
     return list(
@@ -123,11 +127,14 @@ def _count_unseen_matches_by_user(
         Mapping of user_id to (cv_name, unseen_count) pairs, one pair per CV with at
         least one unseen match. A user_id with no unseen matches is absent from the
         mapping rather than present with an empty list.
+
+    Raises:
+        SQLAlchemyError: If the query fails.
     """
     if not user_ids:
         return {}
 
-    logger.info("notifications_unseen_count_started", profile_count=len(user_ids))
+    logger.info("notifications_unseen_count_started", user_count=len(user_ids))
     rows = session.execute(
         select(CV.user_id, CV.name, func.count(Match.id))
         .join(Match, Match.cv_id == CV.id)
@@ -238,7 +245,7 @@ def main() -> None:
 
     try:
         run_migrations()
-    except Exception:  # intentional: any migration error must halt the agent
+    except (SQLAlchemyError, CommandError):  # matches run_migrations()'s documented Raises
         logger.error("migrations_failed", exc_info=True)
         raise
 

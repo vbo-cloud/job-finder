@@ -8785,6 +8785,11 @@ mais dans la même couche :
   l'utilisateur ; sans échappement, un nom contenant `<` ou `&` casserait le rendu HTML du mail —
   remarque non-bloquante de `reviewer-backend`, corrigée par prudence (sévérité faible : le
   destinataire est le propriétaire du CV).
+- **`except (SQLAlchemyError, CommandError)` autour de `run_migrations()`** plutôt qu'un
+  `except Exception` nu — `shared/db.py` documente exactement ces deux types dans son `Raises`,
+  même forme que `cv_analysis/main.py`/`offer_fetching/main.py`. Repéré par `reviewer-backend` sur ce
+  fichier neuf ; `cleanup/main.py` et `matching/main.py` portent encore l'ancien `except Exception`
+  nu sur ce même appel — dette préexistante hors périmètre de cette PR, à traiter séparément.
 
 ### Vérification
 
