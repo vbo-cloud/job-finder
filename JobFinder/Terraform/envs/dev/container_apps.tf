@@ -45,10 +45,11 @@ data "azurerm_key_vault_secret" "ft_client_secret" {
 }
 
 locals {
-  postgresql_connection_string = module.postgresql.connection_string
-  openai_endpoint              = module.openai.endpoint
-  ft_client_id                 = data.azurerm_key_vault_secret.ft_client_id.value
-  ft_client_secret             = data.azurerm_key_vault_secret.ft_client_secret.value
+  postgresql_connection_string     = module.postgresql.connection_string
+  openai_endpoint                  = module.openai.endpoint
+  ft_client_id                     = data.azurerm_key_vault_secret.ft_client_id.value
+  ft_client_secret                 = data.azurerm_key_vault_secret.ft_client_secret.value
+  notifications_unsubscribe_secret = module.secret_notifications_unsubscribe.value
 }
 
 # ==============================================================================
@@ -338,6 +339,10 @@ module "job_notifications" {
       name  = "appinsights-connection-string"
       value = module.application_insights.connection_string
     },
+    {
+      name  = "notifications-unsubscribe-secret"
+      value = local.notifications_unsubscribe_secret
+    },
   ]
   env_vars = [
     {
@@ -363,6 +368,10 @@ module "job_notifications" {
     {
       name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
       secret_name = "appinsights-connection-string"
+    },
+    {
+      name        = "NOTIFICATIONS_UNSUBSCRIBE_SECRET"
+      secret_name = "notifications-unsubscribe-secret"
     },
   ]
 }
