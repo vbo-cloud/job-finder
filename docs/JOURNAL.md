@@ -9316,3 +9316,64 @@ l'instant.
   phrase.
 - Aucune entrée `## PR #243` ni entrée existante pour cette branche dans `docs/JOURNAL.md` avant
   cette passe — nouvelle entrée ajoutée en fin de fichier.
+
+---
+
+## PR #243 — feat(openai): custom_subdomain_name sur le compte Azure OpenAI
+
+**Date :** 2026-07-26
+**Branche :** `feature/openai-custom-subdomain` → `dev`
+
+### Contexte
+
+`azurerm_cognitive_account.this` (`modules/openai/main.tf`) n'a jamais eu de `custom_subdomain_name` :
+son `.endpoint` restait l'URL régionale partagée, qui refuse l'authentification par token AD
+(400 BadRequest systématique — logs prod du 2026-07-26), bloquant la bascule Managed Identity posée
+en PR #232/#234. Décision : plutôt que de revenir sur cette bascule (voir
+`docs/prompts/prompt-revert-openai-managed-identity.md`, plan abandonné), poser le vrai prérequis
+manquant maintenant, tant qu'il n'y a aucun utilisateur en prod.
+
+### Ce qui a été fait
+
+- **`modules/openai/main.tf`** : ajout de `custom_subdomain_name = var.name` sur
+  `azurerm_cognitive_account.this` (réutilise `oai-jf-dev-frc`, déjà unique — vérifié en amont via
+  `az rest` sur `Microsoft.CognitiveServices/checkDomainAvailability`, `isSubdomainAvailable: true`).
+
+### Décisions techniques
+
+- **Le plan initial supposait un destroy+recreate** (`custom_subdomain_name` documenté comme
+  `ForceNew`, entraînant le compte OpenAI et ses 3 déploiements de modèles, avec un retrait temporaire
+  du `prevent_destroy` le temps de la fenêtre de maintenance). Un `terraform plan` local a contredit
+  cette hypothèse : sur `azurerm ~4.72`, passer `custom_subdomain_name` de non défini à une valeur est
+  une mise à jour **en place** (`~ update in-place`, aucun `# forces replacement`), pas un remplacement.
+  Confirmé cohérent avec le comportement Azure documenté (le portail expose "Generate Custom Domain
+  Name" sur un compte existant sans le recréer) et avec un ticket connu du provider
+  (`hashicorp/terraform-provider-azurerm#28585`, qui documente ce même écart entre le comportement réel
+  de l'API PATCH — qui ne touche que `customSubDomainName`/`dateCreated`/`endpoint`/`endpoints` — et le
+  marquage `ForceNew` historique du provider pour cet attribut).
+- **Conséquence : `prevent_destroy` n'a jamais été touché.** Il ne bloque que les destructions ; une
+  mise à jour en place n'est pas concernée. Les préoccupations du plan initial (quota `gpt-5-mini` pour
+  un redéploiement, drift RBAC cross-stack `lz_dev`/`dev` suite à un nouvel ID de ressource) sont donc
+  sans objet — aucun redéploiement, aucun nouvel ID.
+- **Drift pré-existant hors-scope observé pendant la vérification locale** : le `terraform plan` complet
+  sur `envs/dev` (avec des variables `alert_email`/`portfolio_contact_function_url` de substitution,
+  faute d'accès aux secrets CI en local) montre aussi un remplacement de la VM jumpbox et de son planning
+  d'extinction, ainsi qu'un retour des tags d'image des Container App Jobs vers `:latest` — drift
+  préexistant sur `dev`, sans rapport avec ce changement, non corrigé ici (une seule PR = un seul sujet).
+  Le plan CI de cette PR (`terraformPlan.yml`, avec les vraies variables) fait foi, pas ce plan local à
+  variables de substitution.
+
+### Vérification
+
+- `az rest` (lecture seule) confirmant la disponibilité du sous-domaine `oai-jf-dev-frc`.
+- `terraform fmt -check` propre sur `modules/openai/main.tf` (le seul fichier touché) ;
+  `terraform validate` propre sur `envs/dev`.
+- `terraform plan` local (scopé puis complet) : seul `module.openai.azurerm_cognitive_account.this`
+  change, en `update in-place` — pas de destroy, pas d'impact sur les 3 déploiements de modèles ni sur
+  le secret Key Vault `openai-endpoint` (référence `module.openai.endpoint`, dépendance suivie sans
+  action Terraform requise).
+- Reste à faire après merge + apply CI (documenté dans la description de PR) : rejouer un cycle
+  `offer_fetching` réel et confirmer un `openai_call_completed` avec `total_tokens` non nul ; vérifier
+  manuellement que le role assignment `caj` (`Cognitive Services OpenAI User`, posé en PR #232) est
+  toujours en place puisque le compte n'est pas recréé.
+- `docs/BACKLOG.md` : item hardening OpenAI (ligne ~394) refermé avec référence à cette PR.
