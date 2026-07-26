@@ -9063,3 +9063,107 @@ Toutes les autres docstrings/commentaires touchés par cette PR (`migrations/ver
 `shared/models.py`, `routers/matches.py`, `schemas.py`, frontend `MatchAnalysisPanel.tsx`/
 `InfoTooltip.tsx`/`CvAnalysisCard.tsx`/`CVDetailSection.tsx`/`HomeClient.tsx`/`types.ts`) vérifiés
 exacts vis-à-vis du code actuel, rien d'autre à corriger.
+
+---
+
+## PR #241 — feat(notifications): refonte du contenu et du template du récap email
+
+**Date :** 2026-07-26
+**Branche :** `feature/email-digest-redesign` → `dev`
+
+### Contexte
+
+Le récap email quotidien (`agents/notifications/main.py`, ajouté en PR #238) se limitait jusqu'ici à
+un simple compte de matchs non vus par CV, dans un template `<ul>` minimal. Cette PR le refond
+entièrement, contenu et design, suivant `docs/prompts/prompt-email-digest-content-and-design.md`.
+
+### Ce qui a été fait
+
+- **`agents/notifications/main.py`** : pour chaque CV ayant au moins un match non vu, le récap
+  affiche désormais le meilleur match non vu (titre, entreprise, localisation, type de contrat,
+  score en %) au lieu du seul compte. Ajout d'un accueil personnalisé
+  (`UserProfile.display_name`, best-effort depuis le JWT, avec repli générique "Bonjour,") et
+  d'une frise calendaire de rappel sur 7 jours dans l'en-tête (couleur selon aujourd'hui/jour
+  sélectionné/jour non sélectionné — aujourd'hui l'emporte même si aussi sélectionné). L'objet du
+  mail est désormais calculé dynamiquement (singulier/pluriel en français, `_build_digest_subject`)
+  au lieu d'être une constante statique. Le template HTML `<ul>` d'origine est remplacé par un
+  template `<table>` complet en thème sombre, compatible clients mail (VML/MSO, media query mobile,
+  preheader caché).
+  - `_count_unseen_matches_by_user` (comptage seul) renommé en `_load_cv_digest_entries_by_user` et
+    réécrit en une requête unique SQLAlchemy Core à fonctions fenêtrées
+    (`func.row_number().over(partition_by=CV.id, order_by=(Match.score.desc(), Match.id))` — le
+    tie-break sur `Match.id` stabilise le choix en cas d'égalité de score — et
+    `func.count().over(partition_by=CV.id)`, gardant uniquement `rn=1`) plutôt qu'un `GROUP BY` :
+    calcule en un seul passage le compte non-vu ET le meilleur match par CV. Écrite avec le support
+    de fonctions fenêtrées de SQLAlchemy Core (pas de SQL brut) spécifiquement pour rester portable
+    à SQLite (suite de tests) — contrairement à l'équivalent de `agents/matching/main.py`
+    (`_enqueue_top_n_analyses`), qui utilise du SQL brut PostgreSQL-only et est de ce fait exclu de
+    la suite de tests SQLite (`tests/README.md`).
+  - Nouvelles dataclasses `Recipient` (profil éligible, copié hors de la session avant sa
+    fermeture) et `CvDigestEntry` (une entrée de récap par CV : compte + meilleur match).
+  - `_build_email_content` et `_send_digest` changent de signature : le sujet est désormais un
+    paramètre (`subject: str`), calculé par destinataire via la nouvelle `_build_digest_subject`
+    plutôt que dérivé en interne. `main()` rebranché en conséquence.
+- **`agents/notifications/tests/test_notifications.py`** : suite réécrite pour couvrir le nouveau
+  contenu — meilleur match par CV avec repli localisation → département quand `Offer.location` est
+  vide, échappement HTML du titre/entreprise de l'offre (en plus du nom de CV déjà couvert),
+  accueil générique vs personnalisé, singulier/pluriel de l'objet (y compris le cas défensif
+  0 offre, que `main()` n'atteint jamais mais que la fonction ne doit pas planter dessus), priorité
+  aujourd'hui/sélectionné/non-sélectionné de la frise calendaire, et regroupement par utilisateur
+  sans mélange sur `_load_cv_digest_entries_by_user` batché.
+
+### Décisions techniques
+
+- **Écart signalé par rapport au prompt** : `docs/prompts/prompt-email-digest-content-and-design.md`
+  mentionne un fichier `python/send_test_notification.py` à "garder synchronisé" avec ces
+  changements. Ce fichier n'existe nulle part dans ce dépôt — confirmé via
+  `git log --all --diff-filter=D --name-only -- '*send_test_notification*'` (aucun résultat, y
+  compris en historique supprimé) : il n'a jamais été créé, ce n'est pas un oubli de suppression.
+  Traité comme une référence obsolète du prompt et volontairement ignoré — aucun fichier de ce nom
+  créé dans cette PR.
+- Requête à fonctions fenêtrées (`ROW_NUMBER()`/`COUNT() OVER (PARTITION BY cv_id ...)`) choisie
+  plutôt qu'un `GROUP BY` classique précisément parce qu'elle doit renvoyer à la fois l'agrégat
+  (compte non-vu) et une ligne de détail (le meilleur match) par CV en un seul aller-retour DB —
+  un `GROUP BY` seul n'aurait donné que l'agrégat.
+
+### Vérification
+
+- Passage doc-writer : docstrings de `agents/notifications/main.py` relues fonction par fonction et
+  vérifiées exactes par rapport au code actuel, dont la référence croisée à
+  `_enqueue_top_n_analyses`/`tests/README.md` ci-dessus, et le mécanisme "deux heures UTC candidates"
+  décrit en prose par la docstring de module — cohérence vérifiée contre le
+  `cron_expression = "0 17,18 * * *"` réel de `container_apps.tf` (la docstring ne cite pas la
+  chaîne cron elle-même, seul le mécanisme). Un seul gap trouvé et corrigé : ni `CvDigestEntry` ni
+  `_load_cv_digest_entries_by_user` ne documentaient que `top_offer_location` peut être
+  `Offer.department` (repli) ou la chaîne vide (les deux champs blancs) — corrigé sur les deux
+  docstrings.
+- Remarque non-bloquante de la passe doc-writer (nom de fonction trompeur, hors périmètre docs) :
+  corrigée après coup — `_load_recipients_and_counts` renommée en `_load_recipients_and_entries`,
+  puisqu'elle ne renvoie plus seulement des comptes mais les entrées de récap complètes
+  (`CvDigestEntry`) depuis le renommage de `_count_unseen_matches_by_user`.
+- Pas d'accès Bash/`git diff` depuis ce rôle : nombre de tests, `ruff`/lint et `terraform plan` non
+  rejoués dans cette passe — vérification faite en relisant directement le contenu des fichiers
+  cités ci-dessus, comme pour la passe documentation de la PR #240. Numéro de PR dérivé du dernier
+  titre `## PR #NNN` présent dans ce fichier (#240) + 1, faute d'accès à `gh` depuis ce rôle
+  (aucun outil Bash disponible, pas seulement `gh` non authentifié) — confirmé exact ensuite via
+  `gh pr list --state all --limit 5` (dernier numéro réel : #240).
+- **Revue `reviewer-backend`, plusieurs allers-retours avant `APPROUVÉ` définitif :**
+  - Point bloquant trouvé et corrigé : `UserProfile.display_name` (claim JWT best-effort, texte
+    libre) était injecté dans le corps HTML sans `html.escape()` — même catégorie de donnée que
+    `CV.name`/`Offer.title`, déjà échappés partout ailleurs dans ce fichier. Un `display_name`
+    contenant `<`/`&` aurait cassé le rendu HTML de l'email (voire pire selon le client mail).
+    Corrigé dans `_render_html_body` (le chemin texte brut garde la valeur non échappée, pas de
+    markup à casser) ; couvert par `test_build_email_content_escapes_display_name_in_html`.
+  - `main()` dépassait la limite de 40 lignes (convention `conventions-python`) — la logique par
+    destinataire extraite dans `_process_recipient`.
+  - Nouveau helper `_digest_totals` pour éliminer la triplication du calcul
+    `(total_unseen, best_score)` entre `_build_digest_subject`/`_render_html_body`/
+    `_build_email_content`.
+  - Remarque non-bloquante sur un test de tie-break insuffisamment discriminant (vérifiait
+    seulement la répétabilité d'un appel, pas la présence réelle du tie-break `Match.id`) —
+    corrigée en donnant à `_add_match` un paramètre `match_id` explicite, permettant d'imposer
+    quel match gagne à score égal ; vérifié manuellement que ce test échoue si le tie-break est
+    retiré de `main.py`.
+  - Remarque non-bloquante sur une description de `ORDER BY` devenue périmée dans le docstring de
+    `_load_cv_digest_entries_by_user` (ne mentionnait pas le tie-break `Match.id` ni le
+    `ORDER BY cv_name` du select final) — corrigée.
