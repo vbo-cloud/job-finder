@@ -9167,3 +9167,82 @@ entièrement, contenu et design, suivant `docs/prompts/prompt-email-digest-conte
   - Remarque non-bloquante sur une description de `ORDER BY` devenue périmée dans le docstring de
     `_load_cv_digest_entries_by_user` (ne mentionnait pas le tie-break `Match.id` ni le
     `ORDER BY cv_name` du select final) — corrigée.
+---
+
+## PR #242 — fix(frontend): différer le fondu de la carte jusqu'à l'arrivée réelle du scroll sur Accueil
+
+**Date :** 2026-07-26
+**Branche :** `feature/navbar-home-scroll-highlight` → `dev`
+
+### Contexte
+
+Les icônes "Carte", "Bibliothèque" et "Offres" de `LeftNavRail` déclenchaient le scroll vers la
+section cible et le changement de mode cv/carte de `HomeMapSection` (le fondu avec particules/icône
+CV entre la couche upload et la couche carte des communes) dans le même tick. Un clic sur "Carte"
+depuis la bibliothèque (ou sur "Bibliothèque"/"Offres" pendant que la carte était affichée) sautait
+donc entièrement le passage visuel par la section "Accueil" — l'utilisateur atterrissait directement
+sur la cible sans jamais voir le fondu.
+
+### Ce qui a été fait
+
+- **`app/_components/HomeClient.tsx`** : ajout de deux refs, `pendingEnterMapRef` et
+  `pendingExitTargetRef` (`"library" | "cv-detail" | null`), et de deux `useEffect` qui les
+  consomment une fois la transition en cours réellement arrivée à destination.
+  - `handleGoMap` : si `activeSection !== "home"`, lance le scroll vers `home` et pose
+    `pendingEnterMapRef.current = true` au lieu d'appeler `enterMap()` immédiatement ; un effet qui
+    observe `activeSection` appelle `enterMap()` dès que celui-ci devient `"home"`. Déjà sur
+    `home`, le comportement est inchangé (appel immédiat).
+  - `handleGoLibrary`/`handleGoOffers` : si le mode est `"map"`/`"to-map"`, appellent `exitMap()`
+    tout de suite mais posent `pendingExitTargetRef.current` (`"library"` ou `"cv-detail"`) au lieu
+    de scroller immédiatement ; un second effet qui observe `mode` déclenche le
+    `scrollIntoView` correspondant dès que `mode` redevient `"cv"` (le fondu retour cv↔carte
+    s'étant terminé).
+  - `handleGoHome` (déjà correct avant cette PR) et chacun des trois handlers ci-dessus commencent
+    désormais par vider les deux refs avant de poser leur propre valeur, pour qu'un nouveau clic
+    annule toujours proprement ce qu'un clic précédent avait laissé en attente.
+- **`__tests__/HomeClient.test.tsx`** : nouveau bloc de tests sur cette orchestration — entrée
+  différée dans la carte, entrée immédiate si déjà sur Accueil, sortie différée vers
+  Bibliothèque/Offres, sortie immédiate si la carte n'est pas affichée, et quatre cas d'annulation
+  croisée (Bibliothèque annule un `enterMap` en attente, Accueil annule un `enterMap` en attente,
+  Accueil annule une sortie en attente vers Bibliothèque, Carte annule elle aussi une sortie en
+  attente vers Bibliothèque). `HomeMapSection`
+  est mocké pour exposer `enterMap`/`exitMap` comme espions et pour permettre de simuler
+  `onModeChange` sans dépendre du timer réel de la transition (`TRANSITION_MS`).
+
+### Décisions techniques
+
+- **Signal "arrivé" réutilisé plutôt que redéfini** : "le scroll a atteint Accueil" est détecté via
+  `activeSection`, exactement le même signal piloté par `IntersectionObserver` que celui qui pilote
+  déjà la mise en surbrillance de `LeftNavRail` — pas de nouveau mécanisme de détection de fin de
+  scroll. De même, "le fondu retour a atterri" est détecté via `mode === "cv"`, l'état que
+  `HomeMapSection` reporte déjà lui-même par `onModeChange`.
+- **Toujours vider les deux refs en tête de chaque handler** plutôt que de ne poser que celle qui
+  concerne le handler courant : un clic est toujours une intention fraîche qui doit pouvoir annuler
+  ce qu'un clic précédent attendait encore, y compris quand ce clic précédent visait une ref
+  différente (ex. Bibliothèque doit annuler un `pendingEnterMapRef` laissé par un clic Carte
+  antérieur, pas seulement poser son propre `pendingExitTargetRef`).
+
+### Vérification
+
+- Relecture directe du contenu actuel de `HomeClient.tsx` et de `HomeClient.test.tsx` (pas d'accès
+  Bash/`git diff` depuis ce rôle, même limitation que documentée dans l'entrée PR #240 ci-dessus) :
+  les commentaires WHY sur les deux nouvelles refs (lignes 48-57), les deux nouveaux effets
+  (lignes 100-119) et chacun des quatre handlers (lignes 188-245) décrivent fidèlement le
+  comportement actuel du code et sont cohérents avec les neuf scénarios couverts par les tests —
+  rien à corriger.
+- `reviewer-frontend` passé trois fois sur cette branche (deux sur `HomeClient.tsx`/son fichier de
+  tests, un sur l'addendum `LeftNavRail.tsx` ci-dessous) avec verdict `APPROUVÉ` et
+  `Remarques non-bloquantes : aucune` à chaque fois.
+
+### Addendum — fond du rail rendu transparent
+
+**`app/_components/LeftNavRail.tsx`** : le fond du `<nav>` passe de `bg-scrim` (un
+`rgba(0, 0, 0, 0.40)` fixe, identique dans `light.ts` et `dark.ts`, `lib/theme/themes/`) à
+`bg-transparent` — plus aucun remplissage derrière le rail, en thème sombre comme en thème clair.
+Supersède la demande antérieure documentée dans le commentaire du composant (fond sombre
+quasi-transparent plutôt que theme-adaptive) ; `bg-transparent` est l'utilitaire Tailwind natif
+(aucune valeur de couleur, donc hors du champ de la règle "toujours passer par un token de
+thème") et se comporte identiquement dans les deux thèmes par construction — aucune vérification
+navigateur nécessaire ni faite depuis ce rôle (même limitation d'accès que documentée dans la
+section Vérification ci-dessus). `reviewer-frontend` confirme l'absence de commentaire obsolète
+ailleurs dans le fichier ou ses consommateurs.
