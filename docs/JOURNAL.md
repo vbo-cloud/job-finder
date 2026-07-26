@@ -9246,3 +9246,73 @@ thème") et se comporte identiquement dans les deux thèmes par construction —
 navigateur nécessaire ni faite depuis ce rôle (même limitation d'accès que documentée dans la
 section Vérification ci-dessus). `reviewer-frontend` confirme l'absence de commentaire obsolète
 ailleurs dans le fichier ou ses consommateurs.
+
+---
+
+## PR #243 — feat(dev): secret HMAC partagé pour le désabonnement one-click des notifications
+
+**Date :** 2026-07-26
+**Branche :** `feature/notifications-unsubscribe-secret` → `dev`
+
+### Contexte
+
+Le prompt `docs/prompts/prompt-email-one-click-unsubscribe.md` (rédigé avec Claude Cowork) demande
+d'ajouter les en-têtes `List-Unsubscribe`/`List-Unsubscribe-Post` (RFC 8058) à l'email de
+notification, pour que Gmail/Outlook/Yahoo affichent le bouton natif de désabonnement plutôt que de
+pousser un utilisateur agacé vers "Signaler comme spam" (ce qui dégraderait la réputation d'envoi de
+tous les mails suivants). Le mécanisme retenu : un token signé HMAC-SHA256 sur `user_id`, vérifié par
+un nouvel endpoint non authentifié `POST /notifications/unsubscribe` côté webapp. Le secret de
+signature doit donc être partagé entre l'agent `notifications` (signe à l'envoi) et `webapp` (vérifie
+à la réception) — un nouveau secret Key Vault et deux variables d'environnement.
+
+Cette tâche touche à la fois Terraform (`envs/dev/`) et Python (nouvel endpoint, signature du token) ;
+la règle de CLAUDE.md interdisant de mélanger plateforme et app dans une même PR impose de la
+séquencer en deux PR (voir aussi la section Gouvernance du prompt) :
+1. **Cette PR (infra)** — secret Key Vault + wiring des variables d'environnement, sans aucun code
+   Python consommateur.
+2. **PR de suivi (app)** — `feature/notifications-one-click-unsubscribe`, endpoint, signature/
+   vérification du token, en-têtes sur l'envoi. Pas encore créée à ce stade.
+
+### Ce qui a été fait
+
+- **`notifications_unsubscribe_secret.tf`** (nouveau) : `random_password.notifications_unsubscribe_secret`
+  (32 caractères, même charset que le mot de passe admin de `jumpbox.tf`) + le module
+  `secret_notifications_unsubscribe` (`keyvault_secret`) qui publie la valeur sous
+  `notifications-unsubscribe-secret` dans Key Vault. Généré directement par Terraform plutôt que
+  seedé manuellement : contrairement à `ft-client-id`/`entra-external-*` (identifiants tiers réels
+  provisionnés hors bande, voir `job-finder-private/docs/MANUAL_OPERATIONS.md`), cette valeur n'a
+  aucune contrepartie externe à faire correspondre.
+- **`container_apps.tf`** : nouveau local `notifications_unsubscribe_secret`, secret
+  `notifications-unsubscribe-secret` et variable d'environnement `NOTIFICATIONS_UNSUBSCRIBE_SECRET`
+  ajoutés au Container App Job `job_notifications` (agent 7, déclenché par timer, cron
+  `0 17,18 * * *` — 19:00 Europe/Paris avec double run DST-safe, voir PR #237/#200).
+- **`webapp.tf`** : même secret et variable d'environnement ajoutés au Container App `webapp`, aux
+  côtés des autres secrets Key Vault déjà exposés (`entra-external-client-secret`).
+
+Pas de changement Python dans cette PR — le secret n'est consommé par aucun code applicatif pour
+l'instant.
+
+### Décisions techniques
+
+- **`random_password` généré par Terraform plutôt que secret seedé manuellement** : ce secret n'a
+  aucun homologue externe à synchroniser (contrairement aux identifiants France Travail ou Entra
+  External ID) — Terraform peut donc le générer directement, exactement comme le mot de passe admin
+  de `jumpbox.tf`.
+- **Wiring sur les deux Container Apps avant tout code consommateur** : accepté comme un état
+  intermédiaire volontaire (secret présent, non lu) plutôt que d'attendre la PR 2 pour l'ajouter —
+  cohérent avec la règle CLAUDE.md de ne jamais mélanger plateforme et app dans une même PR.
+
+### Vérification
+
+- Relecture directe du contenu actuel des trois fichiers (pas d'accès Bash/`git diff` depuis ce
+  rôle) : le commentaire d'en-tête de `notifications_unsubscribe_secret.tf` compare fidèlement le
+  bloc `random_password` à celui de `jumpbox.tf` (`length = 32`, `special = true`, même
+  `override_special`), et le wiring dans `container_apps.tf` (lignes 52, 343-345, 373-375) et
+  `webapp.tf` (lignes 50-52, 92-94) correspond à ce que le commentaire décrit — rien à corriger.
+- Nit relevé mais non corrigé ici (relève de `reviewer-infra`, pas de ce rôle) : le commentaire
+  d'en-tête de `notifications_unsubscribe_secret.tf` décrit `job_notifications` au présent ("signe
+  le token... à l'envoi du récap") alors qu'aucun des deux Container Apps ne consomme encore
+  réellement le secret avant la PR 2 — légère asymétrie de temps entre les deux moitiés de la
+  phrase.
+- Aucune entrée `## PR #243` ni entrée existante pour cette branche dans `docs/JOURNAL.md` avant
+  cette passe — nouvelle entrée ajoutée en fin de fichier.

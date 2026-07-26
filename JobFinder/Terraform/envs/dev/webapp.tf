@@ -46,6 +46,10 @@ module "webapp" {
       name  = "entra-external-client-secret"
       value = data.azurerm_key_vault_secret.entra_client_secret.value
     },
+    {
+      name  = "notifications-unsubscribe-secret"
+      value = local.notifications_unsubscribe_secret
+    },
   ]
 
   env_vars = [
@@ -83,6 +87,10 @@ module "webapp" {
     {
       name        = "ENTRA_EXTERNAL_CLIENT_SECRET"
       secret_name = "entra-external-client-secret"
+    },
+    {
+      name        = "NOTIFICATIONS_UNSUBSCRIBE_SECRET"
+      secret_name = "notifications-unsubscribe-secret"
     },
     # Frontend origins allowed to call the API cross-origin. var.frontend_custom_domain is
     # the single source of truth shared with the future custom domain binding (PR 2).
