@@ -8628,3 +8628,65 @@ platform et app).
   différée sur le portail Azure (IAM de `acs-jf-dev-frc`, confirmer que `id-jf-dev-frc-caj` apparaît
   avec le rôle `Communication and Email Service Owner`). Pas de test applicatif possible dans cette PR
   (aucun agent n'utilise encore ce rôle — c'est PR 7/7).
+
+---
+
+## PR #237 — feat(offer-fetch): move offer fetch scheduler to a single 18:00 run
+
+**Date :** 2026-07-26
+**Branche :** `feature/fetch-schedule-18h` → `dev`
+
+### Contexte
+
+Le Container App Job `offer_fetch_scheduler` déclenchait un refresh complet des offres deux fois par
+jour (12:00 et 20:00 heure de Paris). Cette PR passe à une seule exécution quotidienne, à 18:00 heure
+de Paris.
+
+### Ce qui a été fait
+
+- **`envs/dev/container_apps.tf`, `servicebus.tf`** : `cron_expression` du module
+  `job_offer_fetch_scheduler` passé de `"0 10,11,18,19 * * *"` (les 4 heures UTC couvrant 12h/20h
+  Paris sous CET et CEST) à `"0 16,17 * * *"` (les 2 heures UTC couvrant 18h Paris sous CET/CEST).
+  Commentaires (en-tête du module, section Service Bus) mis à jour en conséquence.
+- **`agents/offer_fetch_scheduler/main.py`** : `SCHEDULED_LOCAL_HOURS` passé de `(12, 20)` à `(18,)`
+  pour rester synchronisé avec le nouveau cron — c'est cette constante que `_is_scheduled_local_hour()`
+  utilise pour no-oper la moitié des déclenchements UTC qui ne correspond pas à l'état DST courant ;
+  un désalignement avec le cron Terraform ferait taire le job silencieusement.
+- **`agents/offer_fetching/main.py`** : docstring de module mise à jour (décrit
+  `offer_fetch_scheduler` comme un relais 18h, au lieu de 12h/20h).
+- **`agents/cleanup/main.py`** : docstring de `_cleanup` mise à jour — la période de grâce avant
+  purge d'une offre obsolète était formulée comme « 4 cycles de fetch consécutifs » sous la cadence
+  2x/jour ; elle est maintenant « 2 cycles consécutifs » sous la cadence 1x/jour. La tolérance réelle
+  sous-jacente (2 jours, `CLEANUP_COLLECTED_AGE_DAYS=2`) n'a pas changé, seul le compte de cycles
+  dérivé de la fréquence de fetch change.
+- **`tests/test_offer_fetch_scheduler.py`** : cas de test mis à jour pour la nouvelle heure planifiée
+  unique (16 UTC → CEST, 17 UTC → CET, au lieu des anciennes paires 10/11 et 18/19).
+- **`frontend/app/_components/LibrarySection.tsx`** : texte de la page Bibliothèque, « De nouvelles
+  offres sont recherchées chaque jour à 12h et 20h pour chacun de vos CVs. » →
+  « ...chaque jour à 18h... ».
+
+### Vérification
+
+- Lecture croisée cron ↔ code ↔ tests ↔ UI : `cron_expression = "0 16,17 * * *"` (container_apps.tf)
+  correspond à `SCHEDULED_LOCAL_HOURS = (18,)` (offer_fetch_scheduler/main.py), aux cas de test à
+  16 UTC (CEST) et 17 UTC (CET) de `test_offer_fetch_scheduler.py`, et au texte UI « 18h » de
+  `LibrarySection.tsx`.
+- `terraform fmt -check`/`validate`/`plan`, `pytest`, `eslint` : non rejoués dans cette passe
+  documentation (hors périmètre de `doc-writer`) — à confirmer par `reviewer-infra`/`reviewer-backend`/
+  `reviewer-frontend` et par la CI.
+
+Passage doc-writer : `agents/cleanup/main.py`, la docstring de `_cleanup` attribuait la cadence
+1x/jour 18h à « l'offer-fetching agent », alors que le docstring de module de
+`agents/offer_fetching/main.py` (touché dans cette même PR) précise que cet agent est désormais
+purement événementiel et ne connaît plus l'heure — la cadence planifiée appartient à
+`offer_fetch_scheduler`. Reformulé pour attribuer correctement le déclenchement planifié à
+`offer_fetch_scheduler` et clarifier que `offer_fetching` lui-même n'a pas d'horaire propre. Toutes
+les autres docstrings/commentaires touchés par cette PR (`container_apps.tf`, `servicebus.tf`,
+`offer_fetch_scheduler/main.py`, `offer_fetching/main.py` en-tête, `test_offer_fetch_scheduler.py`)
+vérifiés exacts vis-à-vis du code actuel, rien d'autre à corriger. Recherche de résidus de l'ancien
+horaire 12h/20h dans le reste du repo : seules des mentions historiques hors périmètre trouvées
+(`docs/ROADMAP.md` — roadmap M2 figée décrivant un plan jamais implémenté tel quel, GitHub Actions au
+lieu de Container App Jobs ; `docs/JOURNAL.md` — entrées passées, jamais réécrites rétroactivement ;
+`migrations/versions/030_add_offer_fetch_coordination.py` — docstring de migration décrivant l'état
+au moment de l'introduction du pattern événementiel, sans rapport avec cette PR) ; aucune ne relève
+d'une correction ici.
