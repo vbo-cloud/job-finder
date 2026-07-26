@@ -377,7 +377,9 @@ def _calendar_day_style(
         today_isoweekday: ISO 8601 weekday of the current Europe/Paris local date.
 
     Returns:
-        (band_color, body_color, letter_color, letter_font_weight).
+        (band_color, body_color, letter_color, letter_font_weight). band_color is also used
+        by _render_calendar_html as the border color around the whole pill, not just the
+        7px top band.
     """
     if isoweekday == today_isoweekday:
         return "#ef4444", "#2a1414", "#fca5a5", "800"
@@ -400,11 +402,17 @@ def _render_calendar_html(notification_days: list[int], today_isoweekday: int) -
     for isoweekday in range(1, 8):
         band, body, letter, weight = _calendar_day_style(isoweekday, notification_days, today_isoweekday)
         letter_char = _WEEKDAY_LETTERS[isoweekday]
+        # Each day icon is two stacked <td> (band + body) sharing the same border color, so
+        # the pill reads as one continuous outline. border-bottom:none on the top cell and
+        # border-top:none on the bottom cell keep the two 1px borders from doubling up into a
+        # visible 2px line where the cells meet.
         cells.append(
             "<td><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\">"
             f"<tr><td style=\"width:22px; height:7px; background-color:{band}; "
+            f"border:1px solid {band}; border-bottom:none; "
             "border-radius:4px 4px 0 0; font-size:1px; line-height:1px;\">&nbsp;</td></tr>"
             f"<tr><td style=\"width:22px; height:16px; background-color:{body}; "
+            f"border:1px solid {band}; border-top:none; "
             "border-radius:0 0 4px 4px; text-align:center; vertical-align:middle; "
             f"font-family: Arial, Helvetica, sans-serif; font-size:10px; font-weight:{weight}; "
             f"color:{letter};\">{letter_char}</td></tr></table></td>"
@@ -518,11 +526,15 @@ def _render_cv_card_html(entry: CvDigestEntry, frontend_url: str) -> str:
         'font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:#8686a0;">'
         f"{name} : {entry.unseen_count} nouvelle(s) offre(s)</p>"
         f"{_render_cv_top_match_html(entry)}"
+        # align="center" on the button's own <td>, plus the inline text-align/line-height
+        # below, back up the .stack-btn/@media rule in _html_document_head's <style> — same
+        # "mail clients don't reliably honor <style>/@media" reasoning as _render_cta_html.
         '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px;">'
-        '<tr><td style="border-radius:8px; background-color:#2563eb;">'
+        '<tr><td align="center" style="border-radius:8px; background-color:#2563eb;">'
         f'<a href="{frontend_url}" class="stack-btn" style="display:inline-block; '
-        'padding:10px 18px; font-family: Arial, Helvetica, sans-serif; font-size:13px; '
-        f'font-weight:700; color:#ffffff;">Voir les {entry.unseen_count} offres →</a>'
+        'padding:10px 18px; text-align:center; font-family: Arial, Helvetica, sans-serif; '
+        f'font-size:13px; line-height:13px; font-weight:700; color:#ffffff;">'
+        f"Voir les {entry.unseen_count} offres →</a>"
         "</td></tr></table>"
         "</td></tr></table></td></tr>"
     )
@@ -579,8 +591,9 @@ def _render_header_html(calendar_html: str) -> str:
         '<tr><td class="px" style="padding: 18px 32px; border-bottom:1px solid #212129;">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
         '<td valign="middle" style="font-family: Arial, Helvetica, sans-serif; font-size:16px; '
-        'font-weight:800; color:#f2f2f4; letter-spacing:.01em;">'
+        'font-weight:800; color:#f2f2f4; letter-spacing:.01em; white-space:nowrap;">'
         '<span style="color:#60a5fa;">●</span>&nbsp;Job Finder</td>'
+        '<td style="width:12px; font-size:1px; line-height:1px;">&nbsp;</td>'
         f'<td align="right" valign="middle">{calendar_html}</td>'
         "</tr></table></td></tr>"
     )
@@ -602,13 +615,17 @@ def _render_hero_html(greeting: str, heading: str, lead_html: str) -> str:
 
 def _render_cta_html(frontend_url: str) -> str:
     """Render the primary "Voir toutes mes offres" call-to-action button."""
+    # This button has no .stack-btn class (unlike _render_cv_card_html's button), so it has no
+    # @media hook at all — text-align:center/line-height must be inline, since several mail
+    # clients strip or ignore <style>/@media and would otherwise left-align the text once it
+    # wraps onto two lines on mobile.
     return (
         '<tr><td align="center" style="padding: 28px 32px 28px 32px;">'
         '<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
         '<td style="border-radius:10px; background-color:#2563eb;">'
         f'<a href="{frontend_url}" style="display:inline-block; padding:14px 30px; '
-        'font-family: Arial, Helvetica, sans-serif; font-size:15px; font-weight:800; '
-        'color:#ffffff;">Voir toutes mes offres sur Job Finder</a>'
+        'text-align:center; font-family: Arial, Helvetica, sans-serif; font-size:15px; '
+        'line-height:15px; font-weight:800; color:#ffffff;">Voir toutes mes offres sur Job Finder</a>'
         "</td></tr></table></td></tr>"
     )
 
