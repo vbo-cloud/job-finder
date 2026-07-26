@@ -1,7 +1,10 @@
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import axios from "axios";
 
-import { apiTokenRequest } from "@/lib/auth/msalConfig";
+import {
+  apiTokenRedirectRequest,
+  apiTokenRequest,
+} from "@/lib/auth/msalConfig";
 import { msalInstance } from "@/lib/auth/msalInstance";
 
 /**
@@ -54,7 +57,7 @@ apiClient.interceptors.request.use(async (config) => {
       // fermeture du navigateur).
       if (!redirectInFlight) {
         redirectInFlight = msalInstance
-          .acquireTokenRedirect(apiTokenRequest)
+          .acquireTokenRedirect(apiTokenRedirectRequest)
           .catch((redirectError) => {
             redirectInFlight = null;
             throw redirectError;

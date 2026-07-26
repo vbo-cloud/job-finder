@@ -1,5 +1,5 @@
 import type { Configuration, RedirectRequest } from "@azure/msal-browser";
-import { LogLevel } from "@azure/msal-browser";
+import { LogLevel, PromptValue } from "@azure/msal-browser";
 
 /**
  * MSAL configuration for Microsoft Entra External ID (CIAM).
@@ -67,12 +67,45 @@ export const msalConfig: Configuration = {
   },
 };
 
-/** Scopes requested at login and when calling the FastAPI backend. */
+/**
+ * Scopes for the silent token flow (`acquireTokenSilent` in
+ * `lib/api/client.ts`) — its sole consumer. No `prompt` field: silent
+ * acquisition doesn't accept one (no user interaction). Login and the
+ * interactive redirect fallback use `loginRequest` / `apiTokenRedirectRequest`
+ * below instead, which do carry `prompt`.
+ */
 export const apiTokenRequest = {
   scopes: [apiScope],
 };
 
-/** Login request — requests the API scope so the issued token works against the API. */
+/**
+ * Login request — requests the API scope so the issued token works against
+ * the API. Forces `select_account`: Entra External ID has a known, unfixed
+ * bug (AADSTS165000, "Token was not provided") in its auto-reconnect
+ * shortcut to the last-used identity provider (Google) for a "keep me signed
+ * in" user — the shortcut mishandles the PKCE code_challenge. Forcing the
+ * account picker always routes through the normal (working) sign-in path.
+ */
 export const loginRequest: RedirectRequest = {
   scopes: [apiScope],
+  prompt: PromptValue.SELECT_ACCOUNT,
+};
+
+/**
+ * Request used by the axios interceptor's `acquireTokenRedirect` fallback
+ * (`lib/api/client.ts`). Kept distinct from `apiTokenRequest` (used only for
+ * the silent flow, `acquireTokenSilent`, which doesn't accept `prompt`) so
+ * that constant can stay `prompt`-free. See `loginRequest` above for why
+ * `select_account` is forced here too.
+ *
+ * Value-identical to `loginRequest` today, but kept as its own constant
+ * rather than reused: the two cover different call sites (initial sign-in vs.
+ * a mid-session reauth triggered by an expired token) that could diverge
+ * later — e.g. a `loginHint` added to skip the picker on first login only.
+ * Merging them now would couple two call sites that don't inherently need
+ * the same request shape.
+ */
+export const apiTokenRedirectRequest: RedirectRequest = {
+  scopes: [apiScope],
+  prompt: PromptValue.SELECT_ACCOUNT,
 };
