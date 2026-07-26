@@ -8935,7 +8935,7 @@ nécessaire.
 
 ---
 
-## PR #239 — feat: réanalyse CV et détection d'obsolescence des analyses de match pilotées par l'intention
+## PR #240 — feat: réanalyse CV et détection d'obsolescence des analyses de match pilotées par l'intention
 
 **Date :** 2026-07-26
 **Branche :** `feature/intent-driven-reanalysis` → `dev`
