@@ -22,7 +22,7 @@ per-recipient send loop under test here.
 import importlib.util
 import sys
 import uuid
-from contextlib import contextmanager
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -41,16 +41,15 @@ sys.modules["notifications_main"] = _mod
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 
-def _session_cm(session: MagicMock):
-    """Return a contextmanager-compatible callable that yields the given session."""
-    @contextmanager
-    def _cm():
-        yield session
-    return _cm
+def _make_cv_entry(**overrides: object) -> "_mod.CvDigestEntry":
+    """Build a CvDigestEntry with sensible defaults, overridable per test.
 
+    Args:
+        **overrides: Field values to override on top of the defaults below.
 
-def _make_cv_entry(**overrides):
-    """Build a CvDigestEntry with sensible defaults, overridable per test."""
+    Returns:
+        A CvDigestEntry ready to pass into _build_email_content/_build_digest_subject.
+    """
     defaults = {
         "cv_name": "Alternance Cloud",
         "unseen_count": 3,
@@ -173,6 +172,29 @@ def test_build_email_content_personalizes_greeting_with_display_name() -> None:
     assert "Bonjour Camille," in html_body
 
 
+def test_build_email_content_escapes_display_name_in_html() -> None:
+    """display_name is a best-effort JWT claim (free text) — must be escaped in HTML, same
+    as CV.name/Offer.title/Offer.company. The plain-text greeting stays unescaped."""
+    plain_text, html_body = _mod._build_email_content(
+        "<script>", [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+    )
+
+    assert "Bonjour <script>," in plain_text
+    assert "<script>" not in html_body
+    assert "Bonjour &lt;script&gt;," in html_body
+
+
+def test_build_email_content_omits_location_separator_when_offer_location_is_blank() -> None:
+    entry = _make_cv_entry(top_offer_location="", top_offer_company="Doctolib", top_offer_contract_type="CDI")
+
+    plain_text, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
+
+    assert "Doctolib · CDI" in plain_text
+    assert "Doctolib · CDI" in html_body
+    assert "Doctolib —" not in plain_text
+    assert "Doctolib —" not in html_body
+
+
 # ---------------------------------------------------------------------------
 # _build_digest_subject
 # ---------------------------------------------------------------------------
@@ -203,6 +225,19 @@ def test_build_digest_subject_handles_defensive_zero_offers_case() -> None:
     subject = _mod._build_digest_subject([])
 
     assert "0" in subject
+
+
+def test_hero_copy_uses_singular_heading_for_exactly_one_unseen_offer() -> None:
+    heading, _ = _mod._hero_copy(total_unseen=1, best_score=94)
+
+    assert "Une nouvelle offre" in heading
+
+
+def test_hero_copy_uses_plural_heading_for_several_unseen_offers() -> None:
+    heading, lead_html = _mod._hero_copy(total_unseen=7, best_score=94)
+
+    assert "7 nouvelles offres" in heading
+    assert "94" in lead_html
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +291,7 @@ def test_render_calendar_text_marks_today_with_brackets() -> None:
 
 
 @pytest.fixture()
-def db_session():
+def db_session() -> Iterator[Session]:
     """In-memory SQLite session with the minimal schema required by _load_cv_digest_entries_by_user."""
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -292,6 +327,7 @@ def db_session():
 
 
 def _add_cv(session: Session, user_id: str, name: str | None) -> str:
+    """Insert a minimal `cvs` row and return its generated id."""
     cid = str(uuid.uuid4())
     session.execute(
         sa.text("INSERT INTO cvs (id, user_id, name) VALUES (:id, :user_id, :name)"),
@@ -308,6 +344,7 @@ def _add_offer(
     department: str | None = None,
     contract_type: str = "Alternance",
 ) -> str:
+    """Insert a minimal `offers` row and return its generated id."""
     oid = str(uuid.uuid4())
     session.execute(
         sa.text(
@@ -327,6 +364,7 @@ def _add_offer(
 
 
 def _add_match(session: Session, cv_id: str, offer_id: str, score: float, seen: bool) -> None:
+    """Insert a minimal `matches` row linking the given cv_id and offer_id."""
     session.execute(
         sa.text(
             "INSERT INTO matches (id, cv_id, offer_id, score, seen_at) "

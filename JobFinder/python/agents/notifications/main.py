@@ -202,7 +202,9 @@ def _load_cv_digest_entries_by_user(
             Offer.contract_type.label("offer_contract_type"),
             Match.score.label("score"),
             func.count().over(partition_by=CV.id).label("unseen_count"),
-            func.row_number().over(partition_by=CV.id, order_by=Match.score.desc()).label("rn"),
+            func.row_number()
+            .over(partition_by=CV.id, order_by=(Match.score.desc(), Match.id))
+            .label("rn"),
         )
         .select_from(Match)
         .join(CV, CV.id == Match.cv_id)
@@ -210,7 +212,11 @@ def _load_cv_digest_entries_by_user(
         .where(CV.user_id.in_(user_ids), Match.seen_at.is_(None))
         .subquery()
     )
-    rows = session.execute(select(ranked).where(ranked.c.rn == 1)).all()
+    # Match.id as a tie-breaker keeps the top-match choice stable across runs when two
+    # matches share the same score; cv_name orders the digest's cards deterministically.
+    rows = session.execute(
+        select(ranked).where(ranked.c.rn == 1).order_by(ranked.c.cv_name)
+    ).all()
 
     entries_by_user: dict[str, list[CvDigestEntry]] = {}
     for row in rows:
@@ -280,8 +286,7 @@ def _build_digest_subject(cv_entries: list[CvDigestEntry]) -> str:
         (main() never actually reaches it — it skips a recipient before building content
         when its cv_entries list is empty — but it's covered here rather than assumed).
     """
-    total = sum(entry.unseen_count for entry in cv_entries)
-    best_score = max((entry.top_offer_score_pct for entry in cv_entries), default=0)
+    total, best_score = _digest_totals(cv_entries)
     if total == 1:
         return f"🎯 Une offre à {best_score}% de correspondance vous attend"
     return f"🎯 {total} offres collent à votre profil (dont une à {best_score}%)"
@@ -292,7 +297,9 @@ def _greeting(display_name: str | None) -> str:
 
     Args:
         display_name: Recipient's UserProfile.display_name, best-effort from the JWT
-            (may be None).
+            (may be None). Not escaped — callers building the HTML body must escape it
+            themselves (or escape display_name before calling), same as CV.name/Offer.title
+            elsewhere in this module; the plain-text body needs no escaping at all.
 
     Returns:
         "Bonjour {display_name}," if set, otherwise the generic "Bonjour,".
@@ -300,6 +307,20 @@ def _greeting(display_name: str | None) -> str:
     if display_name:
         return f"Bonjour {display_name},"
     return "Bonjour,"
+
+
+def _digest_totals(cv_entries: list[CvDigestEntry]) -> tuple[int, int]:
+    """Return (total_unseen, best_score) across every CV, shared by subject/hero/preheader.
+
+    Args:
+        cv_entries: One CvDigestEntry per CV with at least one unseen match.
+
+    Returns:
+        (sum of unseen_count, max of top_offer_score_pct, or 0 if cv_entries is empty).
+    """
+    total_unseen = sum(entry.unseen_count for entry in cv_entries)
+    best_score = max((entry.top_offer_score_pct for entry in cv_entries), default=0)
+    return total_unseen, best_score
 
 
 def _calendar_day_style(
@@ -622,11 +643,14 @@ def _render_html_body(
     Returns:
         Complete HTML document string.
     """
-    total_unseen = sum(entry.unseen_count for entry in cv_entries)
-    best_score = max((entry.top_offer_score_pct for entry in cv_entries), default=0)
+    total_unseen, best_score = _digest_totals(cv_entries)
     heading, lead_html = _hero_copy(total_unseen, best_score)
     calendar_html = _render_calendar_html(notification_days, today_isoweekday)
     cards_html = "".join(_render_cv_card_html(entry, frontend_url) for entry in cv_entries)
+    # display_name is free text from a JWT claim (UserProfile.display_name) — escaped here,
+    # same as CV.name/Offer.title elsewhere in this module. The plain-text greeting built by
+    # _build_email_content uses the raw, unescaped value instead.
+    greeting = _greeting(html.escape(display_name) if display_name else None)
 
     body = (
         f"{_render_preheader_html(total_unseen, best_score)}"
@@ -636,7 +660,7 @@ def _render_html_body(
         'style="width:600px; max-width:600px; background-color:#15151c; border:1px solid #26262f; '
         'border-radius:16px; overflow:hidden;">'
         f"{_render_header_html(calendar_html)}"
-        f"{_render_hero_html(_greeting(display_name), heading, lead_html)}"
+        f"{_render_hero_html(greeting, heading, lead_html)}"
         f"{cards_html}"
         f"{_render_cta_html(frontend_url)}"
         f"{_render_footer_html(frontend_url)}"
@@ -666,8 +690,7 @@ def _build_email_content(
     Returns:
         Tuple of (plain_text, html).
     """
-    total_unseen = sum(entry.unseen_count for entry in cv_entries)
-    best_score = max((entry.top_offer_score_pct for entry in cv_entries), default=0)
+    total_unseen, best_score = _digest_totals(cv_entries)
     greeting = _greeting(display_name)
     heading, _ = _hero_copy(total_unseen, best_score)
 
@@ -721,6 +744,40 @@ def _send_digest(
     logger.info("notifications_send_completed", recipient=recipient)
 
 
+def _process_recipient(
+    client: EmailClient,
+    recipient: Recipient,
+    cv_entries: list[CvDigestEntry],
+    today_isoweekday: int,
+    frontend_url: str,
+) -> str:
+    """Build and send one recipient's digest, given it already has an email address.
+
+    Args:
+        client: Configured EmailClient.
+        recipient: An opted-in recipient known to have an email address.
+        cv_entries: This recipient's CvDigestEntry list — empty if nothing unseen.
+        today_isoweekday: ISO 8601 weekday of the current Europe/Paris local date.
+        frontend_url: Base URL for every CTA and the footer's links.
+
+    Returns:
+        "sent", "skipped_no_unseen_offers", or "failed" — matches main()'s tally keys.
+    """
+    if not cv_entries:
+        logger.info("notifications_skipped_no_unseen_offers", user_id=recipient.user_id)
+        return "skipped_no_unseen_offers"
+
+    subject = _build_digest_subject(cv_entries)
+    plain_text, html_body = _build_email_content(
+        recipient.display_name, recipient.notification_days, today_isoweekday, cv_entries, frontend_url
+    )
+    try:
+        _send_digest(client, recipient.email, subject, plain_text, html_body)
+    except AzureError:
+        return "failed"
+    return "sent"
+
+
 def main() -> None:
     """Send the daily digest email to every opted-in profile, unless outside the scheduled hour."""
     configure_telemetry("notifications")
@@ -738,42 +795,25 @@ def main() -> None:
 
     today_isoweekday = now_utc.astimezone(PARIS_TZ).isoweekday()
     recipients, entries_by_user = _load_recipients_and_entries(today_isoweekday)
-
     client = EmailClient(f"https://{_endpoint_hostname}", DefaultAzureCredential())
 
-    sent, skipped_no_email, skipped_no_unseen_offers, failed = 0, 0, 0, 0
+    outcomes = {"sent": 0, "skipped_no_email": 0, "skipped_no_unseen_offers": 0, "failed": 0}
     for recipient in recipients:
         if not recipient.email:
             logger.info("notifications_skipped_no_email", user_id=recipient.user_id)
-            skipped_no_email += 1
+            outcomes["skipped_no_email"] += 1
             continue
 
         cv_entries = entries_by_user.get(recipient.user_id, [])
-        if not cv_entries:
-            logger.info("notifications_skipped_no_unseen_offers", user_id=recipient.user_id)
-            skipped_no_unseen_offers += 1
-            continue
-
-        subject = _build_digest_subject(cv_entries)
-        plain_text, html_body = _build_email_content(
-            recipient.display_name,
-            recipient.notification_days,
-            today_isoweekday,
-            cv_entries,
-            _frontend_url,
-        )
-        try:
-            _send_digest(client, recipient.email, subject, plain_text, html_body)
-            sent += 1
-        except AzureError:
-            failed += 1
+        outcome = _process_recipient(client, recipient, cv_entries, today_isoweekday, _frontend_url)
+        outcomes[outcome] += 1
 
     logger.info(
         "notifications_completed",
-        sent=sent,
-        skipped_no_email=skipped_no_email,
-        skipped_no_unseen_offers=skipped_no_unseen_offers,
-        failed=failed,
+        sent=outcomes["sent"],
+        skipped_no_email=outcomes["skipped_no_email"],
+        skipped_no_unseen_offers=outcomes["skipped_no_unseen_offers"],
+        failed=outcomes["failed"],
     )
 
 
