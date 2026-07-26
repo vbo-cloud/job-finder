@@ -8732,6 +8732,8 @@ mais dans la même couche :
 - **`python/agents/notifications/Dockerfile`** (nouveau) : copie de celui d'`offer_fetch_scheduler`,
   seule la commande de démarrage change.
 - **`python/requirements.txt`** : ajout de `azure-communication-email`.
+- **`python/pytest.ini`** : ajout de `agents/notifications/tests` à `testpaths` — sans ça les
+  nouveaux tests ne sont simplement jamais découverts par `pytest`.
 - **`envs/dev/container_apps.tf`** : nouveau module `job_notifications` (Container App Job, trigger
   `timer`, `cron_expression = "0 17,18 * * *"` — mêmes deux horaires UTC susceptibles de correspondre
   à 19h Paris selon l'heure d'été/hiver, exactement le même mécanisme que
