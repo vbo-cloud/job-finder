@@ -2,8 +2,8 @@
 
 Runs as a Container App Job on the same UTC cron_expression job_offer_fetching used before this
 agent existed (see container_apps.tf) — Azure's schedule trigger has no timezone/DST awareness, so
-Terraform still fires this job at every UTC hour that could map to 12:00/20:00 Europe/Paris under
-either CET or CEST; _is_scheduled_local_hour no-ops the two firings that don't match the current DST
+Terraform still fires this job at every UTC hour that could map to 18:00 Europe/Paris under
+either CET or CEST; _is_scheduled_local_hour no-ops the firing that doesn't match the current DST
 state, exactly as offer_fetching's own main() used to before it became purely event-driven — see
 docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
 
@@ -27,7 +27,7 @@ OFFER_FETCH_REQUEST_QUEUE = "offer-fetch-request"
 PARIS_TZ = ZoneInfo("Europe/Paris")
 # Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
 # for job_offer_fetch_scheduler — see _is_scheduled_local_hour.
-SCHEDULED_LOCAL_HOURS = (12, 20)
+SCHEDULED_LOCAL_HOURS = (18,)
 
 logger = structlog.get_logger()
 
@@ -38,8 +38,8 @@ def _is_scheduled_local_hour(now_utc: datetime) -> bool:
     Azure Container Apps' schedule trigger only supports a UTC cron_expression, with no
     timezone or DST awareness. Terraform's cron_expression for job_offer_fetch_scheduler
     therefore fires at every UTC hour that could map to SCHEDULED_LOCAL_HOURS under either
-    CET (UTC+1) or CEST (UTC+2) — this guard picks out the two firings that are actually
-    correct for the current DST state, so main() can no-op the other two. That keeps the
+    CET (UTC+1) or CEST (UTC+2) — this guard picks out the firing that is actually
+    correct for the current DST state, so main() can no-op the other one. That keeps the
     schedule correct across DST transitions without a manual Terraform change twice a year.
 
     Args:

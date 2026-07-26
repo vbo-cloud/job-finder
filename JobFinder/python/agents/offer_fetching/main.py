@@ -3,7 +3,7 @@
 Runs as a Container App Job on a queue trigger (offer-fetch-request) — event-driven since
 docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md, this agent no longer
 knows the time of day at all. Two distinct triggers land on the same queue and the same
-consumer: agents/offer_fetch_scheduler's DST-safe 12:00/20:00 Europe/Paris relay (a full
+consumer: agents/offer_fetch_scheduler's DST-safe 18:00 Europe/Paris relay (a full
 refresh over every active ROME code), and agents/cv_analysis publishing a targeted request
 with explicit rome_codes when a CV brings at least one new code to a profile. A session-level
 Postgres advisory lock (OFFER_FETCH_LOCK_ID) serializes fetch cycles that used to be
@@ -573,7 +573,7 @@ def _handle_fetch_request(payload: dict) -> None:
 def main() -> None:
     """Consume one offer-fetch-request message and run (or defer) a fetch cycle.
 
-    No longer schedule-aware — see agents/offer_fetch_scheduler for the DST-safe 12:00/20:00
+    No longer schedule-aware — see agents/offer_fetch_scheduler for the DST-safe 18:00
     Europe/Paris relay that used to live in this agent's own main() (_is_scheduled_local_hour).
     """
     configure_telemetry("offer-fetching")

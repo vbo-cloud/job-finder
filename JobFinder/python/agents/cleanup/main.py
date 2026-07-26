@@ -35,8 +35,8 @@ def _cleanup(session: Session) -> tuple[int, int, int]:
     Assumption: collected_at is NOT NULL for all rows (enforced by the schema since
     migration 001_initial_schema). No NULL guard is needed in the predicate.
 
-    Grace period: the offer-fetching agent runs 2×/day (12:00 and 20:00 Europe/Paris local time).
-    With CLEANUP_COLLECTED_AGE_DAYS=2 an offer must miss 4 consecutive fetch cycles
+    Grace period: the offer-fetching agent runs 1×/day (18:00 Europe/Paris local time).
+    With CLEANUP_COLLECTED_AGE_DAYS=2 an offer must miss 2 consecutive fetch cycles
     before being purged — enough to survive a transient fetching outage without
     wiping the offer pool.
 

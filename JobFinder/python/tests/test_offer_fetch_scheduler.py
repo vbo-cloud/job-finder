@@ -34,10 +34,8 @@ class TestIsScheduledLocalHour:
     @pytest.mark.parametrize(
         ("utc_hour", "expected"),
         [
-            (10, True),   # CEST (UTC+2): 10:00 UTC -> 12:00 Europe/Paris
-            (18, True),   # CEST (UTC+2): 18:00 UTC -> 20:00 Europe/Paris
-            (11, False),  # CEST: would be 13:00 local -- the CET-only firing
-            (19, False),  # CEST: would be 21:00 local -- the CET-only firing
+            (16, True),   # CEST (UTC+2): 16:00 UTC -> 18:00 Europe/Paris
+            (17, False),  # CEST: would be 19:00 local -- the CET-only firing
         ],
     )
     def test_matches_cest_offset_in_july(self, utc_hour: int, expected: bool):
@@ -49,10 +47,8 @@ class TestIsScheduledLocalHour:
     @pytest.mark.parametrize(
         ("utc_hour", "expected"),
         [
-            (11, True),   # CET (UTC+1): 11:00 UTC -> 12:00 Europe/Paris
-            (19, True),   # CET (UTC+1): 19:00 UTC -> 20:00 Europe/Paris
-            (10, False),  # CET: would be 11:00 local -- the CEST-only firing
-            (18, False),  # CET: would be 19:00 local -- the CEST-only firing
+            (17, True),   # CET (UTC+1): 17:00 UTC -> 18:00 Europe/Paris
+            (16, False),  # CET: would be 17:00 local -- the CEST-only firing
         ],
     )
     def test_matches_cet_offset_in_january(self, utc_hour: int, expected: bool):
