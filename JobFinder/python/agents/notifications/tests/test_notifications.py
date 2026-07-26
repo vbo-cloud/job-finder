@@ -30,6 +30,7 @@ import pytest
 import sqlalchemy as sa
 from azure.core.exceptions import AzureError
 from pytest_mock import MockerFixture
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 _NOTIFICATIONS_DIR = Path(__file__).parent.parent
@@ -230,6 +231,14 @@ def test_select_profiles_to_notify_returns_whatever_the_any_filter_matches(mocke
 
     assert result == [profile]
     session.execute.assert_called_once()
+
+    # The mocked session can't execute the query, so inspect the compiled SQL itself
+    # to pin down the ANY(notification_days) filter — the actual opt-in selection logic.
+    statement = session.execute.call_args.args[0]
+    compiled_sql = str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
+    assert "3 = ANY (user_profiles.notification_days)" in compiled_sql
 
 
 # ---------------------------------------------------------------------------
