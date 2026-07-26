@@ -158,3 +158,18 @@ resource "azurerm_role_assignment" "caj_openai_user" {
   role_definition_name = "Cognitive Services OpenAI User"
   principal_id         = azurerm_user_assigned_identity.caj.principal_id
 }
+
+# ==============================================================================
+# Role — Communication and Email Service Owner (ACS Email, notification digests)
+# ==============================================================================
+
+data "azurerm_communication_service" "acs" {
+  name                = "acs-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_app.name
+}
+
+resource "azurerm_role_assignment" "caj_communication_owner" {
+  scope                = data.azurerm_communication_service.acs.id
+  role_definition_name = "Communication and Email Service Owner"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
