@@ -42,13 +42,14 @@ export default function UnsavedChangesDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="unsaved-changes-title"
+        aria-describedby="unsaved-changes-desc"
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md rounded-xl border border-default bg-surface p-6 shadow-2xl"
       >
         <h3 id="unsaved-changes-title" className="text-lg font-semibold text-strong">
           Modifications non enregistrées
         </h3>
-        <p className="mt-2 text-sm text-body">
+        <p id="unsaved-changes-desc" className="mt-2 text-sm text-body">
           Vous avez des modifications non enregistrées. Quitter sans enregistrer ?
         </p>
 
