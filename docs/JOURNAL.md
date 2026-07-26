@@ -9784,3 +9784,61 @@ par le chemin normal (celui qui fonctionne).
     répartis sur cinq fichiers (voir Ce qui a été fait).
 - Pas d'accès Bash/`git diff`/`gh` depuis ce rôle. Numéro de PR dérivé du dernier titre `## PR #247`
   de ce fichier (+1 = #248) — non confirmé via GitHub dans cette passe.
+
+## PR #249 — fix(ci): ajouter NOTIFICATIONS_UNSUBSCRIBE_SECRET au smoke-test webapp
+
+**Date :** 2026-07-26
+**Branche :** `fix/buildagents-webapp-smoke-test-secret` → `dev`
+
+### Contexte
+
+La feature de désabonnement en un clic (PR #243 infra, PR #245 code) a ajouté un import de
+`shared/unsubscribe_token.py` dans le webapp (`agents/webapp/main.py` → `routers/notifications.py`
+→ `shared/unsubscribe_token.py`), qui lève `ValueError` dès l'import si
+`NOTIFICATIONS_UNSUBSCRIBE_SECRET` n'est pas posé (fail-fast, même pattern que les autres modules
+`shared/*` — `DATABASE_URL` dans `shared/db.py`, `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` dans
+`shared/bus.py`, `AZURE_OPENAI_ENDPOINT` dans `shared/embedder.py`).
+
+L'étape "Smoke-test webapp image" de `.github/workflows/buildAgents.yml` lance `python -c "import
+main"` dans l'image webapp avec un set fixe de variables d'environnement — cette nouvelle variable
+n'y avait jamais été ajoutée. Conséquence : le smoke-test échouait avec ce `ValueError`, le job
+s'arrêtait à cette étape (shell par défaut `bash -e`, pas de `continue-on-error`), et toutes les
+étapes suivantes ne s'exécutaient plus, y compris "Push webapp image to ACR", "Build and push
+frontend image", et surtout "Update Container App and Container App Job images" — le seul step qui
+contient tous les `az containerapp update`/`az containerapp job update` du repo (matching, cleanup,
+fetch, fetch-sched, notifications, webapp, cv-analysis, match-analysis, frontend). Résultat concret
+observé : `app-jf-dev-frc` tournait encore sur l'image d'avant la feature, `GET
+/notifications/unsubscribe?token=...` renvoyait 404 alors que la route existe sur `dev` — pas un
+problème de signature de token (DKIM/SPF/DMARC vérifiés `pass` sur un mail de test réel), un
+problème de déploiement.
+
+### Ce qui a été fait
+
+- **`.github/workflows/buildAgents.yml`** : ajout de `-e NOTIFICATIONS_UNSUBSCRIBE_SECRET=x` à
+  l'étape "Smoke-test webapp image". Commentaire réécrit pour lister explicitement les sept
+  variables fail-fast couvertes et leur module d'origine : `DATABASE_URL` (`shared/db.py`),
+  `AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` (`shared/bus.py`), `AZURE_OPENAI_ENDPOINT`
+  (`shared/embedder.py`), `NOTIFICATIONS_UNSUBSCRIBE_SECRET` (`shared/unsubscribe_token.py`),
+  `ENTRA_EXTERNAL_TENANT_ID`/`ENTRA_EXTERNAL_CLIENT_ID` (`agents/webapp/auth.py`),
+  `AZURE_STORAGE_ACCOUNT_URL` (`agents/webapp/routers/cv.py`). Périmètre de la règle élargi de
+  "tout module `shared/*`" à "tout module importé transitivement par `main.py`" (suite à une
+  remarque de `reviewer-infra` sur la première version du commentaire, qui cadrait la règle plus
+  étroitement que la réalité déjà couverte par la liste) — cette liste reste manuelle (pas
+  d'introspection automatique des imports), documentée comme telle plutôt que rallongée
+  silencieusement.
+- Vérifié `agents/webapp/main.py` et les cinq routers qu'il importe (`cv`, `matches`, `profile`,
+  `feedback`, `notifications`) en entier, pas seulement la ligne d'import en cause : les seuls
+  modules qui lèvent au niveau module sont les six ci-dessus (quatre dans `shared/*`, deux dans
+  `agents/webapp/`) — tous déjà couverts ou viennent de l'être, aucune autre variable manquante
+  trouvée. `shared/config.py` utilise `os.getenv(..., default)` partout, jamais fail-fast.
+
+### Vérification
+
+- YAML validé (`yaml.safe_load`) après modification.
+- Après merge : un push sur `dev` doit déclencher `buildAgents.yml` et faire aller le job jusqu'au
+  bout, en particulier l'étape "Update Container App and Container App Job images". À vérifier
+  après coup que `notifications`, `cv-analysis`, `match-analysis` et le frontend (tous bloqués par
+  le même bug depuis son introduction) tournent bien sur l'image du commit du fix, pas une image
+  plus ancienne.
+- `GET /notifications/unsubscribe?token=<token valide>` sur `app-jf-dev-frc` doit renvoyer 200
+  (page de confirmation), pas 404.
