@@ -8690,3 +8690,95 @@ lieu de Container App Jobs ; `docs/JOURNAL.md` — entrées passées, jamais ré
 `migrations/versions/030_add_offer_fetch_coordination.py` — docstring de migration décrivant l'état
 au moment de l'introduction du pattern événementiel, sans rapport avec cette PR) ; aucune ne relève
 d'une correction ici.
+
+---
+
+## PR #238 — feat(agents): l'agent notifications (récap email des offres non vues)
+
+**Date :** 2026-07-26
+**Branche :** `feat/notifications-agent` → `dev`
+
+### Contexte
+
+PR 7/7 (et dernière) du plan "notifications" (décidé avec Vincent le 2026-07-25/26). Toutes les
+briques précédentes étaient posées : `UserProfile.notification_days` (PR 2/7, mergée), la ressource
+Azure Communication Services Email avec le domaine `vincentboutin.dev` vérifié (PR 5/7, mergée —
+PR #235), et le rôle `Communication and Email Service Owner` accordé à `caj` par Managed Identity
+(PR 6/7, mergée — PR #236). Cette PR ajoute le seul morceau qui manquait : l'agent qui envoie
+réellement les mails.
+
+Couche unique (`envs/dev`, pas de mélange platform/app), deux changements logiquement distincts
+mais dans la même couche :
+1. Le renommage de l'adresse expéditrice (`jobfinder` → `jobfinder_donotreply`), décidé le 2026-07-26
+   et reporté ici exprès — `notification_sender_username` touche `envs/dev`, pas `lz_dev`, donc ne
+   pouvait pas être fait dans PR 6.
+2. Le nouvel agent `agents/notifications`, planifié à 19h heure de Paris (exigence de Vincent).
+
+### Ce qui a été fait
+
+- **`envs/dev/variables.tf`** : `notification_sender_username` par défaut passe de `jobfinder` à
+  `jobfinder_donotreply` — force le remplacement de
+  `azurerm_email_communication_service_domain_sender_username` uniquement (pas de nouvelle
+  vérification DNS nécessaire, le domaine reste vérifié).
+- **`python/agents/notifications/main.py`** (nouveau) : pour chaque `UserProfile` dont
+  `notification_days` contient le jour ISO 8601 courant (`.any(...)`, compilé côté PostgreSQL en
+  `<valeur> = ANY(notification_days)`), compte les matchs non vus (`Match.seen_at IS NULL`) par CV et
+  envoie un mail récap listant chaque CV ayant au moins un match non vu. N'écrit jamais
+  `Match.seen_at` — colonne mise à jour exclusivement par l'utilisateur dans le webapp — donc une
+  offre non vue reste dans le récap tant qu'elle n'a pas été vue dans l'app, y compris sur plusieurs
+  envois. Auth par `DefaultAzureCredential` (identité `caj`, aucune clé). Suit le pattern DST-aware de
+  `offer_fetch_scheduler` (`_is_scheduled_local_hour`, un seul horaire ici : 19h) et la structure
+  générale de `cleanup` (migrations avant tout accès DB, logging structlog, résumé final).
+- **`python/agents/notifications/Dockerfile`** (nouveau) : copie de celui d'`offer_fetch_scheduler`,
+  seule la commande de démarrage change.
+- **`python/requirements.txt`** : ajout de `azure-communication-email`.
+- **`envs/dev/container_apps.tf`** : nouveau module `job_notifications` (Container App Job, trigger
+  `timer`, `cron_expression = "0 17,18 * * *"` — mêmes deux horaires UTC susceptibles de correspondre
+  à 19h Paris selon l'heure d'été/hiver, exactement le même mécanisme que
+  `job_offer_fetch_scheduler`). `replica_timeout_in_seconds = 300` (plus long que les 60s
+  d'`offer_fetch_scheduler` : cet agent parcourt la table des profils et envoie potentiellement
+  plusieurs mails de façon séquentielle).
+- **`python/agents/notifications/tests/`** (nouveau) : `_is_scheduled_local_hour` (vrai pour 17h UTC
+  en heure d'été / 18h UTC en heure d'hiver, faux sinon), construction du contenu du mail (fonction
+  pure), comptage des matchs non vus par CV (SQLite en mémoire, DDL minimal comme `cleanup`), et
+  l'orchestration de `main()` (hors fenêtre planifiée → rien n'est envoyé ; profil sans email → sauté
+  et compté ; profil sans offre non vue → sauté sans envoi ; échec d'envoi individuel → compté dans
+  `failed` sans interrompre la boucle sur les profils suivants). La sélection des profils par
+  `notification_days.any(...)` n'est pas testable contre SQLite (type `ARRAY` non supporté) — testée
+  en mockant `session.execute` directement, comme `cv_analysis`/`match_analysis` mockent déjà leur
+  client OpenAI plutôt que l'API réelle.
+
+### Décisions techniques
+
+- **Pas de filtre par zone communale** : `GET /cv` (webapp) filtre `match_count`/`unseen_count` par la
+  zone communale peinte par l'utilisateur (`commune_zone_condition`, package `webapp`). Cet agent ne
+  réplique pas ce filtre : compte tous les matchs non vus par CV, sans filtre géographique. Deux
+  raisons — aucun agent de ce repo n'importe le code d'un autre agent (`cleanup`, `matching`,
+  `offer_fetch_scheduler` n'importent que `shared.*`), et `commune_zone_condition` vit dans `webapp`,
+  pas `shared` (le déplacer serait un refactor hors périmètre). Conséquence : le chiffre du mail peut
+  être légèrement supérieur à ce que l'utilisateur voit dans la bibliothèque CV pour les profils avec
+  une petite zone peinte. À revisiter si ça devient une source de confusion réelle.
+- Gestion d'erreur sur l'appel SDK : `azure.core.exceptions.AzureError` (base commune aux clients
+  `azure-core`, déjà utilisée dans le repo pour le blob storage — `routers/cv.py`,
+  `scripts/backfill_thumbnails.py`) plutôt qu'un `except Exception` nu, conformément à la convention
+  Python du projet.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/dev`.
+- `terraform plan` sur `envs/dev` (avec `az login` local + `-var alert_email=...` fourni en ligne de
+  commande pour contourner l'absence de cette variable en local, non liée à cette PR) : le diff
+  contient exactement les deux changements attendus —
+  `module.email_communication.azurerm_email_communication_service_domain_sender_username.this` remplacé
+  et `module.job_notifications.azurerm_container_app_job.this` créé. Le plan complet affichait aussi
+  des changements sur `jumpbox`, `webapp`, et l'action group d'alerte : dérive préexistante causée par
+  des variables (`portfolio_contact_function_url`, valeur réelle d'`alert_email`) absentes du
+  `terraform.tfvars` local — confirmée sans rapport avec cette PR via `git diff --stat`, qui ne montre
+  que `variables.tf` et `container_apps.tf` modifiés sous `envs/dev`.
+- `pytest` : 400 tests passent (18 nouveaux pour `agents/notifications`), suite complète du repo.
+- Pas de `ruff`/linter configuré dans le repo à ce jour (aucune config, aucune dépendance) — rien à
+  exécuter sur ce point.
+- Après merge et apply CI : vérifier dans le portail que `job-jf-dev-frc-notifications` existe,
+  déclencher un run manuel (portail ou `az containerapp job start`) avec au moins un profil de test
+  ayant `notification_days` incluant le jour du test et un match non vu — sinon le run se termine en
+  no-op silencieux (comportement attendu).
