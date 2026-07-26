@@ -5,6 +5,8 @@ upsert behaviour, intent_embedding recomputation, start-matching re-trigger on
 intent change), DELETE /profile (account erasure).
 """
 import sys
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +41,10 @@ def _make_profile() -> MagicMock:
     profile.notification_days = [7]
     profile.candidate_description = None
     profile.analysis_credits_remaining = 30
+    # Never dispatched before — the default cooldown-gate baseline for every test
+    # that doesn't specifically exercise the cooldown itself.
+    profile.last_intent_dispatch_at = None
+    profile.intent_updated_at = None
     # ProfileOut declares is_admin (computed field, not a DB column) — without a
     # concrete value, model_validate would read a MagicMock and fail validation.
     profile.is_admin = False
@@ -47,7 +53,13 @@ def _make_profile() -> MagicMock:
 
 @pytest.fixture()
 def mock_session() -> MagicMock:
-    return MagicMock()
+    session = MagicMock()
+    # Default: no CVs to re-dispatch — _dispatch_cv_reanalysis's
+    # select(CV.id).where(...).scalars().all() must return an iterable, not the bare
+    # MagicMock a fresh mock_session.execute(...) would otherwise yield. Tests that
+    # specifically cover CV reanalysis override this per-call via side_effect.
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    return session
 
 
 @pytest.fixture(autouse=True)
@@ -233,6 +245,7 @@ class TestPutProfile:
     ):
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
         with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]) as mock_embed:
             resp = test_client.put(
@@ -287,6 +300,7 @@ class TestPutProfile:
     ):
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
         with patch("routers.profile.embed") as mock_embed:
             resp = test_client.put(
@@ -429,7 +443,7 @@ class TestPutProfile:
         assert resp.status_code == 200
         mock_send_message.assert_called_once()
 
-    def test_description_change_stamps_description_updated_at(self, test_client, mock_session):
+    def test_description_change_stamps_intent_updated_at(self, test_client, mock_session):
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
@@ -442,14 +456,14 @@ class TestPutProfile:
         assert resp.status_code == 200
         stmt = mock_session.execute.call_args_list[1].args[0]
         set_clause = dict(stmt._post_values_clause.update_values_to_set)
-        assert set_clause["description_updated_at"] is not None
+        assert set_clause["intent_updated_at"] is not None
 
-    def test_first_time_description_stamps_description_updated_at_on_insert_path(
+    def test_first_time_description_stamps_intent_updated_at_on_insert_path(
         self, test_client, mock_session
     ):
         """No existing profile row (existing = None, the brand-new-user path):
         description_changed is computed against that None fallback, so the
-        INSERT .values() clause must carry description_updated_at too — not
+        INSERT .values() clause must carry intent_updated_at too — not
         just the ON CONFLICT UPDATE set_ clause covered by the test above."""
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
@@ -463,11 +477,16 @@ class TestPutProfile:
         assert resp.status_code == 200
         stmt = mock_session.execute.call_args_list[1].args[0]
         insert_values = stmt.compile().params
-        assert insert_values["description_updated_at"] is not None
+        assert insert_values["intent_updated_at"] is not None
 
-    def test_experience_level_alone_does_not_stamp_description_updated_at(
+    def test_experience_level_alone_stamps_intent_updated_at(
         self, test_client, mock_session
     ):
+        """experience_level alone never recomputes the embedding, but it does
+        still count as an intent change — match_analysis's own prompt context
+        (agents/match_analysis/main.py) renders experience_level too, so a
+        change there makes existing match analyses stale (see routers/matches.py
+        _mark_stale), not just a candidate_description change."""
         profile = _make_profile()
         mock_session.execute.return_value.scalar_one.return_value = profile
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
@@ -479,9 +498,9 @@ class TestPutProfile:
         mock_embed.assert_not_called()
         stmt = mock_session.execute.call_args_list[1].args[0]
         set_clause = dict(stmt._post_values_clause.update_values_to_set)
-        assert "description_updated_at" not in set_clause
+        assert set_clause["intent_updated_at"] is not None
 
-    def test_unchanged_description_value_does_not_stamp_description_updated_at(
+    def test_unchanged_description_value_does_not_stamp_intent_updated_at(
         self, test_client, mock_session
     ):
         profile = _make_profile()
@@ -497,7 +516,164 @@ class TestPutProfile:
         assert resp.status_code == 200
         stmt = mock_session.execute.call_args_list[1].args[0]
         set_clause = dict(stmt._post_values_clause.update_values_to_set)
-        assert "description_updated_at" not in set_clause
+        assert "intent_updated_at" not in set_clause
+
+
+# ---------------------------------------------------------------------------
+# PUT /profile — intent-change dispatch cooldown (start-matching + CV reanalysis)
+# ---------------------------------------------------------------------------
+
+
+class TestPutProfileIntentDispatchCooldown:
+    def _setup(self, mock_session, profile, cv_ids=()) -> None:
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_session.execute.return_value.scalars.return_value.all.return_value = list(cv_ids)
+
+    def test_first_ever_dispatch_is_never_throttled(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = None
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+
+    def test_dispatch_within_cooldown_is_throttled(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_dispatch_after_cooldown_expires_is_allowed(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=400)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+
+    def test_throttled_put_still_saves_profile_and_stamps_intent_updated_at(
+        self, test_client, mock_session, mock_send_message
+    ):
+        """The profile (and intent_updated_at) must always save immediately —
+        only the recompute dispatch itself is delayed by the cooldown."""
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "nouvelle intention"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["candidate_description"] == "nouvelle intention"
+        assert set_clause["intent_updated_at"] is not None
+        assert "last_intent_dispatch_at" not in set_clause
+        mock_send_message.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PUT /profile — automatic CV reanalysis dispatch on intent change
+# ---------------------------------------------------------------------------
+
+
+class TestPutProfileCvReanalysisDispatch:
+    def _setup(self, mock_session, profile, cv_ids=()) -> None:
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_session.execute.return_value.scalars.return_value.all.return_value = list(cv_ids)
+
+    def test_dispatches_cv_analysis_for_every_cv_without_retry_flags(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        cv_id_1, cv_id_2 = uuid.uuid4(), uuid.uuid4()
+        self._setup(mock_session, profile, cv_ids=[cv_id_1, cv_id_2])
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        queues = [c.args[0] for c in mock_send_message.call_args_list]
+        assert queues.count("start-matching") == 1
+        assert queues.count("cv-analysis") == 2
+        cv_analysis_bodies = [
+            c.args[1] for c in mock_send_message.call_args_list if c.args[0] == "cv-analysis"
+        ]
+        assert {b["cv_id"] for b in cv_analysis_bodies} == {str(cv_id_1), str(cv_id_2)}
+        assert all(
+            "retry_rome_only" not in b and "retry_quality_only" not in b
+            for b in cv_analysis_bodies
+        )
+
+    def test_no_cvs_dispatches_only_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        self._setup(mock_session, profile, cv_ids=[])
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+        assert mock_send_message.call_args.args[0] == "start-matching"
+
+    def test_throttled_dispatch_skips_cv_reanalysis_too(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile, cv_ids=[uuid.uuid4()])
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_one_cv_dispatch_failure_does_not_block_others_or_fail_request(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        cv_id_1, cv_id_2 = uuid.uuid4(), uuid.uuid4()
+        self._setup(mock_session, profile, cv_ids=[cv_id_1, cv_id_2])
+        # start-matching succeeds, first CV fails, second CV still gets sent.
+        mock_send_message.side_effect = [None, ServiceBusError("boom"), None]
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        assert mock_send_message.call_count == 3
 
 
 # ---------------------------------------------------------------------------

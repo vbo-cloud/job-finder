@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import CvAnalysisCard from "@/app/_components/CvAnalysisCard";
 import apiClient from "@/lib/api/client";
 import type { CvAnalysisOut } from "@/lib/api/types";
@@ -89,46 +89,19 @@ describe("CvAnalysisCard", () => {
     );
   });
 
-  describe("retry", () => {
-    it("shows a retry button when the analysis status is error", async () => {
+  describe("error status", () => {
+    it("shows the auto-retry message instead of a manual retry button", async () => {
       (apiClient.get as jest.Mock).mockResolvedValue({ data: analysis({ status: "error" }) });
 
       render(<CvAnalysisCard cvId={CV_ID} />);
 
       await waitFor(() =>
-        expect(screen.getByRole("button", { name: "Relancer l'analyse" })).toBeInTheDocument(),
+        expect(screen.getByText(/L'analyse de votre CV a échoué/)).toBeInTheDocument(),
       );
-    });
-
-    it("calls the retry endpoint and resumes polling on click", async () => {
-      (apiClient.get as jest.Mock)
-        .mockResolvedValueOnce({ data: analysis({ status: "error" }) })
-        .mockResolvedValueOnce({ data: analysis({ status: "done", ats_score: 90 }) });
-      (apiClient.post as jest.Mock).mockResolvedValue({});
-
-      render(<CvAnalysisCard cvId={CV_ID} />);
-
-      const retryButton = await screen.findByRole("button", { name: "Relancer l'analyse" });
-      fireEvent.click(retryButton);
-
-      await waitFor(() =>
-        expect(apiClient.post).toHaveBeenCalledWith(`/cv/${CV_ID}/analysis/retry`),
-      );
-      await waitFor(() => expect(screen.getByText("90")).toBeInTheDocument());
-    });
-
-    it("shows an inline error when the retry request itself fails", async () => {
-      (apiClient.get as jest.Mock).mockResolvedValue({ data: analysis({ status: "error" }) });
-      (apiClient.post as jest.Mock).mockRejectedValue(new Error("network"));
-
-      render(<CvAnalysisCard cvId={CV_ID} />);
-
-      const retryButton = await screen.findByRole("button", { name: "Relancer l'analyse" });
-      fireEvent.click(retryButton);
-
-      await waitFor(() =>
-        expect(screen.getByText("La relance a échoué — réessayez.")).toBeInTheDocument(),
-      );
+      expect(
+        screen.queryByRole("button", { name: "Relancer l'analyse" }),
+      ).not.toBeInTheDocument();
+      expect(apiClient.post).not.toHaveBeenCalled();
     });
   });
 });

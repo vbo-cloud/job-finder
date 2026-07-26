@@ -156,9 +156,13 @@ def _set_cv_status(cv_id: str, status: str) -> None:
 def _mark_rome_analyzed(cv_id: str) -> None:
     """Stamp cvs.rome_analyzed_at after a ROME extraction completes for this CV.
 
-    Compared against UserProfile.description_updated_at by GET /cv/ to decide whether a
-    manual reanalysis is worth offering — see
-    docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
+    Historically compared against UserProfile.description_updated_at by GET /cv/ to
+    offer a manual "reanalyze ROME codes" button (migration 031) — that button and its
+    rome_reanalysis_available flag are gone (see
+    docs/prompts/prompt-intent-driven-reanalysis.md): ROME reanalysis on intent change
+    is now automatic (put_profile dispatches it directly), so this timestamp currently
+    has no reader. Left in place rather than dropped — see column note in
+    shared/models.py.
 
     Args:
         cv_id: UUID of the CV record.
@@ -812,9 +816,16 @@ def _run_quality_analysis(
 def _handle_retry_quality_only(cv_id: str) -> None:
     """Handle a retry_quality_only cv-analysis message: re-run quality analysis only.
 
-    Manual retry from GET /cv/{id}/analysis status="error" (see
-    POST /cv/{id}/analysis/retry). Only the quality analysis re-runs — ROME
-    codes already exist on the profile and matching is untouched.
+    Sole producer today is _backfill_cv_analysis (agents/webapp/routers/cv.py),
+    self-healing GET /cv/{id}/analysis when a CV has no cv_analyses row and its
+    upload-time dispatch will never recur — not a user-facing manual retry
+    anymore: the POST /cv/{id}/analysis/retry button that used to send this
+    same flag on a status="error" analysis was removed once intent-driven
+    reanalysis made it redundant (see
+    docs/prompts/prompt-intent-driven-reanalysis.md; CvAnalysisCard.tsx now
+    shows a static message on error instead). Only the quality analysis
+    re-runs — ROME codes already exist on the profile and matching is
+    untouched.
 
     Args:
         cv_id: UUID string of the CV to retry.
@@ -832,9 +843,16 @@ def _handle_retry_quality_only(cv_id: str) -> None:
 def _handle_retry_rome_only(cv_id: str) -> None:
     """Handle a retry_rome_only cv-analysis message: re-run ROME extraction only.
 
-    Manual retry from POST /cv/{id}/rome/retry, offered when the profile's
-    candidate_description has changed more recently than this CV's last ROME
-    extraction. Only ROME extraction re-runs — CV quality analysis is untouched.
+    No current producer: POST /cv/{id}/rome/retry (the manual "reanalyze ROME
+    codes" button, offered when the profile's candidate_description had
+    changed more recently than this CV's last ROME extraction) was removed —
+    ROME reanalysis on intent change is now automatic instead (put_profile's
+    _dispatch_cv_reanalysis sends a plain cv-analysis message with no retry
+    flags, routed to _handle_new_cv_analysis's full ROME+quality run below, not
+    this branch). This handler and its retry_rome_only flag are left in place
+    rather than dropped — same rationale as CV.rome_analyzed_at in
+    shared/models.py (see docs/prompts/prompt-intent-driven-reanalysis.md).
+    Only ROME extraction re-runs — CV quality analysis is untouched.
     _merge_rome_codes reconciles rather than only adds, so codes no longer
     produced by this fresh extraction are removed from the profile, not just
     supplemented. See docs/prompts/prompt-cv-analysis-rome-reanalysis-button.md.
@@ -843,7 +861,7 @@ def _handle_retry_rome_only(cv_id: str) -> None:
     the CV to status="error": the CV already completed its initial analysis
     successfully, and downgrading it to "error" over a reanalysis hiccup would
     hide the working CV and its existing matches behind an error state instead
-    of simply leaving the manual retry button available for another attempt.
+    of leaving this code path available for another attempt.
 
     Args:
         cv_id: UUID string of the CV to retry.
@@ -1009,10 +1027,12 @@ def main() -> None:
     """Consume one cv-analysis message and route it to the matching handler.
 
     Three mutually exclusive branches, keyed on flags in the message payload:
-    retry_quality_only (re-run CV quality analysis only), retry_rome_only
-    (re-run ROME extraction only), or — the default — a full new-CV analysis
-    (ROME extraction, quality analysis, and dispatch of start-matching /
-    offer-fetch-request).
+    retry_quality_only (re-run CV quality analysis only — dispatched today by
+    _backfill_cv_analysis), retry_rome_only (re-run ROME extraction only — no
+    current producer, see _handle_retry_rome_only), or — the default, and the
+    only branch dispatched by both CV upload and _dispatch_cv_reanalysis on an
+    intent change — a full new-CV analysis (ROME extraction, quality analysis,
+    and dispatch of start-matching / offer-fetch-request).
     """
     configure_telemetry("cv-analysis")
     logger.info("rome_referentiel_loaded", entry_count=len(ROME_REFERENTIEL))

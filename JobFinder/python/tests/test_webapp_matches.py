@@ -58,9 +58,10 @@ def _make_match(score: float = 0.85) -> MagicMock:
     return match
 
 
-def _make_analysis(status: str = "done") -> MagicMock:
+def _make_analysis(status: str = "done", completed_at: str | None = None) -> MagicMock:
     analysis = MagicMock()
     analysis.status = status
+    analysis.completed_at = completed_at
     analysis.matched_skills = ["Python", "Docker"]
     analysis.points_forts = ["Expérience solide"]
     analysis.points_amelioration = [
@@ -78,13 +79,16 @@ def _make_analysis(status: str = "done") -> MagicMock:
 
 
 def _make_profile(
-    rome_codes: dict | None = None, commune_codes: list[str] | None = None
+    rome_codes: dict | None = None,
+    commune_codes: list[str] | None = None,
+    intent_updated_at: str | None = None,
 ) -> MagicMock:
     profile = MagicMock()
     profile.rome_codes = rome_codes or {
         "M1805": {"cv_ids": [str(TEST_CV_ID)], "label": "Dev info"}
     }
     profile.commune_codes = commune_codes or []
+    profile.intent_updated_at = intent_updated_at
     return profile
 
 
@@ -322,6 +326,83 @@ class TestGetMatches:
 
 
 # ---------------------------------------------------------------------------
+# GET /matches — analysis.stale
+# ---------------------------------------------------------------------------
+
+
+class TestGetMatchesStale:
+    def _get(self, test_client, mock_session, profile, match):
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+        resp = test_client.get("/matches")
+        assert resp.status_code == 200
+        return resp.json()["matches"][0]["analysis"]
+
+    def test_stale_when_intent_updated_after_completion(self, test_client, mock_session):
+        profile = _make_profile(intent_updated_at="2024-02-01T00:00:00+00:00")
+        match = _make_match(0.9)
+        match.analysis = _make_analysis(completed_at="2024-01-01T00:00:00+00:00")
+
+        body = self._get(test_client, mock_session, profile, match)
+
+        assert body["stale"] is True
+
+    def test_not_stale_when_intent_updated_before_completion(self, test_client, mock_session):
+        profile = _make_profile(intent_updated_at="2024-01-01T00:00:00+00:00")
+        match = _make_match(0.9)
+        match.analysis = _make_analysis(completed_at="2024-02-01T00:00:00+00:00")
+
+        body = self._get(test_client, mock_session, profile, match)
+
+        assert body["stale"] is False
+
+    def test_not_stale_when_intent_never_updated(self, test_client, mock_session):
+        profile = _make_profile(intent_updated_at=None)
+        match = _make_match(0.9)
+        match.analysis = _make_analysis(completed_at="2024-01-01T00:00:00+00:00")
+
+        body = self._get(test_client, mock_session, profile, match)
+
+        assert body["stale"] is False
+
+    def test_not_stale_when_completed_at_is_none(self, test_client, mock_session):
+        """A done row should always have completed_at set — this guards the
+        computation against raising if a row is ever malformed."""
+        profile = _make_profile(intent_updated_at="2024-02-01T00:00:00+00:00")
+        match = _make_match(0.9)
+        match.analysis = _make_analysis(completed_at=None)
+
+        body = self._get(test_client, mock_session, profile, match)
+
+        assert body["stale"] is False
+
+    def test_not_stale_when_status_is_not_done(self, test_client, mock_session):
+        profile = _make_profile(intent_updated_at="2024-02-01T00:00:00+00:00")
+        match = _make_match(0.9)
+        match.analysis = _make_analysis(status="processing", completed_at="2024-01-01T00:00:00+00:00")
+
+        body = self._get(test_client, mock_session, profile, match)
+
+        assert body["stale"] is False
+
+    def test_not_stale_when_no_analysis(self, test_client, mock_session):
+        profile = _make_profile(intent_updated_at="2024-02-01T00:00:00+00:00")
+        match = _make_match(0.9)
+        match.analysis = None
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get("/matches")
+
+        assert resp.status_code == 200
+        assert resp.json()["matches"][0]["analysis"] is None
+
+
+# ---------------------------------------------------------------------------
 # GET /matches/cv/{cv_id}
 # ---------------------------------------------------------------------------
 
@@ -410,6 +491,25 @@ class TestGetMatchesForCv:
         analysis = resp.json()["matches"][0]["analysis"]
         assert analysis["status"] == "done"
         assert analysis["matched_skills"] == ["Python", "Docker"]
+
+    def test_stale_computed_same_as_get_matches(self, test_client, mock_session):
+        """This endpoint is polled every few seconds by the frontend — the stale
+        flag must stay in sync here too, not just on GET /matches."""
+        cv = MagicMock()
+        cv.id = TEST_CV_ID
+        profile = _make_profile(intent_updated_at="2024-02-01T00:00:00+00:00")
+        match = _make_match(0.75)
+        match.analysis = _make_analysis(completed_at="2024-01-01T00:00:00+00:00")
+        mock_session.execute.side_effect = [
+            MagicMock(**{"scalar_one_or_none.return_value": cv}),
+            MagicMock(**{"scalar_one_or_none.return_value": profile}),
+            MagicMock(**{"scalars.return_value.all.return_value": [match]}),
+        ]
+
+        resp = test_client.get(f"/matches/cv/{TEST_CV_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["matches"][0]["analysis"]["stale"] is True
 
 
 # ---------------------------------------------------------------------------

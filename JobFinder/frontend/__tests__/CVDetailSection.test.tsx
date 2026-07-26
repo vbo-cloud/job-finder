@@ -30,7 +30,6 @@ const CV: CVData = {
   match_count: 0,
   unseen_count: 0,
   has_thumbnail: false,
-  rome_reanalysis_available: false,
 };
 
 function makeMatch(id: string): MatchOut {
@@ -193,38 +192,6 @@ describe("CVDetailSection — état de chargement du matching (bug 3)", () => {
 
     await waitFor(() => expect(screen.getByText("Aucune offre ne correspond")).toBeInTheDocument());
     expect(document.querySelectorAll(".animate-pulse").length).toBe(0);
-  });
-});
-
-describe("CVDetailSection — bouton de ré-analyse ROME", () => {
-  it("is not rendered when rome_reanalysis_available is false", async () => {
-    renderSection();
-    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${CV.id}`));
-
-    expect(
-      screen.queryByRole("button", { name: "Mettre à jour les métiers détectés" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("is rendered and wired to onRomeReanalyzed when rome_reanalysis_available is true", async () => {
-    const cv = { ...CV, rome_reanalysis_available: true };
-    (apiClient.post as jest.Mock).mockResolvedValue({});
-    const onRomeReanalyzed = jest.fn();
-    render(
-      <CVDetailSection
-        cvs={[cv]}
-        selectedCvId={cv.id}
-        onCvChange={jest.fn()}
-        onClose={jest.fn()}
-        onRomeReanalyzed={onRomeReanalyzed}
-      />,
-    );
-    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(`/matches/cv/${cv.id}`));
-
-    fireEvent.click(screen.getByRole("button", { name: "Mettre à jour les métiers détectés" }));
-
-    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(`/cv/${cv.id}/rome/retry`));
-    await waitFor(() => expect(onRomeReanalyzed).toHaveBeenCalledTimes(1));
   });
 });
 

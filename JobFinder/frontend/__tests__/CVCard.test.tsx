@@ -21,7 +21,6 @@ const baseCV: CVData = {
   match_count: 5,
   unseen_count: 2,
   has_thumbnail: false,
-  rome_reanalysis_available: false,
 };
 
 describe("CVCard", () => {

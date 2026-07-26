@@ -90,6 +90,40 @@ def commune_zone_condition(commune_codes: list[str]) -> ColumnElement[bool]:
     return or_(*conditions)
 
 
+def _mark_stale(match_out: MatchOut, match: Match, profile: UserProfile | None) -> MatchOut:
+    """Flag match_out.analysis as stale if it predates the profile's last intent change.
+
+    A "done" analysis was rendered from the profile's intent at the time it ran
+    (agents/match_analysis/main.py's own _build_intent_text uses both experience_level
+    and candidate_description) — if the intent changed after completed_at, the stored
+    analysis no longer reflects it. completed_at is nullable even on a "done" row in
+    theory (defensive only — the agent always sets it before flipping status), so a
+    missing value is treated as not-stale rather than raising.
+
+    Args:
+        match_out: Already-validated MatchOut for this match.
+        match: The same match's ORM row — completed_at isn't exposed on MatchAnalysisOut.
+        profile: The user's profile, already loaded once by the caller (or None).
+
+    Returns:
+        match_out unchanged, or a copy with analysis.stale=True.
+    """
+    analysis = match.analysis
+    if (
+        match_out.analysis is None
+        or match_out.analysis.status != "done"
+        or profile is None
+        or profile.intent_updated_at is None
+        or analysis is None
+        or analysis.completed_at is None
+        or profile.intent_updated_at <= analysis.completed_at
+    ):
+        return match_out
+    return match_out.model_copy(
+        update={"analysis": match_out.analysis.model_copy(update={"stale": True})}
+    )
+
+
 @router.get("", response_model=MatchesOut)
 def get_matches(
     user_id: str = Depends(get_current_user),
@@ -100,6 +134,10 @@ def get_matches(
     rome_codes are included at the top level (readonly — managed by GPT-4o-mini)
     so the frontend can display which codes were used for matching without a
     separate GET /profile call.
+
+    Each match's analysis.stale (see _mark_stale) flags a "done" analysis rendered
+    before the user's last intent change (experience_level/candidate_description) —
+    the frontend offers a paid retry for those.
 
     Returns an empty matches list if the user has no CV in the database.
 
@@ -133,7 +171,7 @@ def get_matches(
             )
         results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
-        matches = [MatchOut.model_validate(m) for m in results]
+        matches = [_mark_stale(MatchOut.model_validate(m), m, profile) for m in results]
     except SQLAlchemyError:
         # Base class is intentional — any DB error (connection lost, timeout)
         # should abort the response and return 500.
@@ -150,6 +188,10 @@ def get_matches_for_cv(
     session: Session = Depends(get_db),
 ) -> MatchesOut:
     """Return ranked matches for a specific CV owned by the authenticated user.
+
+    Each match's analysis.stale is computed the same way as GET /matches (see
+    _mark_stale) — this endpoint is polled every few seconds by the frontend, so the
+    flag must stay in sync there too, not just on the top-level list.
 
     Args:
         cv_id: UUID of the CV to fetch matches for.
@@ -188,7 +230,7 @@ def get_matches_for_cv(
             )
         results = session.execute(stmt).scalars().all()
         rome_codes = dict(profile.rome_codes) if profile else {}
-        matches = [MatchOut.model_validate(m) for m in results]
+        matches = [_mark_stale(MatchOut.model_validate(m), m, profile) for m in results]
     except HTTPException:
         raise
     except SQLAlchemyError:

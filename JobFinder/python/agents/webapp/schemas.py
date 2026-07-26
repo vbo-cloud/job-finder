@@ -123,6 +123,19 @@ class MatchAnalysisOut(BaseModel):
     why_good_candidate: str | None = None
     score_explanation: str | None = None
     questions_entretien_potentielles: list[str] = []
+    # Not a DB column — computed by the matches router (needs the user's profile,
+    # not just this row) and grafted on via model_copy after model_validate.
+    stale: bool = False
+
+    # Forces stale=False on every model_validate(from_attributes), regardless of what
+    # a source object exposes under that name — MatchAnalysis has no such column, but a
+    # test double (MagicMock) auto-vivifies a truthy attribute for any name accessed,
+    # which would otherwise leak through as stale=True before _mark_stale ever runs.
+    # The router is the only legitimate writer, via model_copy(update={"stale": ...}).
+    @field_validator("stale", mode="before")
+    @classmethod
+    def _stale_never_from_source(cls, v: object) -> bool:
+        return False
 
     # JSONB list columns are NULL until the agent writes a "done" row — a
     # pending/processing/error row must still validate.
@@ -220,6 +233,5 @@ class CVListItemOut(BaseModel):
     match_count: int
     unseen_count: int = 0
     has_thumbnail: bool
-    rome_reanalysis_available: bool = False
 
     model_config = ConfigDict(from_attributes=True)

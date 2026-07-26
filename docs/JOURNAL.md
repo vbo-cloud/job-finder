@@ -8932,3 +8932,134 @@ nécessaire.
   toujours monté de `DeleteAccountSection.tsx` qui a inspiré le pattern). Suite `jest` et
   `tsc --noEmit` rejoués propres après ces deux changements. Deuxième passage : APPROUVÉ, aucune
   remarque non-bloquante.
+
+---
+
+## PR #240 — feat: réanalyse CV et détection d'obsolescence des analyses de match pilotées par l'intention
+
+**Date :** 2026-07-26
+**Branche :** `feature/intent-driven-reanalysis` → `dev`
+
+### Contexte
+
+Deux boutons manuels existaient pour tenir les analyses IA à jour avec l'intention déclarée par
+l'utilisateur sur `/profile` (`experience_level`, `candidate_description`) : un bouton "reanalyser
+les codes ROME" sur la bibliothèque (`POST /cv/{id}/rome/retry`) et un bouton "relancer l'analyse"
+sur une analyse CV en erreur (`POST /cv/{id}/analysis/retry`). Aucun mécanisme équivalent n'existait
+pour signaler qu'une analyse de match (CV↔offre) déjà terminée était devenue obsolète après un
+changement d'intention. Cette PR remplace le premier bouton par un déclenchement automatique et
+gratuit, et ajoute la détection d'obsolescence manquante pour le second cas — voir
+`docs/prompts/prompt-intent-driven-reanalysis.md`.
+
+### Ce qui a été fait
+
+- **`migrations/versions/034_generalize_intent_tracking.py`** (nouveau) : renomme
+  `user_profiles.description_updated_at` (migration 031) en `intent_updated_at` — simple rename de
+  colonne, préserve les valeurs existantes — et ajoute `last_intent_dispatch_at` (nullable, pas de
+  backfill : `NULL` = "jamais dispatché", correct par construction).
+- **`shared/models.py`** : `UserProfile.intent_updated_at` (remplace `description_updated_at`) et
+  `UserProfile.last_intent_dispatch_at` (nouveau), avec commentaires expliquant leurs rôles distincts
+  — le premier est stampé sur tout changement d'intention et sert `_mark_stale` (routers/matches.py),
+  le second ne throttle que le dispatch de réanalyse. `CV.rome_analyzed_at` (migration 031) est laissé
+  en place mais n'a plus aucun lecteur maintenant que la réanalyse ROME sur changement d'intention est
+  automatique — commentaire mis à jour pour le documenter comme tel plutôt que de le supprimer (encore
+  une donnée valide, coût de rétention nul).
+- **`agents/webapp/routers/profile.py`** — `put_profile` : stampe `intent_updated_at`
+  inconditionnellement dès que `experience_level` OU `candidate_description` change (avant : seul
+  `candidate_description` comptait, sous l'ancien nom `description_updated_at`) — nécessaire car
+  `match_analysis`'s own `_build_intent_text` rend les deux champs, donc un changement du seul
+  `experience_level` rend aussi les analyses de match existantes obsolètes, pas seulement les codes
+  ROME. Ajout de `_dispatch_cv_reanalysis` : envoie un message `cv-analysis` simple (sans flag
+  `retry_rome_only`/`retry_quality_only`) pour chaque CV du user, routé vers la branche complète
+  ROME+qualité de `agents/cv_analysis/main.py` — gratuit, automatique, sans changement de crédits.
+  Le dispatch (`_dispatch_start_matching` + `_dispatch_cv_reanalysis`) est throttlé par
+  `INTENT_DISPATCH_COOLDOWN_SECONDS` (`shared/config.py`, 300s) pour qu'un utilisateur qui enchaîne
+  les sauvegardes de profil ne déclenche pas un volume illimité d'appels IA gratuits ;
+  `intent_updated_at`, lui, n'est jamais throttlé — il reflète toujours la dernière intention
+  sauvegardée, même quand le dispatch lui-même a été retardé par le cooldown.
+- **`agents/webapp/routers/matches.py`** : nouveau helper `_mark_stale`, qui marque
+  `MatchAnalysisOut.stale = True` sur une analyse `"done"` dont `completed_at` précède
+  `profile.intent_updated_at`. Branché dans `GET /matches` et `GET /matches/cv/{cv_id}` (ce dernier
+  étant pollé toutes les quelques secondes par le frontend, il doit rester synchronisé avec la liste
+  principale).
+- **`agents/webapp/schemas.py`** : `MatchAnalysisOut.stale` (nouveau champ, défaut `False`) — un
+  `field_validator(mode="before")` force `stale=False` sur tout `model_validate` (aucune colonne DB
+  ne porte ce nom ; sans ce garde-fou, un double de test type `MagicMock` auto-vivifierait un
+  attribut `stale` truthy). Seul le routeur peut le mettre à `True`, via
+  `model_copy(update={"stale": True})`, qui ne repasse jamais par la validation Pydantic — c'est ce
+  contournement de `model_copy` qui rend le contrat "obsolescence calculée uniquement côté routeur"
+  réellement infranchissable ailleurs.
+- **`agents/webapp/routers/cv.py`** : suppression complète de `POST /cv/{id}/rome/retry`,
+  `POST /cv/{id}/analysis/retry`, et du calcul de `rome_reanalysis_available` — les trois n'avaient
+  plus de raison d'être une fois la réanalyse ROME automatique.
+- **`agents/cv_analysis/main.py`** : docstring de `_mark_rome_analyzed` mise à jour (l'implémentation)
+  pour expliquer que `rome_analyzed_at` n'a plus de lecteur maintenant que le bouton manuel de
+  réanalyse ROME est supprimé. Passage doc-writer (voir plus bas) sur ce même fichier :
+  `_handle_retry_quality_only` et `_handle_retry_rome_only` référençaient encore les deux endpoints
+  supprimés comme seuls appelants ; `main()` mis à jour en cohérence.
+- **Frontend — `app/_components/MatchAnalysisPanel.tsx`** : badge "Obsolète" + `InfoTooltip` +
+  icône de relance (réutilise `onAnalyze`, même retry payant qu'avant) affichés quand
+  `analysis.stale`.
+- **`app/_components/InfoTooltip.tsx`** : déplacé depuis `app/profile/_components/InfoTooltip.tsx`
+  — désormais partagé entre `/profile` et le panneau de match. Import mis à jour dans
+  `app/profile/page.tsx`.
+- **`app/_components/CvAnalysisCard.tsx`** : bouton manuel "Relancer l'analyse" retiré (l'endpoint
+  n'existe plus) — l'état d'erreur affiche désormais un message statique expliquant que la
+  réanalyse aura lieu automatiquement si l'utilisateur modifie son expérience ou sa recherche.
+- **`app/_components/RomeReanalysisButton.tsx`** : supprimé, ainsi que son branchement dans
+  `CVDetailSection.tsx` et `HomeClient.tsx`. `libraryRefreshTrigger` (HomeClient.tsx) est
+  volontairement conservé — encore utilisé par 3 autres handlers, seul celui du bouton ROME a été
+  retiré.
+- **`lib/api/types.ts`** : `CVData.rome_reanalysis_available` retiré, `MatchAnalysisOut.stale`
+  ajouté.
+
+### Décisions techniques
+
+- **`_dispatch_cv_reanalysis` réutilise la branche complète du pipeline d'upload** (ROME + qualité)
+  plutôt qu'un chemin dédié plus étroit — aucun flag `retry_rome_only`. Conséquence non triviale :
+  `_handle_new_cv_analysis` passe `CV.status` par `"processing"` puis `"done"` avant que le matching
+  ne retourne des résultats, exactement comme à l'upload. Un CV déjà `"matched"` quitte donc
+  visiblement cet état le temps de la réanalyse — la bibliothèque et le panneau d'analyse de
+  `CVDetailSection.tsx` (`isAnalysisInProgress`) affichent brièvement un état "en cours". Accepté
+  comme compromis plutôt que d'ajouter un chemin de réanalyse plus étroit ; documenté dans la
+  docstring de `_dispatch_cv_reanalysis`.
+- **`intent_updated_at` jamais throttlé, `last_intent_dispatch_at` seul gate le dispatch** : sépare
+  "la dernière intention sauvegardée" (toujours à jour, sert le badge d'obsolescence) de "la
+  dernière fois où on a effectivement relancé les analyses" (throttlé) — un save pendant le cooldown
+  ne doit jamais faire manquer le badge d'obsolescence sous prétexte que le recalcul lui-même a été
+  reporté.
+- **`stale` forcé à `False` via `field_validator(mode="before")`, jamais assignable autrement qu'en
+  `model_copy`** : garantit que seul `_mark_stale` (qui a accès au profil complet) peut marquer une
+  analyse obsolète — un `model_validate` direct depuis la DB ne peut jamais accidentellement le
+  faire, y compris depuis un double de test.
+
+### Vérification
+
+- 401 tests backend / 158 tests frontend passent, `tsc --noEmit` et `eslint` propres — chiffres
+  rapportés par la session d'implémentation, non rejoués dans cette passe documentation (pas d'accès
+  Bash/`git diff` depuis ce rôle — vérification faite en relisant directement le contenu actuel des
+  fichiers cités ci-dessus plutôt qu'un diff).
+- Recherche de résidus de l'ancien nom `description_updated_at`, des endpoints supprimés
+  (`rome/retry`, `analysis/retry`), du composant supprimé (`RomeReanalysisButton`,
+  "Relancer l'analyse") et du champ supprimé (`rome_reanalysis_available`) sur tout le repo : aucun
+  résidu de production trouvé — seules des occurrences légitimes subsistent (tests asserting
+  l'absence du bouton, migrations historiques jamais réécrites, `_handle_retry_rome_only`/
+  `_handle_retry_quality_only` eux-mêmes, dont les docstrings ont été corrigées ci-dessous).
+
+Passage doc-writer : `agents/cv_analysis/main.py::_handle_retry_quality_only` attribuait encore son
+déclenchement à l'endpoint supprimé `POST /cv/{id}/analysis/retry` — corrigé pour attribuer le seul
+appelant réel actuel, `_backfill_cv_analysis` (auto-guérison de `GET /cv/{id}/analysis`, sans rapport
+avec un bouton manuel utilisateur). `_handle_retry_rome_only` attribuait de même son déclenchement à
+l'endpoint supprimé `POST /cv/{id}/rome/retry` — corrigé pour indiquer qu'aucun appelant réel ne
+subsiste aujourd'hui (branche laissée en place plutôt que supprimée, même rationale que
+`CV.rome_analyzed_at`). `main()` (`agents/cv_analysis/main.py`) mis à jour pour rester cohérent avec
+ces deux corrections. `_dispatch_cv_reanalysis` (`routers/profile.py`) complétée pour documenter
+l'effet de bord sur `CV.status` détaillé ci-dessus (Décisions techniques), non mentionné dans la
+docstring d'origine. `tests/README.md` : la ligne `test_webapp_cv.py` référençait encore
+`POST /cv/{cv_id}/analysis/retry` (supprimé de la suite de tests avec l'endpoint) — remplacée par la
+couverture réelle (`GET /cv/{cv_id}/analysis` incl. `_backfill_cv_analysis`) ; la ligne
+`test_webapp_matches.py` complétée pour mentionner `_mark_stale`, testé mais absent du tableau.
+Toutes les autres docstrings/commentaires touchés par cette PR (`migrations/versions/034_*.py`,
+`shared/models.py`, `routers/matches.py`, `schemas.py`, frontend `MatchAnalysisPanel.tsx`/
+`InfoTooltip.tsx`/`CvAnalysisCard.tsx`/`CVDetailSection.tsx`/`HomeClient.tsx`/`types.ts`) vérifiés
+exacts vis-à-vis du code actuel, rien d'autre à corriger.

@@ -46,6 +46,7 @@ function makeAnalysis(overrides: Partial<MatchAnalysisOut> = {}): MatchAnalysisO
     why_good_candidate: "4 ans d'expérience Python.",
     score_explanation: "Forte couverture des compétences demandées.",
     questions_entretien_potentielles: ["Comment gérez-vous les migrations ?"],
+    stale: false,
     ...overrides,
   };
 }

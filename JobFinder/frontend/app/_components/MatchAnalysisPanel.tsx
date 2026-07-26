@@ -1,5 +1,7 @@
 "use client";
 
+import { RefreshCw } from "lucide-react";
+import { InfoTooltip } from "@/components/InfoTooltip";
 import type { MatchAnalysisOut } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import AnalysisPointsList from "./AnalysisPointsList";
@@ -45,7 +47,24 @@ export default function MatchAnalysisPanel({ analysis, analysisPending, analysis
       {analysis?.status === "done" && analysis.verdict && (
         <p className="text-[15px] font-bold text-strong leading-snug mb-1.5">{analysis.verdict}</p>
       )}
-      <p className={cn(SECTION_TITLE_CLASS, "mb-3.5")}>Review de l&apos;agent</p>
+      <div className="flex items-center gap-1.5 mb-3.5">
+        <p className={SECTION_TITLE_CLASS}>Review de l&apos;agent</p>
+        {!inProgress && analysis?.status === "done" && analysis.stale && (
+          <>
+            <span className="rounded-full border border-default px-2 py-0.5 text-[10px] font-bold uppercase tracking-[.03em] text-warning">
+              Obsolète
+            </span>
+            <InfoTooltip text="L'analyse de cette offre n'a pas encore été actualisée depuis vos dernières modifications de votre profil." />
+            <button
+              onClick={onAnalyze}
+              aria-label="Relancer l'analyse de cette offre (consomme 1 crédit)"
+              className="flex h-5 w-5 items-center justify-center rounded-full text-muted transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+            >
+              <RefreshCw size={13} />
+            </button>
+          </>
+        )}
+      </div>
 
       {inProgress ? (
         <div className="flex flex-col items-center gap-3 py-2" role="status">

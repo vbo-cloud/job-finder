@@ -32,3 +32,8 @@ ANALYSIS_SEED = int(os.getenv("ANALYSIS_SEED", "42"))
 # faire disparaître l'offre — voir docs/prompts/prompt-matching-experience-penalty-and-skills-signal.md.
 EXPERIENCE_PENALTY_PER_YEAR_GAP = float(os.getenv("EXPERIENCE_PENALTY_PER_YEAR_GAP", "0.03"))
 EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
+# 5 minutes : borne la fréquence du dispatch start-matching + réanalyse CV déclenché par un
+# changement d'intention (PUT /profile) — un utilisateur qui enchaîne les sauvegardes ne doit
+# jamais déclencher un volume illimité d'appels IA, même gratuits. Le profil est toujours
+# sauvegardé immédiatement ; seul le déclenchement du recalcul est retardé.
+INTENT_DISPATCH_COOLDOWN_SECONDS = int(os.getenv("INTENT_DISPATCH_COOLDOWN_SECONDS", "300"))

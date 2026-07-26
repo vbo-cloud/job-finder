@@ -86,6 +86,7 @@ function makeAnalysis(overrides: Partial<import("@/lib/api/types").MatchAnalysis
     why_good_candidate: null,
     score_explanation: null,
     questions_entretien_potentielles: [],
+    stale: false,
     ...overrides,
   };
 }
