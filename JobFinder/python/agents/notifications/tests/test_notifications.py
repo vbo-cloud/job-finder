@@ -433,6 +433,41 @@ def test_load_cv_digest_entries_by_user_picks_top_scoring_unseen_match_and_exclu
     assert by_name["CV B"].top_offer_title == "Offer 1"
 
 
+def test_load_cv_digest_entries_by_user_orders_cards_by_cv_name_not_insertion_order(
+    db_session: Session,
+) -> None:
+    """The final ORDER BY cv_name makes card order deterministic regardless of DB insertion
+    order — CV B is inserted first here, but must still come back after CV A."""
+    cv_b = _add_cv(db_session, "user-1", "CV B")
+    cv_a = _add_cv(db_session, "user-1", "CV A")
+    offer = _add_offer(db_session)
+    _add_match(db_session, cv_b, offer, score=0.5, seen=False)
+    _add_match(db_session, cv_a, offer, score=0.5, seen=False)
+    db_session.flush()
+
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
+
+    assert [entry.cv_name for entry in entries["user-1"]] == ["CV A", "CV B"]
+
+
+def test_load_cv_digest_entries_by_user_breaks_score_ties_deterministically(
+    db_session: Session,
+) -> None:
+    """Two unseen matches with an identical score must not make the top-match pick flaky
+    across repeated calls — the Match.id tie-break in the window ordering covers this."""
+    cv_id = _add_cv(db_session, "user-1", "CV")
+    offer_1 = _add_offer(db_session, title="Offer 1")
+    offer_2 = _add_offer(db_session, title="Offer 2")
+    _add_match(db_session, cv_id, offer_1, score=0.8, seen=False)
+    _add_match(db_session, cv_id, offer_2, score=0.8, seen=False)
+    db_session.flush()
+
+    first = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])["user-1"][0].top_offer_title
+    second = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])["user-1"][0].top_offer_title
+
+    assert first == second
+
+
 def test_load_cv_digest_entries_by_user_batches_across_multiple_users(db_session: Session) -> None:
     """One call covering several user_ids returns each user's own entries, not mixed together."""
     cv_1 = _add_cv(db_session, "user-1", "CV 1")
@@ -500,6 +535,8 @@ class TestMainOrchestration:
     """Covers main()'s wiring: scheduling gate, per-recipient skips, and failure isolation."""
 
     def _mock_common_deps(self, mocker: MockerFixture) -> None:
+        """Patch main()'s infra deps shared by every test in this class (telemetry, DB
+        migrations, email client, scheduling gate defaulted to "on time")."""
         mocker.patch.object(_mod, "configure_telemetry")
         mocker.patch.object(_mod, "run_migrations")
         mocker.patch.object(_mod, "EmailClient")
