@@ -15,6 +15,7 @@ jest.mock("@/lib/auth/msalInstance", () => ({
 
 jest.mock("@/lib/auth/msalConfig", () => ({
   apiTokenRequest: { scopes: ["test-scope"] },
+  apiTokenRedirectRequest: { scopes: ["test-scope"], prompt: "select_account" },
 }));
 
 // `redirectInFlight` in client.ts is module-level state, so each test needs a
@@ -83,6 +84,17 @@ describe("apiClient request interceptor — single-flight acquireTokenRedirect",
     await flushMicrotasks();
 
     expect(mockAcquireTokenRedirect).toHaveBeenCalledTimes(1);
+    // Confirms client.ts reaches for apiTokenRedirectRequest (which carries
+    // `prompt: "select_account"`, forcing the account picker so Entra External
+    // ID's buggy auto-reconnect shortcut to the last IdP never triggers — see
+    // AADSTS165000) rather than plain apiTokenRequest for this call. The two
+    // mocked constants differ only in this field, so this only proves the
+    // right constant was picked here, not that apiTokenRequest itself lacks
+    // `prompt` — that real guarantee is asserted against the actual module in
+    // msalConfig.test.ts.
+    expect(mockAcquireTokenRedirect).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "select_account" }),
+    );
 
     resolveRedirect?.();
     await Promise.all([first, second]);

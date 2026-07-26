@@ -9702,3 +9702,85 @@ fond sombre de la page, avant que le panneau n'ait visuellement commencé — ex
   `docs/JOURNAL.md` PR #203) rejoué après le changement `pt`→`mt` : aucune régression, le
   `border-b` et l'empilement des deux colonnes restent identiques à l'avant.
 - Vignette du CV toujours entièrement visible (pas de recadrage) à la largeur de colonne réduite.
+
+## PR #248 — fix(frontend): forcer `prompt=select_account` sur les redirections MSAL pour éviter le bug Entra External ID AADSTS165000
+
+**Date :** 2026-07-26
+**Branche :** `fix/msal-force-select-account` → `dev`
+
+### Contexte
+
+Suite du bug de reconnexion Google/CIAM déjà corrigé une première fois par PR #224
+(`redirectInFlight`, single-flight sur `acquireTokenRedirect`). Vincent a reproduit le problème une
+nouvelle fois après ce correctif et cette fois récupéré le message exact renvoyé par la CIAM :
+
+```
+AADSTS165000: Invalid Request: The request did not include the required tokens for the user
+context. [...] Failure Reasons:[Token was not provided;]
+```
+
+Root cause identifiée (recherche web sur le code d'erreur, voir
+https://learn.microsoft.com/en-us/answers/questions/5649443/) : un bug distinct de la race
+condition déjà corrigée, documenté publiquement côté Microsoft Entra External ID et sans correctif
+officiel à ce jour. Un utilisateur avec une session CIAM « rester connecté » active déclenche, au
+retour sur l'app, un raccourci de reconnexion automatique vers le dernier fournisseur d'identité
+(Google) qui transmet mal le `code_challenge` PKCE requis dans l'échange avec Google — la CIAM
+rejette la réponse au retour avec `AADSTS165000`. Le contournement documenté côté client est de
+forcer explicitement le sélecteur de compte (`prompt=select_account`), ce qui fait toujours passer
+par le chemin normal (celui qui fonctionne).
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/lib/auth/msalConfig.ts`** :
+  - `loginRequest` porte désormais `prompt: PromptValue.SELECT_ACCOUNT` — couvre les six appels
+    `loginRedirect(loginRequest)` explicites répartis sur cinq fichiers (`AuthButton.tsx`,
+    `LoginButton.tsx`, `app/profile/page.tsx`, `app/feedback/page.tsx`, et `UploadSection.tsx` qui
+    en compte deux — un par point d'entrée non authentifié, drop de fichier et clic). Vérifié par
+    grep qu'aucun ne passe par `ssoSilent`/`acquireTokenSilent`, qui n'accepte pas ce paramètre.
+  - Nouvelle constante exportée `apiTokenRedirectRequest` (mêmes scopes que `apiTokenRequest`, plus
+    `prompt: PromptValue.SELECT_ACCOUNT`), dédiée au fallback `acquireTokenRedirect` de
+    l'intercepteur axios. Distincte de `apiTokenRequest` à dessein : cette dernière reste réservée au
+    seul flow silencieux (`acquireTokenSilent`, qui n'accepte pas `prompt`).
+- **`JobFinder/frontend/lib/api/client.ts`** : le fallback `acquireTokenRedirect` utilise désormais
+  `apiTokenRedirectRequest` au lieu de `apiTokenRequest`. Le correctif single-flight `redirectInFlight`
+  de PR #224 n'a pas été touché — les deux correctifs sont indépendants et cumulatifs.
+- **Tests** :
+  - `__tests__/client.test.ts` : l'assertion existante sur `acquireTokenRedirect` vérifie
+    maintenant qu'il reçoit `prompt: "select_account"` (confirme que `client.ts` utilise bien
+    `apiTokenRedirectRequest`, pas `apiTokenRequest`, pour cet appel).
+  - Nouveau `__tests__/msalConfig.test.ts` : importe le **vrai** module `msalConfig.ts` (pas un
+    mock) pour garantir que `apiTokenRequest` ne porte pas `prompt` et que `loginRequest` /
+    `apiTokenRedirectRequest` portent bien `select_account` — une régression future y serait
+    détectée même si `client.ts` ne change pas. `.env.local` n'étant pas chargé par Next.js quand
+    `NODE_ENV=test`, les 4 variables `NEXT_PUBLIC_ENTRA_*` requises par le fail-fast de
+    `msalConfig.ts` sont injectées à la main dans `process.env` avant le `require`.
+
+### Décisions techniques
+
+- **Effet secondaire assumé, pas une régression** : l'utilisateur devra désormais systématiquement
+  choisir son compte Google à chaque connexion interactive — plus de reconnexion « en un clic » via
+  le raccourci CIAM. Compromis délibéré pour éviter le bug Microsoft, à ne pas prendre pour un oubli
+  lors d'une revue future.
+
+### Vérification
+
+- `npm test` (`JobFinder/frontend`) : 180 tests passent (tous, pas seulement les fichiers touchés).
+- `npm run lint` et `npx tsc --noEmit` : aucune erreur.
+- Test manuel en navigateur (session Chrome, `localhost:3000`, serveur `next dev` local) : clic sur
+  « Se connecter » et lecture de l'URL de redirection réelle vers
+  `jobfinderapp.ciamlogin.com/.../oauth2/v2.0/authorize` — confirmé `prompt=select_account` présent
+  dans les paramètres de la requête envoyée à la CIAM. Reproduction complète du bug AADSTS165000
+  (attente d'expiration réelle du refresh token) non rejouée dans cette session — seule la
+  présence du paramètre dans le flux réel a été vérifiée.
+- Relecture des docstrings des fichiers touchés (TypeScript, `conventions-frontend`) :
+  - `msalConfig.ts` : le docstring de `apiTokenRequest` annonçait « Scopes requested at login »
+    alors que son seul consommateur est `acquireTokenSilent` dans `lib/api/client.ts` (vérifié par
+    grep) — corrigé. Celui de `apiTokenRedirectRequest` disait que `apiTokenRequest` était « also
+    used for `acquireTokenSilent` », impliquant à tort un second consommateur — reformulé.
+  - `__tests__/msalConfig.test.ts` : « `acquireTokenSilent` **rejects** a `prompt` param » (affirmait
+    un comportement runtime non vérifiable depuis cette passe) → reformulé en « whose type doesn't
+    accept a `prompt` param ».
+  - Décompte des appels `loginRedirect(loginRequest)` corrigé dans cette même entrée : trois → six,
+    répartis sur cinq fichiers (voir Ce qui a été fait).
+- Pas d'accès Bash/`git diff`/`gh` depuis ce rôle. Numéro de PR dérivé du dernier titre `## PR #247`
+  de ce fichier (+1 = #248) — non confirmé via GitHub dans cette passe.
