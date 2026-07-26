@@ -115,10 +115,11 @@ export default function LeftNavRail({
   return (
     <nav
       aria-label="Navigation entre les pages"
-      // bg-scrim (not bg-surface, used by the other pills in this section)
-      // is intentional here: Vincent asked for a dark, near-transparent
-      // background rather than a theme-adaptive one.
-      className="fixed left-4 top-1/2 z-40 hidden -translate-y-1/2 flex-col items-center gap-5 rounded-full border border-subtle bg-scrim px-1 py-6 shadow-lg md:flex"
+      // bg-transparent (not bg-surface, used by the other pills in this
+      // section) is intentional here: Vincent wants no background fill at
+      // all behind the rail, in both themes, superseding the earlier
+      // near-transparent bg-scrim.
+      className="fixed left-4 top-1/2 z-40 hidden -translate-y-1/2 flex-col items-center gap-5 rounded-full border border-subtle bg-transparent px-1 py-6 shadow-lg md:flex"
     >
       <NavIconButton
         label="Carte — zone de recherche"
