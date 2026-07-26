@@ -8,6 +8,12 @@ resource "azurerm_cognitive_account" "this" {
   kind                = "OpenAI"
   sku_name            = var.sku_name
 
+  # Required for AD/Managed Identity auth (PR #234) — the shared regional endpoint
+  # rejects token auth with a 400. Confirmed via local plan (azurerm ~4.72) that going
+  # from unset to a value here is an in-place update, not a destroy+recreate — matches
+  # the Azure Portal's "Generate Custom Domain Name" behavior on existing accounts.
+  custom_subdomain_name = var.name
+
   # Public access required for agents running outside the VNet (M1).
   # Restrict via private endpoint when self-hosted runners are available.
   public_network_access_enabled = true
