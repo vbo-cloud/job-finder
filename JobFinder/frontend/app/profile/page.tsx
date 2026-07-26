@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import posthog from "posthog-js";
 import { useCallback, useEffect, useState } from "react";
 
+import { InfoTooltip } from "@/components/InfoTooltip";
 import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
@@ -16,7 +17,6 @@ import { cn } from "@/lib/utils";
 import AdminRefillButton from "./_components/AdminRefillButton";
 import DeleteAccountSection from "./_components/DeleteAccountSection";
 import ExperienceToggle from "./_components/ExperienceToggle";
-import { InfoTooltip } from "./_components/InfoTooltip";
 import NotificationDaysToggle from "./_components/NotificationDaysToggle";
 import { useNotificationDaysAutosave } from "./_hooks/useNotificationDaysAutosave";
 

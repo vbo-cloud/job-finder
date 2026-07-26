@@ -8,7 +8,6 @@ export interface CVData {
   match_count: number;
   unseen_count: number;
   has_thumbnail: boolean;
-  rome_reanalysis_available: boolean;
 }
 
 export interface CVUploadResponse {
@@ -90,6 +89,9 @@ export interface MatchAnalysisOut {
   why_good_candidate: string | null;
   score_explanation: string | null;
   questions_entretien_potentielles: string[];
+  /** True when this "done" analysis predates the user's last intent change
+   * (experience_level/candidate_description) — see routers/matches.py _mark_stale. */
+  stale: boolean;
 }
 
 export interface MatchOut {

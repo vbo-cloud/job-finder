@@ -8,12 +8,6 @@ import AnalysisPointsList from "./AnalysisPointsList";
 
 const POLL_INTERVAL_MS = 3000;
 
-const RETRY_BUTTON_CLASS =
-  "px-4 py-3 rounded-[10px] font-semibold text-[13.5px] border border-soft bg-page text-strong " +
-  "hover:border-default transition-colors cursor-pointer " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default " +
-  "disabled:cursor-default disabled:text-muted disabled:hover:border-soft";
-
 // Same hue ramp as scoreTheme() in MatchItem.tsx, without the golden tier —
 // kept local until a third caller makes a shared utility worthwhile.
 // TODO(share): extract alongside scoreTheme() if MatchItem.tsx gets refactored.
@@ -29,11 +23,6 @@ interface Props {
 export default function CvAnalysisCard({ cvId }: Props) {
   const [analysis, setAnalysis] = useState<CvAnalysisOut | null>(null);
   const [fetchFailed, setFetchFailed] = useState(false);
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState(false);
-  // Bumped after a successful retry POST to re-enter the polling effect
-  // immediately instead of waiting for the next natural fetch.
-  const [pollGeneration, setPollGeneration] = useState(0);
   const hasTrackedViewedRef = useRef(false);
 
   useEffect(() => {
@@ -72,25 +61,7 @@ export default function CvAnalysisCard({ cvId }: Props) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [cvId, pollGeneration]);
-
-  function handleRetry() {
-    setRetrying(true);
-    setRetryError(false);
-    apiClient
-      .post(`/cv/${cvId}/analysis/retry`)
-      .then(() => {
-        // Optimistic: reflect "processing" immediately and restart the
-        // polling effect rather than waiting up to POLL_INTERVAL_MS.
-        setAnalysis((prev) => (prev ? { ...prev, status: "processing" } : prev));
-        setPollGeneration((n) => n + 1);
-      })
-      .catch((err: unknown) => {
-        console.error("[jf] cv analysis retry failed:", err);
-        setRetryError(true);
-      })
-      .finally(() => setRetrying(false));
-  }
+  }, [cvId]);
 
   return (
     // The frame (border/bg) is owned by the accordion wrapper in
@@ -99,17 +70,10 @@ export default function CvAnalysisCard({ cvId }: Props) {
       {fetchFailed ? (
         <p className="text-[13px] text-muted">Analyse indisponible pour ce CV</p>
       ) : analysis?.status === "error" ? (
-        <div className="flex flex-col gap-3 items-start">
-          <p className="text-[13px] text-destructive leading-relaxed">
-            L&apos;analyse de votre CV a échoué — vous pouvez la relancer.
-          </p>
-          <button onClick={handleRetry} disabled={retrying} className={RETRY_BUTTON_CLASS}>
-            {retrying ? "Relance…" : "Relancer l'analyse"}
-          </button>
-          {retryError && (
-            <p className="text-[12px] text-destructive">La relance a échoué — réessayez.</p>
-          )}
-        </div>
+        <p className="text-[13px] text-destructive leading-relaxed">
+          L&apos;analyse de votre CV a échoué. Elle sera relancée automatiquement si vous
+          modifiez votre expérience ou votre recherche dans votre profil.
+        </p>
       ) : !analysis || analysis.status === "pending" || analysis.status === "processing" ? (
         <p className="text-[13px] text-muted">Analyse de votre CV en cours…</p>
       ) : (
