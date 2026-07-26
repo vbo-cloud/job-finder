@@ -47,6 +47,7 @@ locals {
     offer-fetching = module.job_offer_fetching.id
     cv-analysis    = module.job_cv_analysis.id
     match-analysis = module.job_match_analysis.id
+    notifications  = module.job_notifications.id
   }
 }
 

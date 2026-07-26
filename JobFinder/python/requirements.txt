@@ -2,6 +2,7 @@
 sqlalchemy>=2.0
 psycopg2-binary
 pgvector
+azure-communication-email
 azure-identity
 azure-monitor-opentelemetry==1.8.8
 azure-servicebus

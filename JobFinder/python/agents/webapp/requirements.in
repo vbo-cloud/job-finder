@@ -7,6 +7,8 @@ sqlalchemy>=2.0
 psycopg2-binary
 pgvector
 alembic
+azure-communication-email
+azure-monitor-opentelemetry
 azure-servicebus
 azure-identity
 azure-storage-blob

@@ -99,8 +99,8 @@ variable "notification_sender_domain" {
 
 variable "notification_sender_username" {
   type        = string
-  default     = "jobfinder"
-  description = "Local part of the notification digest sender address (e.g. jobfinder for jobfinder@vincentboutin.dev)."
+  default     = "jobfinder_donotreply"
+  description = "Local part of the notification digest sender address (e.g. jobfinder_donotreply for jobfinder_donotreply@vincentboutin.dev)."
 
   validation {
     condition     = can(regex("^[a-z0-9._-]+$", var.notification_sender_username))

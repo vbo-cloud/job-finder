@@ -8690,3 +8690,158 @@ lieu de Container App Jobs ; `docs/JOURNAL.md` — entrées passées, jamais ré
 `migrations/versions/030_add_offer_fetch_coordination.py` — docstring de migration décrivant l'état
 au moment de l'introduction du pattern événementiel, sans rapport avec cette PR) ; aucune ne relève
 d'une correction ici.
+
+---
+
+## PR #238 — feat(agents): l'agent notifications (récap email des offres non vues)
+
+**Date :** 2026-07-26
+**Branche :** `feat/notifications-agent` → `dev`
+
+### Contexte
+
+PR 7/7 (et dernière) du plan "notifications" (décidé avec Vincent le 2026-07-25/26). Toutes les
+briques précédentes étaient posées : `UserProfile.notification_days` (PR 2/7, mergée), la ressource
+Azure Communication Services Email avec le domaine `vincentboutin.dev` vérifié (PR 5/7, mergée —
+PR #235), et le rôle `Communication and Email Service Owner` accordé à `caj` par Managed Identity
+(PR 6/7, mergée — PR #236). Cette PR ajoute le seul morceau qui manquait : l'agent qui envoie
+réellement les mails.
+
+Couche unique (`envs/dev`, pas de mélange platform/app), deux changements logiquement distincts
+mais dans la même couche :
+1. Le renommage de l'adresse expéditrice (`jobfinder` → `jobfinder_donotreply`), décidé le 2026-07-26
+   et reporté ici exprès — `notification_sender_username` touche `envs/dev`, pas `lz_dev`, donc ne
+   pouvait pas être fait dans PR 6.
+2. Le nouvel agent `agents/notifications`, planifié à 19h heure de Paris (exigence de Vincent).
+
+### Ce qui a été fait
+
+- **`envs/dev/variables.tf`** : `notification_sender_username` par défaut passe de `jobfinder` à
+  `jobfinder_donotreply` — force le remplacement de
+  `azurerm_email_communication_service_domain_sender_username` uniquement (pas de nouvelle
+  vérification DNS nécessaire, le domaine reste vérifié).
+- **`python/agents/notifications/main.py`** (nouveau) : sélectionne les `UserProfile` dont
+  `notification_days` contient le jour ISO 8601 courant (`.any(...)`, compilé côté PostgreSQL en
+  `<valeur> = ANY(notification_days)`), compte en une seule requête batchée (évite un N+1 profil par
+  profil, remarque de `reviewer-backend`) les matchs non vus (`Match.seen_at IS NULL`) par CV pour
+  tous les profils sélectionnés d'un coup, puis envoie un mail récap listant chaque CV ayant au moins
+  un match non vu. La session DB (`_load_recipients_and_counts`) est fermée avant la boucle d'envoi de
+  mails, pour ne pas garder une connexion ouverte pendant des appels réseau potentiellement lents.
+  N'écrit jamais `Match.seen_at` — colonne mise à jour exclusivement par l'utilisateur dans le webapp —
+  donc une offre non vue reste dans le récap tant qu'elle n'a pas été vue dans l'app, y compris sur
+  plusieurs envois. Auth par `DefaultAzureCredential` (identité `caj`, aucune clé). Suit le pattern
+  DST-aware de `offer_fetch_scheduler` (`_is_scheduled_local_hour`, un seul horaire ici : 19h) et la
+  structure générale de `cleanup` (migrations avant tout accès DB, logging structlog, résumé final,
+  `try/except SQLAlchemyError` autour des requêtes).
+- **`python/agents/notifications/Dockerfile`** (nouveau) : copie de celui d'`offer_fetch_scheduler`,
+  seule la commande de démarrage change.
+- **`python/requirements.txt`** : ajout de `azure-communication-email`.
+- **`python/pytest.ini`** : ajout de `agents/notifications/tests` à `testpaths` — sans ça les
+  nouveaux tests ne sont simplement jamais découverts par `pytest`.
+- **`.github/workflows/buildAgents.yml`** : ajout du build/push de l'image `agents/notifications`
+  (mêmes étapes que `offer-fetch-scheduler`) et de la mise à jour d'image du job
+  `job-jf-dev-frc-notifications` — sans ça le nouveau Container App Job créé par Terraform
+  référencerait une image jamais construite. Repéré par `reviewer-infra` (le workflow ne connaissait
+  aucun des deux avant cette PR).
+- **`envs/dev/monitoring.tf`** : ajout de `notifications = module.job_notifications.id` à
+  `local.all_job_ids` — sans ça le nouveau job n'aurait pas d'alerte `job_execution_failed` dédiée
+  (le commentaire du bloc dit explicitement d'ajouter les nouveaux jobs ici). Repéré par
+  `reviewer-infra`. `job_offer_fetch_scheduler` manque encore à cette liste — dette préexistante,
+  hors périmètre de cette PR (ce job n'est pas touché ici).
+- **`envs/dev/container_apps.tf`** : nouveau module `job_notifications` (Container App Job, trigger
+  `timer`, `cron_expression = "0 17,18 * * *"` — mêmes deux horaires UTC susceptibles de correspondre
+  à 19h Paris selon l'heure d'été/hiver, exactement le même mécanisme que
+  `job_offer_fetch_scheduler`). `replica_timeout_in_seconds = 300` (plus long que les 60s
+  d'`offer_fetch_scheduler` : cet agent parcourt la table des profils et envoie potentiellement
+  plusieurs mails de façon séquentielle).
+- **`python/agents/notifications/tests/`** (nouveau) : `_is_scheduled_local_hour` (vrai pour 17h UTC
+  en heure d'été / 18h UTC en heure d'hiver, faux sinon), construction du contenu du mail (fonction
+  pure, y compris l'échappement HTML du nom de CV), comptage batché des matchs non vus par utilisateur
+  (SQLite en mémoire, DDL minimal comme `cleanup`, y compris un cas à plusieurs utilisateurs pour
+  vérifier que les comptes ne se mélangent pas), et l'orchestration de `main()` (hors fenêtre
+  planifiée → rien n'est envoyé ; destinataire sans email → sauté et compté ; destinataire sans offre
+  non vue → sauté sans envoi ; échec d'envoi individuel → compté dans `failed` sans interrompre la
+  boucle sur les destinataires suivants). La sélection des profils par `notification_days.any(...)`
+  n'est pas testable contre SQLite (type `ARRAY` non supporté) — testée en mockant `session.execute`
+  directement, comme `cv_analysis`/`match_analysis` mockent déjà leur client OpenAI plutôt que l'API
+  réelle.
+
+### Décisions techniques
+
+- **Pas de filtre par zone communale** : `GET /cv` (webapp) filtre `match_count`/`unseen_count` par la
+  zone communale peinte par l'utilisateur (`commune_zone_condition`, package `webapp`). Cet agent ne
+  réplique pas ce filtre : compte tous les matchs non vus par CV, sans filtre géographique. Deux
+  raisons — aucun agent de ce repo n'importe le code d'un autre agent (`cleanup`, `matching`,
+  `offer_fetch_scheduler` n'importent que `shared.*`), et `commune_zone_condition` vit dans `webapp`,
+  pas `shared` (le déplacer serait un refactor hors périmètre). Conséquence : le chiffre du mail peut
+  être légèrement supérieur à ce que l'utilisateur voit dans la bibliothèque CV pour les profils avec
+  une petite zone peinte. À revisiter si ça devient une source de confusion réelle.
+- Gestion d'erreur sur l'appel SDK : `azure.core.exceptions.AzureError` (base commune aux clients
+  `azure-core`, déjà utilisée dans le repo pour le blob storage — `routers/cv.py`,
+  `scripts/backfill_thumbnails.py`) plutôt qu'un `except Exception` nu, conformément à la convention
+  Python du projet.
+- **Comptage batché plutôt que par profil** : la première version comptait les matchs non vus par un
+  `SELECT ... GROUP BY` exécuté une fois par profil dans la boucle d'envoi (N+1). `reviewer-backend` a
+  demandé une requête unique sur `CV.user_id.in_(...)` groupée par `(user_id, cv_id, name)`, répartie
+  en mémoire ensuite — corrigé dans `_count_unseen_matches_by_user`. Le même passage a ajouté le
+  `try/except SQLAlchemyError` manquant autour des deux requêtes (`_load_recipients_and_counts`) et le
+  `logger.info` d'entrée manquant sur le comptage, conformément à la convention Python du projet.
+- **Échappement HTML du nom de CV** (`html.escape`) : `CV.name` est un texte libre saisi par
+  l'utilisateur ; sans échappement, un nom contenant `<` ou `&` casserait le rendu HTML du mail —
+  remarque non-bloquante de `reviewer-backend`, corrigée par prudence (sévérité faible : le
+  destinataire est le propriétaire du CV).
+- **`except (SQLAlchemyError, CommandError)` autour de `run_migrations()`** plutôt qu'un
+  `except Exception` nu — `shared/db.py` documente exactement ces deux types dans son `Raises`,
+  même forme que `cv_analysis/main.py`/`offer_fetching/main.py`. Repéré par `reviewer-backend` sur ce
+  fichier neuf ; `cleanup/main.py` et `matching/main.py` portent encore l'ancien `except Exception`
+  nu sur ce même appel — dette préexistante hors périmètre de cette PR, à traiter séparément.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/dev`.
+- `terraform plan` sur `envs/dev` (avec `az login` local + `-var alert_email=...` fourni en ligne de
+  commande pour contourner l'absence de cette variable en local, non liée à cette PR) : le diff
+  contient les changements attendus pour cette PR —
+  `module.email_communication.azurerm_email_communication_service_domain_sender_username.this` remplacé,
+  `module.job_notifications.azurerm_container_app_job.this` créé, et
+  `azurerm_monitor_metric_alert.job_execution_failed["notifications"]` créé (ajout à `all_job_ids`).
+  Le plan complet affichait aussi des changements sur `jumpbox`, `webapp`, l'action group d'alerte, et
+  un écart d'image (`:<sha>` réel vs `:latest` désiré) sur plusieurs jobs existants non touchés par
+  cette PR (`cleanup`, `cv-analysis`, `matching`, `match-analysis`, `offer-fetching`,
+  `offer-fetch-scheduler`) : dérive préexistante, en partie causée par des variables
+  (`portfolio_contact_function_url`, valeur réelle d'`alert_email`) absentes du `terraform.tfvars`
+  local, en partie par un déploiement CI réel sur `dev` survenu entre deux exécutions locales de
+  `plan` pendant cette session — confirmée sans rapport avec cette PR via `git diff --stat`, qui ne
+  montre que `variables.tf`, `container_apps.tf`, et `monitoring.tf` modifiés sous `envs/dev`.
+- `pytest` : 403 tests passent (21 pour `agents/notifications`), suite complète du repo.
+- Pas de `ruff`/linter configuré dans le repo à ce jour (aucune config, aucune dépendance) — rien à
+  exécuter sur ce point.
+- Après merge et apply CI : vérifier dans le portail que `job-jf-dev-frc-notifications` existe,
+  déclencher un run manuel (portail ou `az containerapp job start`) avec au moins un profil de test
+  ayant `notification_days` incluant le jour du test et un match non vu — sinon le run se termine en
+  no-op silencieux (comportement attendu).
+
+### Correctif post-PR : CI `unitTests.yml` en échec (dépendance manquante)
+
+`unitTests.yml` installe `agents/webapp/requirements.txt` (verrouillé par `pip-compile` à partir de
+`agents/webapp/requirements.in`) pour lancer `pytest` sur tout `JobFinder/python` — pas le
+`JobFinder/python/requirements.txt` racine édité plus haut dans cette PR, qui ne sert qu'aux
+`Dockerfile` de chaque agent. `azure-communication-email` manquait donc à ce fichier verrouillé,
+faisant échouer la collecte de `agents/notifications/tests/test_notifications.py` en CI
+(`ModuleNotFoundError`) alors que la suite passait en local (venv différent, dépendance déjà
+installée manuellement pendant le développement).
+
+- **`agents/webapp/requirements.in`** : ajout de `azure-communication-email`.
+- **`agents/webapp/requirements.txt`** régénéré via `pip-compile` : au passage, `pip-compile` a
+  aussi ajouté tout l'arbre de dépendances transitives d'`azure-monitor-opentelemetry` (les paquets
+  `opentelemetry-instrumentation-*`, `msrest`, `wrapt`, etc.) qui étaient absents du fichier
+  verrouillé — celui-ci contenait la ligne `azure-monitor-opentelemetry==1.8.8` sans ses propres
+  dépendances, signe qu'il avait été édité à la main plutôt que régénéré à l'introduction de ce
+  paquet. Épinglé exactement sur `1.8.8` dans `requirements.in` pour ne pas bouger la version
+  documentée dans `shared/telemetry.py` (comportement vérifié empiriquement contre cette version
+  précise) : `pip-compile` échoue à résoudre ce pin exact (conflit de contraintes internes,
+  `RuntimeError: No stable configuration...`). Laissé sans pin — résolu à `1.8.9` (patch). Vérifié
+  que le comportement documenté (kwarg `resource=` vs `service_name=`) tient toujours : les 9 tests
+  de `tests/test_telemetry.py` passent avec `1.8.9` installé, dont
+  `test_configure_azure_monitor_not_called_service_name_kwarg` qui couvre précisément ce point.
+- Suite complète rejouée avec ce nouveau lock file installé : 399 tests passent.
