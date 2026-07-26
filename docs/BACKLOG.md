@@ -400,6 +400,16 @@ assigné à la UAMI, secrets `openai-api-key` supprimés). Il manquait le prére
 sur le compte — sans lui, l'endpoint reste l'URL régionale partagée qui refuse l'auth par token AD
 (400 BadRequest, logs prod du 2026-07-26). Posé en PR #244.
 
+### [surveillance] Suffixe d'endpoint OpenAI codé en dur dans modules/openai/outputs.tf
+
+Depuis la PR #246, `output "endpoint"` construit `"https://${var.name}.openai.azure.com/"` au lieu de
+lire l'attribut calculé `azurerm_cognitive_account.this.endpoint` — nécessaire car ce dernier avait mis
+en cache une valeur périmée dans le state (voir JOURNAL PR #246). Contrepartie assumée : si Azure change
+un jour le format d'URL pour ce type de ressource (`kind = "OpenAI"`), `terraform plan` ne le détectera
+jamais — la valeur ne dépend plus de l'état réel de la ressource. À revérifier périodiquement (ou si un
+futur 400/DNS error apparaît sur l'auth OpenAI) que `.openai.azure.com/` reste le bon suffixe, via
+`az cognitiveservices account show --name oai-jf-dev-frc --resource-group rg-jf-dev-frc-app --query properties.endpoint`.
+
 ---
 
 ## Qualité du code Terraform

@@ -9382,3 +9382,85 @@ manquant maintenant, tant qu'il n'y a aucun utilisateur en prod.
   (`Cognitive Services OpenAI User`, posé en PR #232) est toujours en place puisque le compte n'est
   pas recréé.
 - `docs/BACKLOG.md` : item hardening OpenAI (ligne ~394) refermé avec référence à cette PR.
+
+---
+
+## PR #246 — fix(openai): construire l'endpoint à sous-domaine au lieu de lire l'attribut ARM
+
+**Date :** 2026-07-26
+**Branche :** `feature/openai-endpoint-custom-domain` → `dev`
+
+### Contexte
+
+Après merge + apply CI de la PR #244, les agents continuaient à recevoir un 400 sur l'authentification
+par token AD. Le prompt initial (`docs/prompts/prompt-openai-endpoint-value.md`, rédigé avec Claude
+Cowork) posait comme diagnostic que `azurerm_cognitive_account.this.endpoint` **reste
+structurellement** l'URL régionale (`https://francecentral.api.cognitive.microsoft.com/`) quel que
+soit `custom_subdomain_name`, et proposait de construire l'URL explicitement pour contourner cette
+limitation supposée permanente.
+
+**Ce diagnostic était faux — vérifié avant tout commit.** `az cognitiveservices account show` sur le
+compte réel (`oai-jf-dev-frc`) retourne déjà `properties.endpoint = "https://oai-jf-dev-frc.openai.azure.com/"`
+et chaque entrée de `properties.endpoints` pointe vers la même URL — l'attribut ARM reflète bien
+`custom_subdomain_name`, contrairement à l'hypothèse du prompt. Le vrai problème, confirmé par un
+`terraform plan` local **sans aucun changement de code** : le secret Key Vault `openai-endpoint`
+(une seule version, datée du 2026-05-07) et les variables d'environnement `AZURE_OPENAI_ENDPOINT`
+dérivées de `module.openai.endpoint` contenaient encore l'ancienne URL régionale — l'apply de la PR
+#244 a mis en cache dans le state Terraform la valeur d'avant la propagation Azure du sous-domaine
+(course entre l'apply et la propagation asynchrone côté control plane Azure), et aucun push sur `dev`
+depuis n'a redéclenché de plan/apply pour rattraper ce drift.
+
+C'est la **deuxième PR d'affilée** dont l'hypothèse technique de départ (rédigée par Claude Cowork)
+s'avère fausse à la vérification — voir aussi la révision `ForceNew` de la PR #244 elle-même. Signalé
+explicitement à Vincent dans la description de cette PR, pas seulement documenté ici après coup.
+
+### Ce qui a été fait
+
+- **`modules/openai/outputs.tf`** : la sortie `endpoint` ne lit plus
+  `azurerm_cognitive_account.this.endpoint` — elle construit `"https://${var.name}.openai.azure.com/"`
+  directement. Le suffixe `.openai.azure.com/` n'est pas une supposition : confirmé par la requête
+  `az cognitiveservices account show` ci-dessus, sur ce compte précis.
+
+### Décisions techniques
+
+- **Corriger le WHY plutôt que de reprendre le diagnostic du prompt tel quel** : le commentaire de
+  sortie explique la vraie cause (valeur mise en cache avant propagation, jamais rattrapée faute
+  d'un nouveau plan/apply déclenché), pas une limitation permanente de l'attribut ARM qui n'existe
+  pas. Une description qui dirait "reste toujours l'URL régionale" serait aussi fausse que
+  l'hypothèse `ForceNew` corrigée en PR #244.
+- **Construire plutôt que se contenter d'un nouvel apply qui aurait suffi** : un `terraform plan`
+  sans changement de code montre déjà la dérive et la corrigerait au prochain apply. Mais le workflow
+  du dépôt exige une PR pour déclencher cet apply de toute façon, et la production a déjà cassé une
+  fois sur cette course de propagation — rendre la valeur connue au moment du plan (au lieu de
+  dépendre d'un attribut calculé potentiellement pas encore à jour) élimine la classe de bug, pas
+  seulement l'occurrence actuelle.
+- **Propagation automatique aux consommateurs, sans autre fichier à toucher** : `local.openai_endpoint`
+  (`container_apps.tf:49`) et `module.secret_openai_endpoint` (`envs/dev/openai.tf:47-56`) lisent
+  déjà `module.openai.endpoint` — confirmé par `terraform plan` complet que la correction se propage
+  à `job_cv_analysis`, `job_match_analysis`, `job_offer_fetching` et `webapp` (les 4 seuls
+  consommateurs directs de `AZURE_OPENAI_ENDPOINT`, cohérent avec les modèles documentés en
+  commentaire dans `envs/dev/openai.tf`) sans qu'aucun autre fichier n'ait besoin de changer.
+  Ce sont des valeurs d'environnement littérales (pas des références à un secret Key Vault côté
+  Container App), donc l'apply crée directement une nouvelle révision avec la bonne valeur.
+
+### Vérification
+
+- `az cognitiveservices account show` (lecture seule) confirmant `properties.endpoint` et
+  `properties.endpoints` déjà alignés sur le sous-domaine — infirme le diagnostic initial du prompt.
+- `az keyvault secret show`/`list-versions` (lecture seule) confirmant que le secret `openai-endpoint`
+  n'a qu'une version, datée d'avant l'apply de la PR #244 — confirme le symptôme réel.
+- `terraform fmt -check` propre sur `modules/openai/outputs.tf` ; `terraform validate` propre sur
+  `envs/dev`.
+- `terraform plan` complet (variables `alert_email`/`portfolio_contact_function_url` de substitution,
+  comme en PR #244) : `AZURE_OPENAI_ENDPOINT` passe de l'URL régionale à
+  `https://oai-jf-dev-frc.openai.azure.com/` sur exactement les 4 ressources attendues
+  (`job_cv_analysis`, `job_match_analysis`, `job_offer_fetching`, `webapp`), plus le secret KV lui-même
+  — aucune ressource recréée pour ce changement.
+- Drift hors-scope toujours présent (VM jumpbox + planning d'extinction à remplacer,
+  `workload_profile_name` du frontend) — inchangé depuis la PR #244, non corrigé ici, signalé à
+  nouveau dans la description de PR.
+- **Reste à faire après merge + apply CI, obligatoire, pas seulement le plan** (leçon de la PR #244) :
+  rejouer un cycle `offer_fetching` réel et confirmer un `openai_call_completed` avec `total_tokens`
+  non nul dans les logs — seule preuve que l'URL choisie fonctionne réellement en authentification par
+  token. Revérifier au passage que le role assignment `caj` est toujours présent (simple confirmation,
+  aucune recréation attendue ici).
