@@ -87,7 +87,7 @@ if not _frontend_url:
 class Recipient:
     """One opted-in profile eligible for today's digest.
 
-    Built inside _load_recipients_and_counts's `with get_session()` block, copying every
+    Built inside _load_recipients_and_entries's `with get_session()` block, copying every
     field the caller needs off the ORM row — the session closes before this dataclass is
     returned, so touching a lazy/unloaded UserProfile attribute afterward is not an option.
     """
@@ -100,7 +100,14 @@ class Recipient:
 
 @dataclass(frozen=True)
 class CvDigestEntry:
-    """One CV's digest entry: its unseen-match count plus its best-scoring unseen match."""
+    """One CV's digest entry: its unseen-match count plus its best-scoring unseen match.
+
+    top_offer_location is Offer.location, falling back to Offer.department when
+    Offer.location is blank (some offers only carry a department code), and can be the
+    empty string if both are blank — see _load_cv_digest_entries_by_user. _offer_line
+    branches on that empty-string case to drop the location segment entirely rather than
+    render a stray separator.
+    """
 
     cv_name: str | None
     unseen_count: int
@@ -173,7 +180,9 @@ def _load_cv_digest_entries_by_user(
     Returns:
         Mapping of user_id to CvDigestEntry list, one entry per CV with at least one
         unseen match. A user_id with no unseen matches is absent from the mapping rather
-        than present with an empty list.
+        than present with an empty list. Each entry's top_offer_location falls back to
+        Offer.department when Offer.location is blank, and can be the empty string when
+        both are blank — see CvDigestEntry.
 
     Raises:
         SQLAlchemyError: If the query fails.
@@ -220,7 +229,7 @@ def _load_cv_digest_entries_by_user(
     return entries_by_user
 
 
-def _load_recipients_and_counts(
+def _load_recipients_and_entries(
     today_isoweekday: int,
 ) -> tuple[list[Recipient], dict[str, list[CvDigestEntry]]]:
     """Fetch today's opted-in profiles and their unseen-match digest entries in one session.
@@ -728,7 +737,7 @@ def main() -> None:
         raise
 
     today_isoweekday = now_utc.astimezone(PARIS_TZ).isoweekday()
-    recipients, entries_by_user = _load_recipients_and_counts(today_isoweekday)
+    recipients, entries_by_user = _load_recipients_and_entries(today_isoweekday)
 
     client = EmailClient(f"https://{_endpoint_hostname}", DefaultAzureCredential())
 

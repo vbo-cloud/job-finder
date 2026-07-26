@@ -13,7 +13,7 @@ mocking session.execute directly rather than against a real DB, the same pattern
 cv_analysis/match_analysis already use for mocking _openai_client instead of a real
 OpenAI client.
 
-main()'s orchestration tests mock _load_recipients_and_counts directly rather than its
+main()'s orchestration tests mock _load_recipients_and_entries directly rather than its
 two DB-touching components — it is the single seam between the DB-facing half of main()
 (one query batched across every opted-in profile, see its docstring for why) and the
 per-recipient send loop under test here.
@@ -471,7 +471,7 @@ class TestMainOrchestration:
     def test_nothing_sent_outside_scheduled_window(self, mocker: MockerFixture) -> None:
         self._mock_common_deps(mocker)
         mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=False)
-        load_recipients = mocker.patch.object(_mod, "_load_recipients_and_counts")
+        load_recipients = mocker.patch.object(_mod, "_load_recipients_and_entries")
 
         _mod.main()
 
@@ -481,7 +481,7 @@ class TestMainOrchestration:
         self._mock_common_deps(mocker)
         recipient = _mod.Recipient(user_id="user-1", email=None, display_name=None, notification_days=[3])
         mocker.patch.object(
-            _mod, "_load_recipients_and_counts", return_value=([recipient], {})
+            _mod, "_load_recipients_and_entries", return_value=([recipient], {})
         )
         send_digest = mocker.patch.object(_mod, "_send_digest")
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
@@ -506,7 +506,7 @@ class TestMainOrchestration:
         )
         mocker.patch.object(
             _mod,
-            "_load_recipients_and_counts",
+            "_load_recipients_and_entries",
             return_value=([recipient], {}),
         )
         send_digest = mocker.patch.object(_mod, "_send_digest")
@@ -536,7 +536,7 @@ class TestMainOrchestration:
             "user-2": [_make_cv_entry(cv_name="CV B", unseen_count=1)],
         }
         mocker.patch.object(
-            _mod, "_load_recipients_and_counts", return_value=(recipients, entries_by_user)
+            _mod, "_load_recipients_and_entries", return_value=(recipients, entries_by_user)
         )
         mocker.patch.object(_mod, "_build_email_content", return_value=("text", "html"))
         send_digest = mocker.patch.object(
