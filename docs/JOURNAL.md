@@ -8570,3 +8570,61 @@ protéger le domaine) — protection ajoutée pour rester cohérent ; les `valid
 niveau du module lui-même pour rester réutilisable sans dépendre d'un futur appelant discipliné ; le
 fichier `communication_email.tf` renommé en `email_communication.tf` pour reprendre le nom du module à
 l'identique, comme `servicebus.tf`/`openai.tf` le font pour leurs modules respectifs.
+
+---
+
+## PR #236 — feat(lz_dev): accorder à caj le rôle Communication and Email Service Owner
+
+**Date :** 2026-07-26
+**Branche :** `feat/acs-email-rbac` → `dev`
+
+### Contexte
+
+PR 6/7 du plan "notifications" (recap email des nouvelles offres par CV, décidé avec Vincent le
+2026-07-25/26). PR 5/7 (`feat/acs-email-resource`, mergée — PR #235) a créé la ressource Azure
+Communication Services Email (`acs-jf-dev-frc`, domaine personnalisé `vincentboutin.dev` vérifié).
+Cette PR pose uniquement le rôle IAM permettant à `caj` d'envoyer des mails via cette ressource par
+Managed Identity — aucun code applicatif touché. Le job consommateur (`agents/notifications`) est PR
+7/7, hors périmètre ici, de même que le renommage de l'adresse expéditrice
+(`jobfinder` → `jobfinder_donotreply`), reporté à PR 7 car c'est un changement `envs/dev` qui ne peut
+pas être mélangé avec ce changement `lz_dev` (règle Git Flow du projet : une PR ne mélange jamais
+platform et app).
+
+### Ce qui a été fait
+
+- **`envs/lz_dev/rbac.tf`** : nouveau bloc à la suite de `caj_openai_user`, même triptyque que les
+  rôles `caj` existants — un `data "azurerm_communication_service"` pour retrouver la ressource créée
+  dans `envs/dev` (invisible depuis le state `lz_dev` sans ce lookup), puis un
+  `azurerm_role_assignment.caj_communication_owner` scopé dessus avec
+  `principal_id = azurerm_user_assigned_identity.caj.principal_id` et
+  `role_definition_name = "Communication and Email Service Owner"`.
+
+### Décisions techniques
+
+- Rôle choisi : `Communication and Email Service Owner` (GUID `09976791-48a7-449e-bb21-39d1a415f350`).
+  Ce rôle n'est pas documenté noir sur blanc par Microsoft comme le minimum requis pour l'envoi de mail
+  par Entra ID (la doc officielle mentionne des dataActions `acs.email.read`/`acs.email.write` sans
+  préciser quel rôle intégré les porte) — un rôle custom à 2 permissions suffirait en théorie au strict
+  nécessaire. Choisi quand même car c'est un vrai rôle intégré Azure confirmé (nom et GUID vérifiés via
+  plusieurs sources tierces), et parce que ce projet privilégie déjà des rôles intégrés larges mais
+  scopés à une seule ressource plutôt que des rôles custom sur-mesure (`caj_servicebus_owner` fait de
+  même avec `Azure Service Bus Data Owner`). `terraform plan` confirme que `role_definition_name`
+  résout sans erreur — pas besoin de chercher un nom alternatif.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : propres sur `envs/lz_dev`.
+- `terraform plan` sur `envs/lz_dev` (avec `sp_github_object_id` substitué localement via
+  `az ad sp list --display-name sp-jf-github`, absent du tfvars gitignored) : une seule addition,
+  `azurerm_role_assignment.caj_communication_owner`, aucun autre changement.
+- `terraform plan` sur `envs/dev` : non rejoué avec de vraies valeurs (nécessite les secrets
+  `ALERT_EMAIL`/`PORTFOLIO_CONTACT_FUNCTION_URL`, non disponibles localement, seulement en secrets
+  GitHub Actions). Confirmé par un autre moyen tout aussi concluant : `git diff --stat` contre
+  `origin/dev` ne montre que `envs/lz_dev/rbac.tf` modifié, aucun fichier sous `envs/dev` — un diff
+  Terraform sur une couche ne peut pas changer si aucun fichier ni variable de cette couche n'a bougé.
+  Confirmation supplémentaire via la CI (`terraformPlan.yml`, qui dispose des vrais secrets) à l'ouverture
+  de la PR.
+- Aucun `apply` effectué (CI-only, convention du projet). Après merge + apply CI : vérification
+  différée sur le portail Azure (IAM de `acs-jf-dev-frc`, confirmer que `id-jf-dev-frc-caj` apparaît
+  avec le rôle `Communication and Email Service Owner`). Pas de test applicatif possible dans cette PR
+  (aucun agent n'utilise encore ce rôle — c'est PR 7/7).
