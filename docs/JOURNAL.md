@@ -9369,11 +9369,16 @@ manquant maintenant, tant qu'il n'y a aucun utilisateur en prod.
 - `terraform fmt -check` propre sur `modules/openai/main.tf` (le seul fichier touché) ;
   `terraform validate` propre sur `envs/dev`.
 - `terraform plan` local (scopé puis complet) : seul `module.openai.azurerm_cognitive_account.this`
-  change, en `update in-place` — pas de destroy, pas d'impact sur les 3 déploiements de modèles ni sur
-  le secret Key Vault `openai-endpoint` (référence `module.openai.endpoint`, dépendance suivie sans
-  action Terraform requise).
+  change, en `update in-place` — pas de destroy, pas d'impact sur les 3 déploiements de modèles. Le
+  secret Key Vault `openai-endpoint` (`module.secret_openai_endpoint`, référence
+  `module.openai.endpoint`) n'apparaît pas dans ce plan local car `endpoint` reste un attribut
+  "inchangé" tant que l'apply réel n'a pas eu lieu — Terraform ne peut pas prédire la nouvelle URL
+  avant que l'API Azure ne la retourne après le PATCH. Sa mise à jour effective (secret KV + toute
+  valeur consommée par `container_apps.tf`/`webapp.tf`) n'est donc vérifiable qu'après l'apply CI.
 - Reste à faire après merge + apply CI (documenté dans la description de PR) : rejouer un cycle
-  `offer_fetching` réel et confirmer un `openai_call_completed` avec `total_tokens` non nul ; vérifier
-  manuellement que le role assignment `caj` (`Cognitive Services OpenAI User`, posé en PR #232) est
-  toujours en place puisque le compte n'est pas recréé.
+  `offer_fetching` réel et confirmer un `openai_call_completed` avec `total_tokens` non nul ;
+  confirmer dans le portail que le secret `openai-endpoint` reflète bien la nouvelle URL à sous-domaine
+  (et non plus l'URL régionale partagée) ; vérifier manuellement que le role assignment `caj`
+  (`Cognitive Services OpenAI User`, posé en PR #232) est toujours en place puisque le compte n'est
+  pas recréé.
 - `docs/BACKLOG.md` : item hardening OpenAI (ligne ~394) refermé avec référence à cette PR.
