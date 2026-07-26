@@ -201,7 +201,7 @@ export default function LibrarySection({
             <div className="min-w-0">
               <h1 className="m-0 text-[22px] font-normal tracking-[-0.015em] leading-[1.05] text-strong">Bibliothèque</h1>
               <p className="mt-[9px] text-[13.5px] text-hint">
-                De nouvelles offres sont recherchées chaque jour à 12h et 20h pour chacun de vos CVs.
+                De nouvelles offres sont recherchées chaque jour à 18h pour chacun de vos CVs.
               </p>
             </div>
             <div className="flex flex-none items-center gap-[9px]">

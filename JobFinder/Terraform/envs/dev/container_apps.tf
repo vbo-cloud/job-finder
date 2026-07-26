@@ -31,7 +31,7 @@ module "container_app_environment" {
 # Agent 3 — Offer Fetching (queue: offer-fetch-request — event-driven, see module below)
 # Agent 4 — CV Analysis (queue: cv-analysis)
 # Agent 5 — Match Analysis (queue: match-analysis)
-# Agent 6 — Offer Fetch Scheduler (timer: 12:00 and 20:00 Europe/Paris local time — see module below)
+# Agent 6 — Offer Fetch Scheduler (timer: 18:00 Europe/Paris local time — see module below)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -173,7 +173,7 @@ module "job_cleanup" {
 # docs/prompts/prompt-remove-offer-distillation.md). Authenticates to Azure OpenAI via
 # the shared Managed Identity (AZURE_CLIENT_ID below) — no API key secret needed.
 # Event-driven since docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md:
-# this agent no longer knows the time of day at all. The DST-safe 12:00/20:00 Europe/Paris
+# this agent no longer knows the time of day at all. The DST-safe 18:00 Europe/Paris
 # full-refresh trigger (Azure Container Apps' schedule trigger only supports UTC cron
 # expressions with no timezone/DST awareness) now lives entirely in the separate
 # job_offer_fetch_scheduler below, which just publishes a message on this queue — see that
@@ -255,12 +255,12 @@ module "job_offer_fetching" {
   ]
 }
 
-# Agent 6 — Offer Fetch Scheduler (timer: 12:00 and 20:00 Europe/Paris local time)
+# Agent 6 — Offer Fetch Scheduler (timer: 18:00 Europe/Paris local time)
 # Relais planifié pour offer_fetching, désormais purement événementiel (voir job_offer_fetching
 # ci-dessus). Azure Container Apps' schedule trigger only supports UTC cron expressions with no
-# timezone/DST awareness — this fires at every UTC hour that could map to 12:00/20:00 Europe/Paris
-# under either CET (11,19 UTC) or CEST (10,18 UTC); the agent's own _is_scheduled_local_hour()
-# (agents/offer_fetch_scheduler/main.py) no-ops the two firings that don't match the current DST
+# timezone/DST awareness — this fires at every UTC hour that could map to 18:00 Europe/Paris
+# under either CET (17 UTC) or CEST (16 UTC); the agent's own _is_scheduled_local_hour()
+# (agents/offer_fetch_scheduler/main.py) no-ops the firing that doesn't match the current DST
 # state. See docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
 module "job_offer_fetch_scheduler" {
   source = "../../modules/container_app_job"
@@ -270,7 +270,7 @@ module "job_offer_fetch_scheduler" {
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   environment_id             = module.container_app_environment.id
   trigger_type               = "timer"
-  cron_expression            = "0 10,11,18,19 * * *"
+  cron_expression            = "0 16,17 * * *"
   replica_timeout_in_seconds = 60
   image                      = "${module.container_registry.login_server}/agents/offer-fetch-scheduler:latest"
   identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
