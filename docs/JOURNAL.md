@@ -9653,3 +9653,52 @@ comme spam".
     celle qui existe, à l'inverse de la convention du projet ("no premature complexity").
     Si un vrai besoin d'expiration apparaît un jour, l'ajouter à ce moment-là, avec ses propres
     tests, plutôt que de porter un paramètre mort dans l'intervalle.
+
+## PR #247 — fix(frontend): élargir "Vos correspondances" et supprimer le trait vertical résiduel
+
+**Date :** 2026-07-26
+**Branche :** `feature/correspondances-width-fix` → `dev`
+
+### Contexte
+
+Retour direct de Vincent sur la page CV (`CVDetailSection.tsx`) : le texte d'analyse du CV occupe
+trop de place à gauche par rapport à la liste des correspondances à droite, et un petit trait
+vertical de 1px « qui dépasse » est visible tout en haut à gauche du bloc « Vos correspondances »,
+avec l'apparence d'un glitch.
+
+Vérifié en navigateur (session locale, CV `Willis-DELAMOUR`) avant tout correctif : le trait
+n'est pas un artefact aléatoire mais la continuation logique du diviseur `border-r` (desktop) /
+`border-b` (mobile) porté par la colonne de gauche. Cette bordure est posée sur l'élément qui a
+aussi le `pt-2`/`lg:pt-5` (le décalage vertical partagé pour aligner le sélecteur de document
+avec l'en-tête « Vos correspondances », voir le commentaire « aligné sur le haut du pill ») — la
+`padding-top` est *à l'intérieur* de la boîte bordée, donc la bordure traverse aussi cette zone de
+décalage, où rien n'existe encore côté droit (l'en-tête blanc de « Vos correspondances » ne
+commence qu'après ce même décalage). Le résultat : un fragment de bordure visible seul contre le
+fond sombre de la page, avant que le panneau n'ait visuellement commencé — exactement le
+« glitch » signalé.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/CVDetailSection.tsx`** :
+  - Largeur de la colonne CV/analyse (desktop) : `lg:w-1/2` → `lg:w-[42.5%]`, donnant plus d'espace
+    à la colonne « Vos correspondances » (`flex-1`, donc ≈57.5% désormais). Ajusté en deux temps en
+    session (`45%` d'abord, puis la moitié du décalage en plus sur retour de Vincent) — vérifié à
+    chaque étape dans le navigateur plutôt que choisi à l'aveugle.
+  - Décalage vertical du haut de cette même colonne : `pt-2 lg:pt-5` (padding) → `mt-2 lg:mt-5`
+    (margin). La marge est *hors* de la boîte bordée : le diviseur ne traverse plus la zone de
+    décalage et démarre net au niveau du pill/sélecteur de document, sans changer l'alignement
+    avec l'en-tête « Vos correspondances » (le décalage total ligne-haut → contenu reste identique,
+    seule sa nature padding/margin change).
+
+### Vérification
+
+- Session Chrome connectée (SSO Google existant) sur `localhost:3000`, CV réel
+  `Willis-DELAMOUR-CV-DE...`, 71 correspondances.
+- Avant/après comparés via `computer.zoom` sur la zone exacte du glitch (coin haut-gauche du bloc
+  « Vos correspondances ») : le fragment de trait a disparu ; le diviseur reste continu jusqu'en
+  bas de la liste (vérifié en plusieurs points, y compris tout en bas de la zone scrollable) ;
+  l'alignement pill ↔ en-tête est inchangé.
+- Layout mobile (< `lg`, iframe injectée à 375px de large, technique de
+  `docs/JOURNAL.md` PR #203) rejoué après le changement `pt`→`mt` : aucune régression, le
+  `border-b` et l'empilement des deux colonnes restent identiques à l'avant.
+- Vignette du CV toujours entièrement visible (pas de recadrage) à la largeur de colonne réduite.

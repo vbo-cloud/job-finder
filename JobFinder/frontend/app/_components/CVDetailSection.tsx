@@ -180,8 +180,13 @@ const CVDetailSection = forwardRef<HTMLElement, Props>(
         {/* Body — stacked below lg (selector + analysis on top, matches under),
             side-by-side columns from lg up (the original desktop layout). */}
         <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
-          {/* Left — CV thumbnail */}
-          <div className="w-full shrink-0 border-b border-faint flex flex-col items-center gap-2 px-3 pt-2 pb-3 overflow-hidden lg:w-1/2 lg:border-b-0 lg:border-r lg:gap-4 lg:px-6 lg:pt-5 lg:pb-6">
+          {/* Left — CV thumbnail. Top offset is margin, not padding: the
+              border(-r on desktop, -b on mobile) is on this same element, so
+              padding-top would extend that border into the empty offset
+              above the pill — a stray line poking out above "Vos
+              correspondances" with nothing to anchor it. Margin sits outside
+              the border box, so the divider now starts flush with the pill. */}
+          <div className="w-full shrink-0 border-b border-faint flex flex-col items-center gap-2 px-3 mt-2 pb-3 overflow-hidden lg:w-[42.5%] lg:border-b-0 lg:border-r lg:gap-4 lg:px-6 lg:mt-5 lg:pb-6">
             {/* Document selector — +50% */}
             <div className="flex items-center gap-2 bg-chip border border-faint rounded-full py-[6px] pl-[18px] pr-[6px] shrink-0">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
