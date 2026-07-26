@@ -9385,7 +9385,7 @@ manquant maintenant, tant qu'il n'y a aucun utilisateur en prod.
 
 ---
 
-## PR #245 — fix(openai): construire l'endpoint à sous-domaine au lieu de lire l'attribut ARM
+## PR #246 — fix(openai): construire l'endpoint à sous-domaine au lieu de lire l'attribut ARM
 
 **Date :** 2026-07-26
 **Branche :** `feature/openai-endpoint-custom-domain` → `dev`
