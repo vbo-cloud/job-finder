@@ -9,14 +9,15 @@
 # (real third-party credentials provisioned out-of-band, see
 # job-finder-private/docs/MANUAL_OPERATIONS.md), this value has no external counterpart to
 # match, so Terraform can mint it directly — same pattern as jumpbox.tf's admin password.
-# No keepers block: this value is consumed separately by two Container Apps
-# (job_notifications signs, webapp verifies), each on its own revision. Anything that forces
-# a regeneration here (tainting this resource, changing an argument below) rolls the value
-# forward in Key Vault immediately, but each Container App only picks it up on its own next
-# revision — a signed-but-not-yet-verifiable window until webapp redeploys. Low-stakes should
-# it happen (worst case: a stale unsubscribe link 401s until the next webapp deploy, not a
-# data leak), so accepted rather than engineered around; same no-keepers choice as
-# jumpbox.tf's admin password, no precedent in this repo for pinning a random_password's value.
+# No keepers block: this value is consumed separately by job_notifications (a Container App
+# Job — signs) and webapp (a Container App — verifies). Anything that forces a regeneration
+# here (tainting this resource, changing an argument below) rolls the value forward in Key
+# Vault immediately, but job_notifications only picks it up on its next scheduled run and
+# webapp only on its next redeploy — a signed-but-not-yet-verifiable window until webapp
+# catches up. Low-stakes should it happen (worst case: a stale unsubscribe link 401s until
+# webapp's next deploy, not a data leak), so accepted rather than engineered around; same
+# no-keepers choice as jumpbox.tf's admin password, no precedent in this repo for pinning a
+# random_password's value.
 resource "random_password" "notifications_unsubscribe_secret" {
   length           = 32
   special          = true
