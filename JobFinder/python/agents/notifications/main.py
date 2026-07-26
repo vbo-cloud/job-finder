@@ -29,12 +29,22 @@ No CV deep-link exists yet on the frontend (HomeClient.tsx has no query-param ha
 preselect a CV), so every CTA in the digest — per-card and primary — links to the bare
 frontend_url rather than a fabricated `?cv=<id>` the frontend would ignore.
 
+Every digest also carries a one-click unsubscribe link (RFC 8058: a `List-Unsubscribe`
+header plus its `List-Unsubscribe-Post` companion, and the same URL as the footer's visible
+"Se désabonner des rappels" link) pointing at webapp's POST/GET /notifications/unsubscribe —
+see shared/unsubscribe_token.py for the signed token and
+docs/prompts/prompt-email-one-click-unsubscribe.md for the RFC 8058 rationale.
+
 Expected environment variables:
     DATABASE_URL: PostgreSQL connection string.
     ACS_EMAIL_ENDPOINT_HOSTNAME: Azure Communication Services Email data-plane hostname
         (endpoint = https://<hostname>).
     ACS_EMAIL_SENDER_ADDRESS: Verified sender address used in the From header.
-    FRONTEND_URL: Base URL linked from every CTA and the footer's unsubscribe link.
+    FRONTEND_URL: Base URL linked from every CTA.
+    WEBAPP_BASE_URL: Base URL of the FastAPI backend, for the one-click unsubscribe link
+        (must point at webapp, not the frontend — see _build_unsubscribe_url).
+    NOTIFICATIONS_UNSUBSCRIBE_SECRET: Read implicitly by shared.unsubscribe_token at
+        import time — signs the unsubscribe token embedded in that link.
     AZURE_CLIENT_ID: Read implicitly by DefaultAzureCredential (caj managed identity).
     APPLICATIONINSIGHTS_CONNECTION_STRING: Optional, enables telemetry export.
 """
@@ -57,6 +67,7 @@ from sqlalchemy.orm import Session
 from shared.db import get_session, run_migrations
 from shared.models import CV, Match, Offer, UserProfile
 from shared.telemetry import configure_telemetry
+from shared.unsubscribe_token import sign_unsubscribe_token
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
 # Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
@@ -81,6 +92,10 @@ if not _sender_address:
 _frontend_url = os.environ.get("FRONTEND_URL")
 if not _frontend_url:
     raise ValueError("FRONTEND_URL environment variable is not set")
+
+_webapp_base_url = os.environ.get("WEBAPP_BASE_URL")
+if not _webapp_base_url:
+    raise ValueError("WEBAPP_BASE_URL environment variable is not set")
 
 
 @dataclass(frozen=True)
@@ -323,6 +338,27 @@ def _digest_totals(cv_entries: list[CvDigestEntry]) -> tuple[int, int]:
     total_unseen = sum(entry.unseen_count for entry in cv_entries)
     best_score = max((entry.top_offer_score_pct for entry in cv_entries), default=0)
     return total_unseen, best_score
+
+
+def _build_unsubscribe_url(user_id: str) -> str:
+    """Build the signed one-click unsubscribe URL for a recipient.
+
+    Points at webapp (WEBAPP_BASE_URL), not the frontend — RFC 8058's automated POST
+    comes from the mail client/server, never a browser, so it can't be routed through a
+    Next.js page (see this module's docstring).
+
+    Args:
+        user_id: Recipient's UserProfile.user_id.
+
+    Returns:
+        Absolute URL to webapp's POST/GET /notifications/unsubscribe, carrying a token
+        that resolves back to user_id (see shared.unsubscribe_token).
+    """
+    # module.webapp.fqdn (container_apps.tf) has no trailing slash today, but rstrip
+    # defensively rather than trust that — a misconfigured "https://api.example.com/"
+    # would otherwise double up with the leading "/" below.
+    base_url = _webapp_base_url.rstrip("/")
+    return f"{base_url}/notifications/unsubscribe?token={sign_unsubscribe_token(user_id)}"
 
 
 def _calendar_day_style(
@@ -577,12 +613,18 @@ def _render_cta_html(frontend_url: str) -> str:
     )
 
 
-def _render_footer_html(frontend_url: str) -> str:
+def _render_footer_html(frontend_url: str, unsubscribe_url: str) -> str:
     """Render the footer: opt-in reminder and an explicit "Se désabonner" link.
 
     A clear, explicit unsubscribe label matters here — a vague "Gérer mes préférences"
     pushes recipients toward their mail client's spam button instead of the app, which
-    hurts sender reputation more than an explicit unsubscribe link would.
+    hurts sender reputation more than an explicit unsubscribe link would. Points at the
+    same signed unsubscribe_url as the RFC 8058 List-Unsubscribe header (_send_digest),
+    hitting webapp directly rather than /profile — but the two don't behave identically:
+    this link is a GET (webapp's confirm_unsubscribe shows a confirmation page rather than
+    unsubscribing immediately, so a mail-client link prefetcher following it can't
+    silently opt someone out), while the header drives the mail client's automated POST,
+    which does unsubscribe immediately (see agents/webapp/routers/notifications.py).
     """
     return (
         '<tr><td class="px" style="padding: 24px 32px 28px 32px; border-top:1px solid #212129;">'
@@ -591,7 +633,7 @@ def _render_footer_html(frontend_url: str) -> str:
         "rappels dans vos préférences Job Finder.</p>"
         '<p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; '
         'line-height:1.6; color:#5c5c66;">'
-        f'<a href="{frontend_url}/profile" style="color:#7d9dfc; font-weight:600;">'
+        f'<a href="{unsubscribe_url}" style="color:#7d9dfc; font-weight:600;">'
         "Se désabonner des rappels</a>&nbsp;·&nbsp;"
         f'<a href="{frontend_url}" style="color:#7d9dfc; font-weight:600;">Job Finder</a>'
         "</p></td></tr>"
@@ -632,6 +674,7 @@ def _render_html_body(
     today_isoweekday: int,
     cv_entries: list[CvDigestEntry],
     frontend_url: str,
+    unsubscribe_url: str,
 ) -> str:
     """Assemble the complete HTML email document from its rendered sections.
 
@@ -640,7 +683,9 @@ def _render_html_body(
         notification_days: Recipient's UserProfile.notification_days.
         today_isoweekday: ISO 8601 weekday of the current Europe/Paris local date.
         cv_entries: One CvDigestEntry per CV with at least one unseen match.
-        frontend_url: Base URL for every CTA and the footer's links.
+        frontend_url: Base URL for every CTA.
+        unsubscribe_url: Signed one-click unsubscribe URL for the footer link (see
+            _build_unsubscribe_url).
 
     Returns:
         Complete HTML document string.
@@ -665,7 +710,7 @@ def _render_html_body(
         f"{_render_hero_html(greeting, heading, lead_html)}"
         f"{cards_html}"
         f"{_render_cta_html(frontend_url)}"
-        f"{_render_footer_html(frontend_url)}"
+        f"{_render_footer_html(frontend_url, unsubscribe_url)}"
         "</table></td></tr></table>"
     )
     return f'{_html_document_head()}<body style="margin:0; padding:0; background-color:#0a0a0f;">{body}</body></html>'
@@ -677,6 +722,7 @@ def _build_email_content(
     today_isoweekday: int,
     cv_entries: list[CvDigestEntry],
     frontend_url: str,
+    unsubscribe_url: str,
 ) -> tuple[str, str]:
     """Build the plain-text and HTML bodies of the digest email.
 
@@ -687,7 +733,10 @@ def _build_email_content(
             calendar in the header.
         today_isoweekday: ISO 8601 weekday of the current Europe/Paris local date.
         cv_entries: One CvDigestEntry per CV with at least one unseen match, in digest order.
-        frontend_url: Base URL linked from every CTA and the footer's unsubscribe link.
+        frontend_url: Base URL linked from every CTA.
+        unsubscribe_url: Signed one-click unsubscribe URL for the footer link (see
+            _build_unsubscribe_url) — same URL sent as the RFC 8058 List-Unsubscribe
+            header by _send_digest.
 
     Returns:
         Tuple of (plain_text, html).
@@ -706,16 +755,23 @@ def _build_email_content(
             "\n\n".join(_render_cv_card_text(entry, frontend_url) for entry in cv_entries),
             f"Voir toutes mes offres sur Job Finder :\n{frontend_url}",
             "—\nVous recevez cet email car vous avez activé les rappels dans vos préférences "
-            f"Job Finder.\nSe désabonner des rappels : {frontend_url}/profile",
+            f"Job Finder.\nSe désabonner des rappels : {unsubscribe_url}",
         ]
     )
 
-    html_body = _render_html_body(display_name, notification_days, today_isoweekday, cv_entries, frontend_url)
+    html_body = _render_html_body(
+        display_name, notification_days, today_isoweekday, cv_entries, frontend_url, unsubscribe_url
+    )
     return plain_text, html_body
 
 
 def _send_digest(
-    client: EmailClient, recipient: str, subject: str, plain_text: str, html_body: str
+    client: EmailClient,
+    recipient: str,
+    subject: str,
+    plain_text: str,
+    html_body: str,
+    unsubscribe_url: str,
 ) -> None:
     """Send one digest email via Azure Communication Services Email.
 
@@ -725,6 +781,10 @@ def _send_digest(
         subject: Per-recipient subject line (see _build_digest_subject).
         plain_text: Plain-text body.
         html_body: HTML body.
+        unsubscribe_url: Signed one-click unsubscribe URL for this recipient (see
+            _build_unsubscribe_url) — sent as the RFC 8058 `List-Unsubscribe` header, so
+            mail clients show a native unsubscribe button, plus its
+            `List-Unsubscribe-Post` companion declaring one-click support.
 
     Raises:
         AzureError: If the send request fails. The caller counts this per user and
@@ -737,6 +797,10 @@ def _send_digest(
                 "senderAddress": _sender_address,
                 "content": {"subject": subject, "plainText": plain_text, "html": html_body},
                 "recipients": {"to": [{"address": recipient}]},
+                "headers": {
+                    "List-Unsubscribe": f"<{unsubscribe_url}>",
+                    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                },
             }
         )
         poller.result()
@@ -760,7 +824,7 @@ def _process_recipient(
         recipient: An opted-in recipient known to have an email address.
         cv_entries: This recipient's CvDigestEntry list — empty if nothing unseen.
         today_isoweekday: ISO 8601 weekday of the current Europe/Paris local date.
-        frontend_url: Base URL for every CTA and the footer's links.
+        frontend_url: Base URL for every CTA.
 
     Returns:
         "sent", "skipped_no_unseen_offers", or "failed" — matches main()'s tally keys.
@@ -769,12 +833,18 @@ def _process_recipient(
         logger.info("notifications_skipped_no_unseen_offers", user_id=recipient.user_id)
         return "skipped_no_unseen_offers"
 
+    unsubscribe_url = _build_unsubscribe_url(recipient.user_id)
     subject = _build_digest_subject(cv_entries)
     plain_text, html_body = _build_email_content(
-        recipient.display_name, recipient.notification_days, today_isoweekday, cv_entries, frontend_url
+        recipient.display_name,
+        recipient.notification_days,
+        today_isoweekday,
+        cv_entries,
+        frontend_url,
+        unsubscribe_url,
     )
     try:
-        _send_digest(client, recipient.email, subject, plain_text, html_body)
+        _send_digest(client, recipient.email, subject, plain_text, html_body, unsubscribe_url)
     except AzureError:
         return "failed"
     return "sent"
