@@ -16,6 +16,11 @@ import DeleteAccountSection from "./_components/DeleteAccountSection";
 import ExperienceToggle from "./_components/ExperienceToggle";
 import { InfoTooltip } from "./_components/InfoTooltip";
 import NotificationDaysToggle from "./_components/NotificationDaysToggle";
+import { useNotificationDaysAutosave } from "./_hooks/useNotificationDaysAutosave";
+
+/** Delay before auto-saving a notification-days edit — same order of
+ * magnitude as HomeMapSection's commune_codes autosave (SAVE_DEBOUNCE_MS). */
+const NOTIFICATION_DEBOUNCE_MS = 800;
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
@@ -41,14 +46,21 @@ export default function ProfilePage() {
   const [analysisCredits, setAnalysisCredits] = useState<number | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  const { schedule: scheduleNotificationSave, seed: seedNotificationDays } =
+    useNotificationDaysAutosave(NOTIFICATION_DEBOUNCE_MS);
+
   function handleExperienceChange(next: "0-2" | "2-5" | "5+" | null) {
     setExperienceLevel(next);
     setSaved(false);
   }
 
+  // Silent auto-save, decoupled from the Expérience/Description save flow —
+  // notification_days has no matching/cost impact, unlike the _INTENT_FIELDS
+  // (routers/profile.py), so it doesn't belong behind the manual "Enregistrer"
+  // button.
   function handleNotificationDaysChange(next: number[]) {
     setNotificationDays(next);
-    setSaved(false);
+    scheduleNotificationSave(next);
   }
 
   function handleDescriptionChange(next: string) {
@@ -66,7 +78,9 @@ export default function ProfilePage() {
       .get<ProfileData>("/profile")
       .then((res) => {
         setExperienceLevel(res.data.experience_level ?? null);
-        setNotificationDays(res.data.notification_days ?? []);
+        const days = res.data.notification_days ?? [];
+        setNotificationDays(days);
+        seedNotificationDays(days);
         setCandidateDescription(res.data.candidate_description ?? "");
         setAnalysisCredits(res.data.analysis_credits_remaining);
         setIsAdmin(res.data.is_admin);
@@ -79,7 +93,7 @@ export default function ProfilePage() {
         setLoadError("Erreur lors du chargement du profil.");
       })
       .finally(() => setLoading(false));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, seedNotificationDays]);
 
   async function handleSave() {
     setSaving(true);
@@ -87,7 +101,6 @@ export default function ProfilePage() {
     try {
       await apiClient.put("/profile", {
         experience_level: experienceLevel,
-        notification_days: notificationDays,
         candidate_description: candidateDescription.trim() || null,
       });
       posthog.setPersonProperties({ experience_level: experienceLevel });
