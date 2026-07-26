@@ -32,6 +32,7 @@ module "container_app_environment" {
 # Agent 4 — CV Analysis (queue: cv-analysis)
 # Agent 5 — Match Analysis (queue: match-analysis)
 # Agent 6 — Offer Fetch Scheduler (timer: 18:00 Europe/Paris local time — see module below)
+# Agent 7 — Notifications (timer: 19:00 Europe/Paris local time — see module below)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -289,6 +290,71 @@ module "job_offer_fetch_scheduler" {
     {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
       value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent notifications (timer: 19:00 Europe/Paris local time)
+# ==============================================================================
+# cron_expression covers both UTC hours that could map to 19:00 Europe/Paris under CET
+# (18 UTC) or CEST (17 UTC) — same DST-agnostic-cron pattern as job_offer_fetch_scheduler
+# above; the agent's own _is_scheduled_local_hour() (agents/notifications/main.py)
+# no-ops the firing that doesn't match the current DST state.
+# replica_timeout_in_seconds is longer than offer_fetch_scheduler's 60s (a single
+# message publish) since this job iterates every opted-in profile and sends emails
+# sequentially — revisit if the active user count grows significantly.
+module "job_notifications" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-notifications"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 17,18 * * *"
+  replica_timeout_in_seconds = 300
+  image                      = "${module.container_registry.login_server}/agents/notifications:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name  = "ACS_EMAIL_ENDPOINT_HOSTNAME"
+      value = module.email_communication.hostname
+    },
+    {
+      name  = "ACS_EMAIL_SENDER_ADDRESS"
+      value = module.email_communication.sender_address
+    },
+    {
+      name  = "FRONTEND_URL"
+      value = "https://${var.frontend_custom_domain}"
     },
     {
       name  = "AZURE_CLIENT_ID"
