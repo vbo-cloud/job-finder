@@ -361,6 +361,14 @@ module "job_notifications" {
       name  = "FRONTEND_URL"
       value = "https://${var.frontend_custom_domain}"
     },
+    # Base URL of the FastAPI backend itself (not the frontend) — the one-click
+    # unsubscribe link (footer + List-Unsubscribe header) must hit this agent's sibling
+    # webapp Container App directly: RFC 8058's automated POST comes from the mail
+    # client/server, never a browser, so it can't be routed through a Next.js page.
+    {
+      name  = "WEBAPP_BASE_URL"
+      value = module.webapp.fqdn
+    },
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
