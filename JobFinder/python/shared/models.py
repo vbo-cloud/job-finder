@@ -121,9 +121,11 @@ class CV(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    # Set by cv_analysis whenever ROME extraction completes (upload or manual reanalyze).
-    # Compared against UserProfile.description_updated_at to decide whether GET /cv/ should
-    # advertise a reanalysis as available.
+    # Set by cv_analysis whenever ROME extraction completes (upload or reanalysis). Its only
+    # reader — GET /cv/'s rome_reanalysis_available flag, offering a manual reanalysis button —
+    # was removed once ROME reanalysis on intent change became automatic (put_profile, see
+    # docs/prompts/prompt-intent-driven-reanalysis.md). Left in place, unconsumed, rather than
+    # dropped: still meaningful data, and cheap to keep should a future reader need it.
     rome_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set at upload time by the column-aware PDF extraction (routers/cv.py). NULL = not yet
     # computed (CV uploaded before this feature) — never treated as "1 column". 1 = single
@@ -197,10 +199,20 @@ class UserProfile(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    # Set only in PUT /profile when candidate_description itself changes — distinct from
-    # updated_at above, which _merge_rome_codes also touches on every CV analysis and is
-    # therefore unusable to detect "did the candidate's stated intent change".
-    description_updated_at: Mapped[datetime | None] = mapped_column(
+    # Set in PUT /profile whenever experience_level or candidate_description changes —
+    # distinct from updated_at above, which _merge_rome_codes also touches on every CV
+    # analysis and is therefore unusable to detect "did the candidate's stated intent
+    # change". Renamed from description_updated_at (migration 031) by migration 034:
+    # generalized to cover experience_level too, since match_analysis's own prompt
+    # context (agents/match_analysis/main.py) renders both fields, not just the
+    # description embedded in intent_embedding.
+    intent_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Throttles the start-matching + CV reanalysis dispatch on intent change (see
+    # put_profile) — independent of intent_updated_at, which stamps on every change
+    # regardless of whether the dispatch itself was throttled.
+    last_intent_dispatch_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
