@@ -8734,6 +8734,11 @@ mais dans la même couche :
 - **`python/requirements.txt`** : ajout de `azure-communication-email`.
 - **`python/pytest.ini`** : ajout de `agents/notifications/tests` à `testpaths` — sans ça les
   nouveaux tests ne sont simplement jamais découverts par `pytest`.
+- **`.github/workflows/buildAgents.yml`** : ajout du build/push de l'image `agents/notifications`
+  (mêmes étapes que `offer-fetch-scheduler`) et de la mise à jour d'image du job
+  `job-jf-dev-frc-notifications` — sans ça le nouveau Container App Job créé par Terraform
+  référencerait une image jamais construite. Repéré par `reviewer-infra` (le workflow ne connaissait
+  aucun des deux avant cette PR).
 - **`envs/dev/container_apps.tf`** : nouveau module `job_notifications` (Container App Job, trigger
   `timer`, `cron_expression = "0 17,18 * * *"` — mêmes deux horaires UTC susceptibles de correspondre
   à 19h Paris selon l'heure d'été/hiver, exactement le même mécanisme que

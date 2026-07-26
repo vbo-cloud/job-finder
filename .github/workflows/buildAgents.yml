@@ -1,7 +1,8 @@
 name: Build Application Images
 
 # Builds and pushes Docker images for all agents (matching, cleanup, offer-fetching,
-# offer-fetch-scheduler, cv-analysis, match-analysis, webapp) and the frontend to ACR.
+# offer-fetch-scheduler, notifications, cv-analysis, match-analysis, webapp) and the
+# frontend to ACR.
 # Triggered on changes to JobFinder/python/ or JobFinder/frontend/ to keep images in sync
 # with code.
 on:
@@ -97,6 +98,18 @@ jobs:
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetch-scheduler:cache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/offer-fetch-scheduler:cache,mode=max
 
+      - name: Build and push notifications image
+        uses: docker/build-push-action@v6
+        with:
+          context: JobFinder/python
+          file: JobFinder/python/agents/notifications/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/agents/notifications:latest
+            ${{ env.ACR_LOGIN_SERVER }}/agents/notifications:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/notifications:cache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/agents/notifications:cache,mode=max
+
       - name: Build webapp image
         uses: docker/build-push-action@v6
         with:
@@ -184,6 +197,7 @@ jobs:
           echo "- \`$ACR_LOGIN_SERVER/agents/cleanup:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/offer-fetching:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/offer-fetch-scheduler:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`$ACR_LOGIN_SERVER/agents/notifications:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/webapp:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/cv-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`$ACR_LOGIN_SERVER/agents/match-analysis:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
@@ -211,6 +225,11 @@ jobs:
             --resource-group rg-jf-dev-frc-app \
             --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
             --image $ACR_LOGIN_SERVER/agents/offer-fetch-scheduler:${{ github.sha }}
+          az containerapp job update \
+            --name job-jf-dev-frc-notifications \
+            --resource-group rg-jf-dev-frc-app \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --image $ACR_LOGIN_SERVER/agents/notifications:${{ github.sha }}
           az containerapp update \
             --name app-jf-dev-frc \
             --resource-group rg-jf-dev-frc-app \
