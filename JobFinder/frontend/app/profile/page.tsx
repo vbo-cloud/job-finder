@@ -3,12 +3,14 @@
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import posthog from "posthog-js";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
 import { loginRequest } from "@/lib/auth/msalConfig";
+import { useUnsavedChanges } from "@/lib/navigation/UnsavedChangesContext";
 import { cn } from "@/lib/utils";
 
 import AdminRefillButton from "./_components/AdminRefillButton";
@@ -16,10 +18,17 @@ import DeleteAccountSection from "./_components/DeleteAccountSection";
 import ExperienceToggle from "./_components/ExperienceToggle";
 import { InfoTooltip } from "./_components/InfoTooltip";
 import NotificationDaysToggle from "./_components/NotificationDaysToggle";
+import { useNotificationDaysAutosave } from "./_hooks/useNotificationDaysAutosave";
+
+/** Delay before auto-saving a notification-days edit — same order of
+ * magnitude as HomeMapSection's commune_codes autosave (SAVE_DEBOUNCE_MS). */
+const NOTIFICATION_DEBOUNCE_MS = 800;
 
 export default function ProfilePage() {
   const isAuthenticated = useIsAuthenticated();
   const { instance, accounts } = useMsal();
+  const router = useRouter();
+  const { setHasUnsavedChanges, registerSaveHandler, confirmNavigation } = useUnsavedChanges();
   const account = accounts[0];
   const initials =
     account?.name
@@ -38,22 +47,32 @@ export default function ProfilePage() {
   const [candidateDescription, setCandidateDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [analysisCredits, setAnalysisCredits] = useState<number | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  const { schedule: scheduleNotificationSave, seed: seedNotificationDays } =
+    useNotificationDaysAutosave(NOTIFICATION_DEBOUNCE_MS);
 
   function handleExperienceChange(next: "0-2" | "2-5" | "5+" | null) {
     setExperienceLevel(next);
     setSaved(false);
+    setDirty(true);
   }
 
+  // Silent auto-save, decoupled from the Expérience/Description save flow —
+  // notification_days has no matching/cost impact, unlike the _INTENT_FIELDS
+  // (routers/profile.py), so it doesn't belong behind the manual "Enregistrer"
+  // button or the unsaved-changes guard below.
   function handleNotificationDaysChange(next: number[]) {
     setNotificationDays(next);
-    setSaved(false);
+    scheduleNotificationSave(next);
   }
 
   function handleDescriptionChange(next: string) {
     setCandidateDescription(next);
     setSaved(false);
+    setDirty(true);
   }
 
   useEffect(() => {
@@ -66,7 +85,9 @@ export default function ProfilePage() {
       .get<ProfileData>("/profile")
       .then((res) => {
         setExperienceLevel(res.data.experience_level ?? null);
-        setNotificationDays(res.data.notification_days ?? []);
+        const days = res.data.notification_days ?? [];
+        setNotificationDays(days);
+        seedNotificationDays(days);
         setCandidateDescription(res.data.candidate_description ?? "");
         setAnalysisCredits(res.data.analysis_credits_remaining);
         setIsAdmin(res.data.is_admin);
@@ -79,26 +100,61 @@ export default function ProfilePage() {
         setLoadError("Erreur lors du chargement du profil.");
       })
       .finally(() => setLoading(false));
-  }, [isAuthenticated]);
+  }, [isAuthenticated, seedNotificationDays]);
 
-  async function handleSave() {
+  // Returns whether the save succeeded — also used as the registered save
+  // handler for the "Enregistrer et quitter" button of the unsaved-changes
+  // dialog (UnsavedChangesContext), not just the in-page button below.
+  const handleSave = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     setSaveError(null);
     try {
       await apiClient.put("/profile", {
         experience_level: experienceLevel,
-        notification_days: notificationDays,
         candidate_description: candidateDescription.trim() || null,
       });
       posthog.setPersonProperties({ experience_level: experienceLevel });
       posthog.capture("profile_completed", { experience_level: experienceLevel });
       setSaved(true);
+      setDirty(false);
+      return true;
     } catch {
       setSaveError("Erreur lors de la sauvegarde.");
+      return false;
     } finally {
       setSaving(false);
     }
-  }
+  }, [experienceLevel, candidateDescription]);
+
+  // Keeps the global guard in sync with this page's dirty state, registers
+  // this page's save as the dialog's "Enregistrer et quitter" handler, and
+  // clears both on unmount so a later navigation from elsewhere never sees a
+  // stale "unsaved" flag (e.g. the browser back/forward case this feature
+  // deliberately doesn't intercept, cf. profile page prompt).
+  useEffect(() => {
+    setHasUnsavedChanges(dirty);
+  }, [dirty, setHasUnsavedChanges]);
+
+  useEffect(() => {
+    registerSaveHandler(handleSave);
+    return () => registerSaveHandler(null);
+  }, [registerSaveHandler, handleSave]);
+
+  useEffect(() => {
+    return () => setHasUnsavedChanges(false);
+  }, [setHasUnsavedChanges]);
+
+  // Native browser exit (tab close/reload/external nav) — SPA navigation is
+  // covered separately by confirmNavigation (Link below, MobileNavMenu).
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [dirty]);
 
   if (!isAuthenticated) {
     return (
@@ -142,6 +198,12 @@ export default function ProfilePage() {
       <div className="fixed inset-x-0 top-0 z-40 hidden h-[52px] items-center bg-profile-surface px-5 md:flex">
         <Link
           href="/"
+          onClick={(e) => {
+            e.preventDefault();
+            void confirmNavigation().then((proceed) => {
+              if (proceed) router.push("/");
+            });
+          }}
           className="flex h-8 items-center gap-1 rounded-full border border-soft pl-2 pr-3.5 text-xs font-medium text-strong transition-colors hover:border-default hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
         >
           <ChevronLeft className="h-4 w-4" strokeWidth={2.5} />

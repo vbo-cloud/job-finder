@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
 const push = jest.fn();
@@ -6,6 +6,11 @@ let pathname = "/";
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
   usePathname: () => pathname,
+}));
+
+const confirmNavigation = jest.fn().mockResolvedValue(true);
+jest.mock("@/lib/navigation/UnsavedChangesContext", () => ({
+  useUnsavedChanges: () => ({ confirmNavigation }),
 }));
 
 import MobileNavMenu from "@/app/_components/MobileNavMenu";
@@ -67,7 +72,7 @@ describe("MobileNavMenu", () => {
     expect(screen.getByRole("button", { name: "Accueil" })).toBeEnabled();
   });
 
-  it("navigates to the home page when a section entry is used from another route", () => {
+  it("navigates to the home page when a section entry is used from another route", async () => {
     pathname = "/profile";
     render(<MobileNavMenu />);
     openMenu();
@@ -76,6 +81,31 @@ describe("MobileNavMenu", () => {
     expect(accueil).toBeEnabled(); // away from home, entries always lead somewhere
     fireEvent.click(accueil);
 
-    expect(push).toHaveBeenCalledWith("/");
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/"));
+  });
+
+  it("does not navigate when the unsaved-changes guard is declined", async () => {
+    pathname = "/profile";
+    confirmNavigation.mockResolvedValueOnce(false);
+    render(<MobileNavMenu />);
+    openMenu();
+
+    fireEvent.click(screen.getByRole("button", { name: "Accueil" }));
+    await waitFor(() => expect(confirmNavigation).toHaveBeenCalled());
+
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("guards the profile/feedback links through the same confirmation", async () => {
+    confirmNavigation.mockResolvedValueOnce(false);
+    render(<MobileNavMenu />);
+    openMenu();
+
+    fireEvent.click(screen.getByRole("link", { name: "Mon profil" }));
+    await waitFor(() => expect(confirmNavigation).toHaveBeenCalled());
+
+    expect(push).not.toHaveBeenCalled();
+    // The panel stays open — navigation was declined, "Mon profil" is still there.
+    expect(screen.getByRole("link", { name: "Mon profil" })).toBeInTheDocument();
   });
 });

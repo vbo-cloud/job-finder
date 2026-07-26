@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { useUnsavedChanges } from "@/lib/navigation/UnsavedChangesContext";
 import { cn } from "@/lib/utils";
 
 /** Home snap sections reachable from the menu, in page order. */
@@ -37,6 +38,7 @@ function sectionVisible(id: string): boolean {
 export default function MobileNavMenu() {
   const router = useRouter();
   const pathname = usePathname();
+  const { confirmNavigation } = useUnsavedChanges();
   const [open, setOpen] = useState(false);
   const [visibleSections, setVisibleSections] = useState<ReadonlySet<string>>(new Set());
   const menuRef = useRef<HTMLDivElement>(null);
@@ -67,10 +69,12 @@ export default function MobileNavMenu() {
     });
   };
 
-  const goToSection = (id: string) => {
+  const goToSection = async (id: string) => {
     setOpen(false);
     if (pathname !== "/") {
-      // The sections only exist on the home page — land there instead.
+      // The sections only exist on the home page — land there instead, after
+      // checking the current page (e.g. /profile) doesn't have unsaved edits.
+      if (!(await confirmNavigation())) return;
       router.push("/");
       return;
     }
@@ -79,6 +83,12 @@ export default function MobileNavMenu() {
     // nested scrollers are involved), and menu navigation should feel like
     // switching pages anyway.
     document.getElementById(id)?.scrollIntoView();
+  };
+
+  const guardedNavigate = async (href: string) => {
+    if (!(await confirmNavigation())) return;
+    setOpen(false);
+    router.push(href);
   };
 
   const onHome = pathname === "/";
@@ -115,7 +125,7 @@ export default function MobileNavMenu() {
                 key={id}
                 type="button"
                 disabled={!enabled}
-                onClick={() => goToSection(id)}
+                onClick={() => void goToSection(id)}
                 className={cn(
                   "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default",
                   enabled ? "hover:bg-overlay" : "opacity-40",
@@ -129,7 +139,10 @@ export default function MobileNavMenu() {
           <div className="mx-2 my-1 h-px bg-card-hover" />
           <Link
             href="/profile"
-            onClick={() => setOpen(false)}
+            onClick={(e) => {
+              e.preventDefault();
+              void guardedNavigate("/profile");
+            }}
             className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
           >
             <UserRound className="h-4 w-4" aria-hidden="true" />
@@ -137,7 +150,10 @@ export default function MobileNavMenu() {
           </Link>
           <Link
             href="/feedback"
-            onClick={() => setOpen(false)}
+            onClick={(e) => {
+              e.preventDefault();
+              void guardedNavigate("/feedback");
+            }}
             className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm text-primary transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
           >
             <MessageSquareWarning className="h-4 w-4" aria-hidden="true" />

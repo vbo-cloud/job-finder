@@ -8845,3 +8845,90 @@ installée manuellement pendant le développement).
   de `tests/test_telemetry.py` passent avec `1.8.9` installé, dont
   `test_configure_azure_monitor_not_called_service_name_kwarg` qui couvre précisément ce point.
 - Suite complète rejouée avec ce nouveau lock file installé : 399 tests passent.
+
+---
+
+## PR #239 — feat(frontend): auto-save silencieux de notification_days + garde de navigation sur modifications non enregistrées
+
+**Date :** 2026-07-26
+**Branche :** `feature/profile-notifications-autosave` → `dev`
+
+### Contexte
+
+PR purement frontend (`JobFinder/frontend/`), aucun changement backend. Deux préoccupations
+indépendantes traitées ensemble parce qu'elles retravaillent la même page (`/profile`) :
+
+1. `notification_days` (posé par la PR #231) partageait jusqu'ici le bouton « Enregistrer » manuel du
+   bloc Expérience/Description, alors que ce champ n'a aucun impact matching/coût contrairement aux
+   deux autres (`_INTENT_FIELDS` côté `routers/profile.py`) — il n'a donc pas besoin d'un
+   enregistrement manuel ni d'une garde de navigation.
+2. Décision produit du 2026-07-26 : ne plus permettre de quitter silencieusement `/profile` (via le
+   lien Accueil ou le menu mobile) en perdant des modifications non enregistrées sur
+   Expérience/Description.
+
+### Ce qui a été fait
+
+- **`app/profile/_hooks/useNotificationDaysAutosave.ts`** (nouveau) : `handleNotificationDaysChange`
+  déclenche désormais un `PUT /profile { notification_days }` autonome via ce hook dédié, débounce
+  (`NOTIFICATION_DEBOUNCE_MS = 800`), sur le même schéma que l'auto-save `commune_codes` de
+  `HomeMapSection.tsx` (`SAVE_DEBOUNCE_MS`) — dirtiness et timer dans des refs (pas de state) pour ne
+  pas re-render la page, échec réduit à un `console.error` (même compromis que `HomeMapSection`),
+  flush au démontage. Extrait de `page.tsx` suite à une remarque non-bloquante de `reviewer-frontend`
+  (voir section Reviewers). `handleSave()` (bloc Expérience/Description) n'envoie plus
+  `notification_days` et retourne désormais `Promise<boolean>` — nécessaire pour servir aussi de
+  handler de sauvegarde à la boîte de dialogue du point suivant.
+- **`lib/navigation/UnsavedChangesContext.tsx`** (nouveau) : `UnsavedChangesProvider`, monté une fois
+  dans `app/layout.tsx` (autour du `<header>` global portant `MobileNavMenu` et `{children}`),
+  expose `useUnsavedChanges()` → `{ setHasUnsavedChanges, registerSaveHandler, confirmNavigation }`.
+  `confirmNavigation()` résout `true` immédiatement si la page est propre ; si elle est modifiée,
+  ouvre la boîte de dialogue et résout selon le choix de l'utilisateur.
+- **`app/_components/UnsavedChangesDialog.tsx`** (nouveau) : modale de présentation pure (tout l'état
+  vit dans le provider), stylée comme la modale de confirmation existante de
+  `DeleteAccountSection.tsx`, avec trois actions — « Annuler » (résout `false`), « Quitter sans
+  enregistrer » (résout `true` sans appeler de handler), « Enregistrer et quitter » (appelle le
+  handler enregistré, résout `true` si succès, affiche une erreur et reste ouverte sinon).
+- **`app/profile/page.tsx`** : nouvel état `dirty`, mis à jour uniquement par
+  `handleExperienceChange`/`handleDescriptionChange` (jamais par le handler de notifications).
+  Synchronisé dans le contexte via `setHasUnsavedChanges`, `handleSave` enregistré comme handler de
+  sauvegarde de la boîte de dialogue, listener natif `beforeunload` gated sur `dirty` (couvre
+  fermeture d'onglet/rechargement — la navigation SPA est couverte séparément par
+  `confirmNavigation`), et le `Link href="/"` du bandeau desktop passe par `confirmNavigation()`
+  avant de naviguer.
+- **`app/_components/MobileNavMenu.tsx`** : `goToSection` (quand on quitte une route autre que `/`) et
+  les `<Link>` `/profile`/`/feedback` passent désormais par `confirmNavigation()` avant de naviguer
+  réellement (interception via `preventDefault` + `router.push`).
+- Hors périmètre, délibérément : la navigation navigateur retour/avant (`popstate`) n'est pas
+  interceptée.
+
+### Décisions techniques
+
+- **`notification_days` reste hors de la garde de navigation** : aucun état « non enregistré » ne
+  s'y applique — c'est le point de départ de toute cette PR, pas une omission.
+- **Refs plutôt que state pour la dirtiness/le debounce des notifications** : évite un re-render de
+  toute la page à chaque frappe/clic sur le toggle, seul le composant contrôlé
+  (`NotificationDaysToggle`) a besoin de refléter la valeur affichée (`notificationDays`, en state).
+- **`handleSave` renvoie `Promise<boolean>`** plutôt qu'un simple `void` : c'est le seul moyen pour
+  `UnsavedChangesProvider` de savoir si « Enregistrer et quitter » doit fermer la boîte de dialogue
+  ou afficher une erreur et rester ouverte.
+
+### Vérification
+
+- `npx jest` : 174 tests verts, dont les 3 fichiers nouveaux/mis à jour ci-dessus
+  (`UnsavedChangesContext.test.tsx`, `ProfilePage.test.tsx`, `MobileNavMenu.test.tsx`).
+- `npx tsc --noEmit` : propre.
+
+Passage doc-writer : docstrings/commentaires WHY vérifiés fichier par fichier contre le comportement
+actuel (`app/profile/page.tsx`, `lib/navigation/UnsavedChangesContext.tsx`,
+`app/_components/UnsavedChangesDialog.tsx`, `app/_components/MobileNavMenu.tsx`, `app/layout.tsx`,
+et les 3 fichiers de test + `__tests__/README.md`) — tous déjà fidèles et complets, aucune correction
+nécessaire.
+
+### Reviewers
+
+- **reviewer-frontend** : APPROUVÉ. Deux remarques non-bloquantes corrigées directement : le bloc
+  d'autosave `notification_days` (refs, debounce, flush) extrait de `page.tsx` dans un hook dédié
+  (`app/profile/_hooks/useNotificationDaysAutosave.ts`), et un handler `Escape` ajouté à
+  `UnsavedChangesDialog.tsx` (démontage conditionnel par le provider, contrairement au modal
+  toujours monté de `DeleteAccountSection.tsx` qui a inspiré le pattern). Suite `jest` et
+  `tsc --noEmit` rejoués propres après ces deux changements. Deuxième passage : APPROUVÉ, aucune
+  remarque non-bloquante.
