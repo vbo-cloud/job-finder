@@ -8720,15 +8720,19 @@ mais dans la même couche :
   `jobfinder_donotreply` — force le remplacement de
   `azurerm_email_communication_service_domain_sender_username` uniquement (pas de nouvelle
   vérification DNS nécessaire, le domaine reste vérifié).
-- **`python/agents/notifications/main.py`** (nouveau) : pour chaque `UserProfile` dont
+- **`python/agents/notifications/main.py`** (nouveau) : sélectionne les `UserProfile` dont
   `notification_days` contient le jour ISO 8601 courant (`.any(...)`, compilé côté PostgreSQL en
-  `<valeur> = ANY(notification_days)`), compte les matchs non vus (`Match.seen_at IS NULL`) par CV et
-  envoie un mail récap listant chaque CV ayant au moins un match non vu. N'écrit jamais
-  `Match.seen_at` — colonne mise à jour exclusivement par l'utilisateur dans le webapp — donc une
-  offre non vue reste dans le récap tant qu'elle n'a pas été vue dans l'app, y compris sur plusieurs
-  envois. Auth par `DefaultAzureCredential` (identité `caj`, aucune clé). Suit le pattern DST-aware de
-  `offer_fetch_scheduler` (`_is_scheduled_local_hour`, un seul horaire ici : 19h) et la structure
-  générale de `cleanup` (migrations avant tout accès DB, logging structlog, résumé final).
+  `<valeur> = ANY(notification_days)`), compte en une seule requête batchée (évite un N+1 profil par
+  profil, remarque de `reviewer-backend`) les matchs non vus (`Match.seen_at IS NULL`) par CV pour
+  tous les profils sélectionnés d'un coup, puis envoie un mail récap listant chaque CV ayant au moins
+  un match non vu. La session DB (`_load_recipients_and_counts`) est fermée avant la boucle d'envoi de
+  mails, pour ne pas garder une connexion ouverte pendant des appels réseau potentiellement lents.
+  N'écrit jamais `Match.seen_at` — colonne mise à jour exclusivement par l'utilisateur dans le webapp —
+  donc une offre non vue reste dans le récap tant qu'elle n'a pas été vue dans l'app, y compris sur
+  plusieurs envois. Auth par `DefaultAzureCredential` (identité `caj`, aucune clé). Suit le pattern
+  DST-aware de `offer_fetch_scheduler` (`_is_scheduled_local_hour`, un seul horaire ici : 19h) et la
+  structure générale de `cleanup` (migrations avant tout accès DB, logging structlog, résumé final,
+  `try/except SQLAlchemyError` autour des requêtes).
 - **`python/agents/notifications/Dockerfile`** (nouveau) : copie de celui d'`offer_fetch_scheduler`,
   seule la commande de démarrage change.
 - **`python/requirements.txt`** : ajout de `azure-communication-email`.
@@ -8747,13 +8751,15 @@ mais dans la même couche :
   plusieurs mails de façon séquentielle).
 - **`python/agents/notifications/tests/`** (nouveau) : `_is_scheduled_local_hour` (vrai pour 17h UTC
   en heure d'été / 18h UTC en heure d'hiver, faux sinon), construction du contenu du mail (fonction
-  pure), comptage des matchs non vus par CV (SQLite en mémoire, DDL minimal comme `cleanup`), et
-  l'orchestration de `main()` (hors fenêtre planifiée → rien n'est envoyé ; profil sans email → sauté
-  et compté ; profil sans offre non vue → sauté sans envoi ; échec d'envoi individuel → compté dans
-  `failed` sans interrompre la boucle sur les profils suivants). La sélection des profils par
-  `notification_days.any(...)` n'est pas testable contre SQLite (type `ARRAY` non supporté) — testée
-  en mockant `session.execute` directement, comme `cv_analysis`/`match_analysis` mockent déjà leur
-  client OpenAI plutôt que l'API réelle.
+  pure, y compris l'échappement HTML du nom de CV), comptage batché des matchs non vus par utilisateur
+  (SQLite en mémoire, DDL minimal comme `cleanup`, y compris un cas à plusieurs utilisateurs pour
+  vérifier que les comptes ne se mélangent pas), et l'orchestration de `main()` (hors fenêtre
+  planifiée → rien n'est envoyé ; destinataire sans email → sauté et compté ; destinataire sans offre
+  non vue → sauté sans envoi ; échec d'envoi individuel → compté dans `failed` sans interrompre la
+  boucle sur les destinataires suivants). La sélection des profils par `notification_days.any(...)`
+  n'est pas testable contre SQLite (type `ARRAY` non supporté) — testée en mockant `session.execute`
+  directement, comme `cv_analysis`/`match_analysis` mockent déjà leur client OpenAI plutôt que l'API
+  réelle.
 
 ### Décisions techniques
 
@@ -8769,6 +8775,16 @@ mais dans la même couche :
   `azure-core`, déjà utilisée dans le repo pour le blob storage — `routers/cv.py`,
   `scripts/backfill_thumbnails.py`) plutôt qu'un `except Exception` nu, conformément à la convention
   Python du projet.
+- **Comptage batché plutôt que par profil** : la première version comptait les matchs non vus par un
+  `SELECT ... GROUP BY` exécuté une fois par profil dans la boucle d'envoi (N+1). `reviewer-backend` a
+  demandé une requête unique sur `CV.user_id.in_(...)` groupée par `(user_id, cv_id, name)`, répartie
+  en mémoire ensuite — corrigé dans `_count_unseen_matches_by_user`. Le même passage a ajouté le
+  `try/except SQLAlchemyError` manquant autour des deux requêtes (`_load_recipients_and_counts`) et le
+  `logger.info` d'entrée manquant sur le comptage, conformément à la convention Python du projet.
+- **Échappement HTML du nom de CV** (`html.escape`) : `CV.name` est un texte libre saisi par
+  l'utilisateur ; sans échappement, un nom contenant `<` ou `&` casserait le rendu HTML du mail —
+  remarque non-bloquante de `reviewer-backend`, corrigée par prudence (sévérité faible : le
+  destinataire est le propriétaire du CV).
 
 ### Vérification
 
@@ -8782,7 +8798,7 @@ mais dans la même couche :
   des variables (`portfolio_contact_function_url`, valeur réelle d'`alert_email`) absentes du
   `terraform.tfvars` local — confirmée sans rapport avec cette PR via `git diff --stat`, qui ne montre
   que `variables.tf` et `container_apps.tf` modifiés sous `envs/dev`.
-- `pytest` : 400 tests passent (18 nouveaux pour `agents/notifications`), suite complète du repo.
+- `pytest` : 403 tests passent (21 pour `agents/notifications`), suite complète du repo.
 - Pas de `ruff`/linter configuré dans le repo à ce jour (aucune config, aucune dépendance) — rien à
   exécuter sur ce point.
 - Après merge et apply CI : vérifier dans le portail que `job-jf-dev-frc-notifications` existe,

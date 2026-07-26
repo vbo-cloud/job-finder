@@ -32,6 +32,7 @@ Expected environment variables:
     APPLICATIONINSIGHTS_CONNECTION_STRING: Optional, enables telemetry export.
 """
 
+import html
 import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -41,6 +42,7 @@ from azure.communication.email import EmailClient
 from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.db import get_session, run_migrations
@@ -105,23 +107,71 @@ def _select_profiles_to_notify(session: Session, today_isoweekday: int) -> list[
     )
 
 
-def _count_unseen_matches_by_cv(session: Session, user_id: str) -> list[tuple[str | None, int]]:
-    """Count unseen matches per CV for one user, keeping only CVs with at least one.
+def _count_unseen_matches_by_user(
+    session: Session, user_ids: list[str]
+) -> dict[str, list[tuple[str | None, int]]]:
+    """Count unseen matches per CV, grouped by owning user, for every given user_id.
+
+    Issues a single batched query across all given users instead of one query per
+    user, avoiding an N+1 pattern when a run notifies many profiles.
 
     Args:
         session: Active SQLAlchemy session.
-        user_id: Owning user's identifier (CV.user_id).
+        user_ids: Owning users' identifiers (CV.user_id) to count for.
 
     Returns:
-        List of (cv_name, unseen_count) tuples, one per CV with unseen_count > 0.
+        Mapping of user_id to (cv_name, unseen_count) pairs, one pair per CV with at
+        least one unseen match. A user_id with no unseen matches is absent from the
+        mapping rather than present with an empty list.
     """
+    if not user_ids:
+        return {}
+
+    logger.info("notifications_unseen_count_started", profile_count=len(user_ids))
     rows = session.execute(
-        select(CV.name, func.count(Match.id))
+        select(CV.user_id, CV.name, func.count(Match.id))
         .join(Match, Match.cv_id == CV.id)
-        .where(CV.user_id == user_id, Match.seen_at.is_(None))
-        .group_by(CV.id, CV.name)
+        .where(CV.user_id.in_(user_ids), Match.seen_at.is_(None))
+        .group_by(CV.user_id, CV.id, CV.name)
     ).all()
-    return [(name, count) for name, count in rows if count > 0]
+
+    counts_by_user: dict[str, list[tuple[str | None, int]]] = {}
+    for user_id, name, count in rows:
+        if count > 0:
+            counts_by_user.setdefault(user_id, []).append((name, count))
+    return counts_by_user
+
+
+def _load_recipients_and_counts(
+    today_isoweekday: int,
+) -> tuple[list[tuple[str, str | None]], dict[str, list[tuple[str | None, int]]]]:
+    """Fetch today's opted-in profiles and their unseen-match counts in one DB session.
+
+    Args:
+        today_isoweekday: ISO 8601 weekday (1=Monday...7=Sunday) for the current
+            Europe/Paris local date.
+
+    Returns:
+        Tuple of (recipients, counts_by_user): recipients is a list of
+        (user_id, email) pairs for every opted-in profile; counts_by_user maps
+        user_id to its (cv_name, unseen_count) pairs (see
+        _count_unseen_matches_by_user). The session is closed before returning, so
+        the caller can send emails without holding a DB connection open.
+
+    Raises:
+        SQLAlchemyError: If either query fails.
+    """
+    try:
+        with get_session() as session:
+            profiles = _select_profiles_to_notify(session, today_isoweekday)
+            recipients = [(profile.user_id, profile.email) for profile in profiles]
+            counts_by_user = _count_unseen_matches_by_user(
+                session, [user_id for user_id, email in recipients if email]
+            )
+    except SQLAlchemyError:
+        logger.error("notifications_query_failed", exc_info=True)
+        raise
+    return recipients, counts_by_user
 
 
 def _build_email_content(cv_counts: list[tuple[str | None, int]], frontend_url: str) -> tuple[str, str]:
@@ -137,20 +187,25 @@ def _build_email_content(cv_counts: list[tuple[str | None, int]], frontend_url: 
     lines = [f"{name or 'CV sans nom'} : {count} nouvelle(s) offre(s)" for name, count in cv_counts]
     plain_text = "\n".join(lines) + f"\n\n{frontend_url}"
 
-    items_html = "".join(f"<li>{name or 'CV sans nom'} : {count} nouvelle(s) offre(s)</li>" for name, count in cv_counts)
-    html = f"<ul>{items_html}</ul><p><a href=\"{frontend_url}\">{frontend_url}</a></p>"
+    # cv_name is free text set by the user (CV.name) — escaped before going into the
+    # HTML body so a name containing '<' or '&' can't break the markup.
+    items_html = "".join(
+        f"<li>{html.escape(name or 'CV sans nom')} : {count} nouvelle(s) offre(s)</li>"
+        for name, count in cv_counts
+    )
+    html_body = f"<ul>{items_html}</ul><p><a href=\"{frontend_url}\">{frontend_url}</a></p>"
 
-    return plain_text, html
+    return plain_text, html_body
 
 
-def _send_digest(client: EmailClient, recipient: str, plain_text: str, html: str) -> None:
+def _send_digest(client: EmailClient, recipient: str, plain_text: str, html_body: str) -> None:
     """Send one digest email via Azure Communication Services Email.
 
     Args:
         client: Configured EmailClient.
         recipient: Destination address (UserProfile.email).
         plain_text: Plain-text body.
-        html: HTML body.
+        html_body: HTML body.
 
     Raises:
         AzureError: If the send request fails. The caller counts this per user and
@@ -161,7 +216,7 @@ def _send_digest(client: EmailClient, recipient: str, plain_text: str, html: str
         poller = client.begin_send(
             {
                 "senderAddress": _sender_address,
-                "content": {"subject": DIGEST_SUBJECT, "plainText": plain_text, "html": html},
+                "content": {"subject": DIGEST_SUBJECT, "plainText": plain_text, "html": html_body},
                 "recipients": {"to": [{"address": recipient}]},
             }
         )
@@ -187,29 +242,30 @@ def main() -> None:
         logger.error("migrations_failed", exc_info=True)
         raise
 
-    client = EmailClient(f"https://{_endpoint_hostname}", DefaultAzureCredential())
     today_isoweekday = now_utc.astimezone(PARIS_TZ).isoweekday()
+    recipients, counts_by_user = _load_recipients_and_counts(today_isoweekday)
+
+    client = EmailClient(f"https://{_endpoint_hostname}", DefaultAzureCredential())
 
     sent, skipped_no_email, skipped_no_unseen_offers, failed = 0, 0, 0, 0
-    with get_session() as session:
-        for profile in _select_profiles_to_notify(session, today_isoweekday):
-            if not profile.email:
-                logger.info("notifications_skipped_no_email", user_id=profile.user_id)
-                skipped_no_email += 1
-                continue
+    for user_id, email in recipients:
+        if not email:
+            logger.info("notifications_skipped_no_email", user_id=user_id)
+            skipped_no_email += 1
+            continue
 
-            cv_counts = _count_unseen_matches_by_cv(session, profile.user_id)
-            if not cv_counts:
-                logger.info("notifications_skipped_no_unseen_offers", user_id=profile.user_id)
-                skipped_no_unseen_offers += 1
-                continue
+        cv_counts = counts_by_user.get(user_id, [])
+        if not cv_counts:
+            logger.info("notifications_skipped_no_unseen_offers", user_id=user_id)
+            skipped_no_unseen_offers += 1
+            continue
 
-            plain_text, html = _build_email_content(cv_counts, _frontend_url)
-            try:
-                _send_digest(client, profile.email, plain_text, html)
-                sent += 1
-            except AzureError:
-                failed += 1
+        plain_text, html_body = _build_email_content(cv_counts, _frontend_url)
+        try:
+            _send_digest(client, email, plain_text, html_body)
+            sent += 1
+        except AzureError:
+            failed += 1
 
     logger.info(
         "notifications_completed",

@@ -1,6 +1,6 @@
 """Unit tests for notifications/main.py.
 
-Tests use an in-memory SQLite DB created with raw DDL for _count_unseen_matches_by_cv,
+Tests use an in-memory SQLite DB created with raw DDL for _count_unseen_matches_by_user,
 same approach as agents/cleanup/tests/test_cleanup.py: only the columns the query
 actually touches (cvs.id/cvs.user_id/cvs.name, matches.id/matches.cv_id/matches.seen_at)
 are created, skipping the pgvector `embedding` column and the rest of the real schema.
@@ -11,6 +11,11 @@ SQLite's ARRAY-less dialect cannot execute. That function is therefore covered b
 mocking session.execute directly rather than against a real DB, the same pattern
 cv_analysis/match_analysis already use for mocking _openai_client instead of a real
 OpenAI client.
+
+main()'s orchestration tests mock _load_recipients_and_counts directly rather than its
+two DB-touching components — it is the single seam between the DB-facing half of main()
+(one query batched across every opted-in profile, see its docstring for why) and the
+per-recipient send loop under test here.
 """
 
 import importlib.util
@@ -19,7 +24,6 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -102,14 +106,22 @@ def test_build_email_content_lists_every_cv() -> None:
     assert "CV B : 5 nouvelle(s) offre(s)" in plain_text
 
 
+def test_build_email_content_escapes_cv_name_in_html() -> None:
+    """A CV name containing HTML-significant characters must not break the markup."""
+    _, html_body = _mod._build_email_content([("<script>", 1)], "https://jobfinder.example")
+
+    assert "<script>" not in html_body
+    assert "&lt;script&gt;" in html_body
+
+
 # ---------------------------------------------------------------------------
-# _count_unseen_matches_by_cv (real SQLite, minimal schema)
+# _count_unseen_matches_by_user (real SQLite, minimal schema)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def db_session():
-    """In-memory SQLite session with the minimal schema required by _count_unseen_matches_by_cv."""
+    """In-memory SQLite session with the minimal schema required by _count_unseen_matches_by_user."""
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(sa.text("""
@@ -147,26 +159,35 @@ def _add_match(session: Session, cv_id: str, seen: bool) -> None:
     )
 
 
-def test_count_unseen_matches_by_cv_excludes_cv_without_match(db_session: Session) -> None:
+def test_count_unseen_matches_by_user_returns_empty_dict_for_no_user_ids(
+    db_session: Session,
+) -> None:
+    """An empty user_ids list is a no-op — no query issued, empty mapping returned."""
+    assert _mod._count_unseen_matches_by_user(db_session, []) == {}
+
+
+def test_count_unseen_matches_by_user_excludes_cv_without_match(db_session: Session) -> None:
     _add_cv(db_session, "user-1", "CV solo")
     db_session.flush()
 
-    counts = _mod._count_unseen_matches_by_cv(db_session, "user-1")
+    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1"])
 
-    assert counts == []
+    assert counts == {}
 
 
-def test_count_unseen_matches_by_cv_excludes_already_seen_match(db_session: Session) -> None:
+def test_count_unseen_matches_by_user_excludes_already_seen_match(db_session: Session) -> None:
     cv_id = _add_cv(db_session, "user-1", "CV vu")
     _add_match(db_session, cv_id, seen=True)
     db_session.flush()
 
-    counts = _mod._count_unseen_matches_by_cv(db_session, "user-1")
+    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1"])
 
-    assert counts == []
+    assert counts == {}
 
 
-def test_count_unseen_matches_by_cv_counts_correctly_across_multiple_cvs(db_session: Session) -> None:
+def test_count_unseen_matches_by_user_counts_correctly_across_multiple_cvs(
+    db_session: Session,
+) -> None:
     cv_a = _add_cv(db_session, "user-1", "CV A")
     cv_b = _add_cv(db_session, "user-1", "CV B")
     _add_match(db_session, cv_a, seen=False)
@@ -175,9 +196,24 @@ def test_count_unseen_matches_by_cv_counts_correctly_across_multiple_cvs(db_sess
     _add_match(db_session, cv_b, seen=False)
     db_session.flush()
 
-    counts = dict(_mod._count_unseen_matches_by_cv(db_session, "user-1"))
+    counts = dict(_mod._count_unseen_matches_by_user(db_session, ["user-1"])["user-1"])
 
     assert counts == {"CV A": 2, "CV B": 1}
+
+
+def test_count_unseen_matches_by_user_batches_across_multiple_users(db_session: Session) -> None:
+    """One call covering several user_ids returns each user's own counts, not mixed together."""
+    cv_1 = _add_cv(db_session, "user-1", "CV 1")
+    cv_2 = _add_cv(db_session, "user-2", "CV 2")
+    _add_match(db_session, cv_1, seen=False)
+    _add_match(db_session, cv_2, seen=False)
+    _add_match(db_session, cv_2, seen=False)
+    db_session.flush()
+
+    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1", "user-2"])
+
+    assert dict(counts["user-1"]) == {"CV 1": 1}
+    assert dict(counts["user-2"]) == {"CV 2": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +238,11 @@ def test_select_profiles_to_notify_returns_whatever_the_any_filter_matches(mocke
 
 
 class TestMainOrchestration:
-    """Covers main()'s wiring: scheduling gate, per-profile skips, and failure isolation."""
+    """Covers main()'s wiring: scheduling gate, per-recipient skips, and failure isolation."""
 
     def _mock_common_deps(self, mocker: MockerFixture) -> None:
         mocker.patch.object(_mod, "configure_telemetry")
         mocker.patch.object(_mod, "run_migrations")
-        mocker.patch.object(_mod, "get_session", _session_cm(MagicMock()))
         mocker.patch.object(_mod, "EmailClient")
         mocker.patch.object(_mod, "DefaultAzureCredential")
         mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=True)
@@ -215,23 +250,22 @@ class TestMainOrchestration:
     def test_nothing_sent_outside_scheduled_window(self, mocker: MockerFixture) -> None:
         self._mock_common_deps(mocker)
         mocker.patch.object(_mod, "_is_scheduled_local_hour", return_value=False)
-        select_profiles = mocker.patch.object(_mod, "_select_profiles_to_notify")
+        load_recipients = mocker.patch.object(_mod, "_load_recipients_and_counts")
 
         _mod.main()
 
-        select_profiles.assert_not_called()
+        load_recipients.assert_not_called()
 
-    def test_profile_without_email_is_skipped_and_counted(self, mocker: MockerFixture) -> None:
+    def test_recipient_without_email_is_skipped_and_counted(self, mocker: MockerFixture) -> None:
         self._mock_common_deps(mocker)
-        profile = SimpleNamespace(email=None, user_id="user-1")
-        mocker.patch.object(_mod, "_select_profiles_to_notify", return_value=[profile])
-        count_unseen = mocker.patch.object(_mod, "_count_unseen_matches_by_cv")
+        mocker.patch.object(
+            _mod, "_load_recipients_and_counts", return_value=([("user-1", None)], {})
+        )
         send_digest = mocker.patch.object(_mod, "_send_digest")
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
 
         _mod.main()
 
-        count_unseen.assert_not_called()
         send_digest.assert_not_called()
         mock_logger_info.assert_any_call(
             "notifications_completed",
@@ -241,11 +275,15 @@ class TestMainOrchestration:
             failed=0,
         )
 
-    def test_profile_without_unseen_offers_is_skipped_without_sending(self, mocker: MockerFixture) -> None:
+    def test_recipient_without_unseen_offers_is_skipped_without_sending(
+        self, mocker: MockerFixture
+    ) -> None:
         self._mock_common_deps(mocker)
-        profile = SimpleNamespace(email="user@example.com", user_id="user-1")
-        mocker.patch.object(_mod, "_select_profiles_to_notify", return_value=[profile])
-        mocker.patch.object(_mod, "_count_unseen_matches_by_cv", return_value=[])
+        mocker.patch.object(
+            _mod,
+            "_load_recipients_and_counts",
+            return_value=([("user-1", "user@example.com")], {}),
+        )
         send_digest = mocker.patch.object(_mod, "_send_digest")
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
 
@@ -264,12 +302,11 @@ class TestMainOrchestration:
         self, mocker: MockerFixture
     ) -> None:
         self._mock_common_deps(mocker)
-        profile_1 = SimpleNamespace(email="a@example.com", user_id="user-1")
-        profile_2 = SimpleNamespace(email="b@example.com", user_id="user-2")
+        recipients = [("user-1", "a@example.com"), ("user-2", "b@example.com")]
+        counts_by_user = {"user-1": [("CV A", 2)], "user-2": [("CV B", 1)]}
         mocker.patch.object(
-            _mod, "_select_profiles_to_notify", return_value=[profile_1, profile_2]
+            _mod, "_load_recipients_and_counts", return_value=(recipients, counts_by_user)
         )
-        mocker.patch.object(_mod, "_count_unseen_matches_by_cv", return_value=[("CV A", 2)])
         mocker.patch.object(_mod, "_build_email_content", return_value=("text", "html"))
         send_digest = mocker.patch.object(
             _mod, "_send_digest", side_effect=[AzureError("send failed"), None]
