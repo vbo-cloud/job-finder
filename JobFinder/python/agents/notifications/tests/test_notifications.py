@@ -1,9 +1,10 @@
 """Unit tests for notifications/main.py.
 
-Tests use an in-memory SQLite DB created with raw DDL for _count_unseen_matches_by_user,
+Tests use an in-memory SQLite DB created with raw DDL for _load_cv_digest_entries_by_user,
 same approach as agents/cleanup/tests/test_cleanup.py: only the columns the query
-actually touches (cvs.id/cvs.user_id/cvs.name, matches.id/matches.cv_id/matches.seen_at)
-are created, skipping the pgvector `embedding` column and the rest of the real schema.
+actually touches (cvs.id/user_id/name, offers.id/title/company/location/department/
+contract_type, matches.id/cv_id/offer_id/score/seen_at) are created, skipping the
+pgvector `embedding` column and the rest of the real schema.
 
 _select_profiles_to_notify relies on UserProfile.notification_days.any(...), which
 SQLAlchemy compiles to PostgreSQL's `<value> = ANY(notification_days)` — a construct
@@ -48,6 +49,21 @@ def _session_cm(session: MagicMock):
     return _cm
 
 
+def _make_cv_entry(**overrides):
+    """Build a CvDigestEntry with sensible defaults, overridable per test."""
+    defaults = {
+        "cv_name": "Alternance Cloud",
+        "unseen_count": 3,
+        "top_offer_title": "Alternant DevOps",
+        "top_offer_company": "Doctolib",
+        "top_offer_location": "Paris (75)",
+        "top_offer_contract_type": "Alternance",
+        "top_offer_score_pct": 94,
+    }
+    defaults.update(overrides)
+    return _mod.CvDigestEntry(**defaults)
+
+
 # ---------------------------------------------------------------------------
 # _is_scheduled_local_hour
 # ---------------------------------------------------------------------------
@@ -83,25 +99,33 @@ def test_is_scheduled_local_hour_false_outside_the_two_candidate_hours(utc_hour:
 
 
 def test_build_email_content_includes_cv_name_and_count() -> None:
-    plain_text, html = _mod._build_email_content([("Alternance Cloud", 3)], "https://jobfinder.example")
+    entry = _make_cv_entry(cv_name="Alternance Cloud", unseen_count=3)
+
+    plain_text, html_body = _mod._build_email_content(
+        None, [3], 3, [entry], "https://jobfinder.example"
+    )
 
     assert "Alternance Cloud : 3 nouvelle(s) offre(s)" in plain_text
-    assert "Alternance Cloud : 3 nouvelle(s) offre(s)" in html
+    assert "Alternance Cloud : 3 nouvelle(s) offre(s)" in html_body
     assert "https://jobfinder.example" in plain_text
-    assert "https://jobfinder.example" in html
+    assert "https://jobfinder.example" in html_body
 
 
 def test_build_email_content_uses_placeholder_for_unnamed_cv() -> None:
-    plain_text, html = _mod._build_email_content([(None, 1)], "https://jobfinder.example")
+    entry = _make_cv_entry(cv_name=None, unseen_count=1)
+
+    plain_text, html_body = _mod._build_email_content(
+        None, [3], 3, [entry], "https://jobfinder.example"
+    )
 
     assert "CV sans nom : 1 nouvelle(s) offre(s)" in plain_text
-    assert "CV sans nom : 1 nouvelle(s) offre(s)" in html
+    assert "CV sans nom : 1 nouvelle(s) offre(s)" in html_body
 
 
 def test_build_email_content_lists_every_cv() -> None:
-    plain_text, _ = _mod._build_email_content(
-        [("CV A", 2), ("CV B", 5)], "https://jobfinder.example"
-    )
+    entries = [_make_cv_entry(cv_name="CV A", unseen_count=2), _make_cv_entry(cv_name="CV B", unseen_count=5)]
+
+    plain_text, _ = _mod._build_email_content(None, [3], 3, entries, "https://jobfinder.example")
 
     assert "CV A : 2 nouvelle(s) offre(s)" in plain_text
     assert "CV B : 5 nouvelle(s) offre(s)" in plain_text
@@ -109,20 +133,131 @@ def test_build_email_content_lists_every_cv() -> None:
 
 def test_build_email_content_escapes_cv_name_in_html() -> None:
     """A CV name containing HTML-significant characters must not break the markup."""
-    _, html_body = _mod._build_email_content([("<script>", 1)], "https://jobfinder.example")
+    entry = _make_cv_entry(cv_name="<script>", unseen_count=1)
+
+    _, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
 
     assert "<script>" not in html_body
     assert "&lt;script&gt;" in html_body
 
 
+def test_build_email_content_escapes_offer_title_and_company_in_html() -> None:
+    """Offer.title/Offer.company are free text (like CV.name) — must be escaped too."""
+    entry = _make_cv_entry(top_offer_title="<b>Dev</b>", top_offer_company="<script>Corp</script>")
+
+    _, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
+
+    assert "<b>Dev</b>" not in html_body
+    assert "&lt;b&gt;Dev&lt;/b&gt;" in html_body
+    assert "<script>Corp</script>" not in html_body
+    assert "&lt;script&gt;Corp&lt;/script&gt;" in html_body
+
+
+def test_build_email_content_greets_generically_without_display_name() -> None:
+    plain_text, html_body = _mod._build_email_content(
+        None, [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+    )
+
+    assert "Bonjour," in plain_text
+    assert "Bonjour," in html_body
+    assert "Bonjour None" not in plain_text
+    assert "Bonjour None" not in html_body
+
+
+def test_build_email_content_personalizes_greeting_with_display_name() -> None:
+    plain_text, html_body = _mod._build_email_content(
+        "Camille", [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+    )
+
+    assert "Bonjour Camille," in plain_text
+    assert "Bonjour Camille," in html_body
+
+
 # ---------------------------------------------------------------------------
-# _count_unseen_matches_by_user (real SQLite, minimal schema)
+# _build_digest_subject
+# ---------------------------------------------------------------------------
+
+
+def test_build_digest_subject_singular_for_exactly_one_unseen_offer() -> None:
+    subject = _mod._build_digest_subject([_make_cv_entry(unseen_count=1, top_offer_score_pct=94)])
+
+    assert "Une offre" in subject
+    assert "94" in subject
+
+
+def test_build_digest_subject_plural_for_several_unseen_offers() -> None:
+    entries = [
+        _make_cv_entry(unseen_count=5, top_offer_score_pct=94),
+        _make_cv_entry(unseen_count=2, top_offer_score_pct=78),
+    ]
+
+    subject = _mod._build_digest_subject(entries)
+
+    assert "7" in subject
+    assert "94" in subject
+
+
+def test_build_digest_subject_handles_defensive_zero_offers_case() -> None:
+    """main() never reaches this (it skips recipients with no unseen offers first), but
+    the function itself must not crash on an empty list."""
+    subject = _mod._build_digest_subject([])
+
+    assert "0" in subject
+
+
+# ---------------------------------------------------------------------------
+# reminder calendar
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("isoweekday", range(1, 8))
+def test_calendar_day_style_today_wins_even_when_also_selected(isoweekday: int) -> None:
+    band, _, _, weight = _mod._calendar_day_style(
+        isoweekday, notification_days=[isoweekday], today_isoweekday=isoweekday
+    )
+
+    assert band == "#ef4444"
+    assert weight == "800"
+
+
+@pytest.mark.parametrize("isoweekday", range(1, 8))
+def test_calendar_day_style_selected_and_not_today(isoweekday: int) -> None:
+    other_day = isoweekday % 7 + 1
+
+    band, _, _, weight = _mod._calendar_day_style(
+        isoweekday, notification_days=[isoweekday], today_isoweekday=other_day
+    )
+
+    assert band == "#f2f2f4"
+    assert weight == "800"
+
+
+@pytest.mark.parametrize("isoweekday", range(1, 8))
+def test_calendar_day_style_not_selected_and_not_today(isoweekday: int) -> None:
+    other_day = isoweekday % 7 + 1
+
+    band, _, _, weight = _mod._calendar_day_style(
+        isoweekday, notification_days=[], today_isoweekday=other_day
+    )
+
+    assert band == "#4a4a54"
+    assert weight == "700"
+
+
+def test_render_calendar_text_marks_today_with_brackets() -> None:
+    text = _mod._render_calendar_text([1, 3, 5, 7], today_isoweekday=7)
+
+    assert text == "Rappels programmés : Lun · Mer · Ven · [Dim] (aujourd'hui)"
+
+
+# ---------------------------------------------------------------------------
+# _load_cv_digest_entries_by_user (real SQLite, minimal schema)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def db_session():
-    """In-memory SQLite session with the minimal schema required by _count_unseen_matches_by_user."""
+    """In-memory SQLite session with the minimal schema required by _load_cv_digest_entries_by_user."""
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(sa.text("""
@@ -133,10 +268,22 @@ def db_session():
             )
         """))
         conn.execute(sa.text("""
+            CREATE TABLE offers (
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                company       TEXT NOT NULL,
+                location      TEXT NOT NULL,
+                department    TEXT,
+                contract_type TEXT NOT NULL
+            )
+        """))
+        conn.execute(sa.text("""
             CREATE TABLE matches (
-                id      TEXT PRIMARY KEY,
-                cv_id   TEXT NOT NULL,
-                seen_at TIMESTAMP
+                id       TEXT PRIMARY KEY,
+                cv_id    TEXT NOT NULL,
+                offer_id TEXT NOT NULL,
+                score    REAL NOT NULL,
+                seen_at  TIMESTAMP
             )
         """))
     with Session(engine) as session:
@@ -153,68 +300,133 @@ def _add_cv(session: Session, user_id: str, name: str | None) -> str:
     return cid
 
 
-def _add_match(session: Session, cv_id: str, seen: bool) -> None:
+def _add_offer(
+    session: Session,
+    title: str = "Alternant DevOps",
+    company: str = "Doctolib",
+    location: str = "Paris (75)",
+    department: str | None = None,
+    contract_type: str = "Alternance",
+) -> str:
+    oid = str(uuid.uuid4())
     session.execute(
-        sa.text("INSERT INTO matches (id, cv_id, seen_at) VALUES (:id, :cv_id, :seen_at)"),
-        {"id": str(uuid.uuid4()), "cv_id": cv_id, "seen_at": "2026-01-01 00:00:00.000000" if seen else None},
+        sa.text(
+            "INSERT INTO offers (id, title, company, location, department, contract_type) "
+            "VALUES (:id, :title, :company, :location, :department, :contract_type)"
+        ),
+        {
+            "id": oid,
+            "title": title,
+            "company": company,
+            "location": location,
+            "department": department,
+            "contract_type": contract_type,
+        },
+    )
+    return oid
+
+
+def _add_match(session: Session, cv_id: str, offer_id: str, score: float, seen: bool) -> None:
+    session.execute(
+        sa.text(
+            "INSERT INTO matches (id, cv_id, offer_id, score, seen_at) "
+            "VALUES (:id, :cv_id, :offer_id, :score, :seen_at)"
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "cv_id": cv_id,
+            "offer_id": offer_id,
+            "score": score,
+            "seen_at": "2026-01-01 00:00:00.000000" if seen else None,
+        },
     )
 
 
-def test_count_unseen_matches_by_user_returns_empty_dict_for_no_user_ids(
+def test_load_cv_digest_entries_by_user_returns_empty_dict_for_no_user_ids(
     db_session: Session,
 ) -> None:
     """An empty user_ids list is a no-op — no query issued, empty mapping returned."""
-    assert _mod._count_unseen_matches_by_user(db_session, []) == {}
+    assert _mod._load_cv_digest_entries_by_user(db_session, []) == {}
 
 
-def test_count_unseen_matches_by_user_excludes_cv_without_match(db_session: Session) -> None:
+def test_load_cv_digest_entries_by_user_excludes_cv_without_match(db_session: Session) -> None:
     _add_cv(db_session, "user-1", "CV solo")
     db_session.flush()
 
-    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1"])
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
 
-    assert counts == {}
+    assert entries == {}
 
 
-def test_count_unseen_matches_by_user_excludes_already_seen_match(db_session: Session) -> None:
+def test_load_cv_digest_entries_by_user_excludes_already_seen_match(db_session: Session) -> None:
     cv_id = _add_cv(db_session, "user-1", "CV vu")
-    _add_match(db_session, cv_id, seen=True)
+    offer_id = _add_offer(db_session)
+    _add_match(db_session, cv_id, offer_id, score=0.8, seen=True)
     db_session.flush()
 
-    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1"])
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
 
-    assert counts == {}
+    assert entries == {}
 
 
-def test_count_unseen_matches_by_user_counts_correctly_across_multiple_cvs(
+def test_load_cv_digest_entries_by_user_picks_top_scoring_unseen_match_and_excludes_seen(
     db_session: Session,
 ) -> None:
+    """Top offer must be the best-scoring *unseen* match — a higher-scoring seen match must
+    not win, and the count must not include it either."""
     cv_a = _add_cv(db_session, "user-1", "CV A")
     cv_b = _add_cv(db_session, "user-1", "CV B")
-    _add_match(db_session, cv_a, seen=False)
-    _add_match(db_session, cv_a, seen=False)
-    _add_match(db_session, cv_a, seen=True)
-    _add_match(db_session, cv_b, seen=False)
+    offer_1 = _add_offer(db_session, title="Offer 1")
+    offer_2 = _add_offer(db_session, title="Offer 2")
+    offer_3 = _add_offer(db_session, title="Offer 3 (seen, highest score)")
+    _add_match(db_session, cv_a, offer_1, score=0.5, seen=False)
+    _add_match(db_session, cv_a, offer_2, score=0.7, seen=False)
+    _add_match(db_session, cv_a, offer_3, score=0.99, seen=True)
+    _add_match(db_session, cv_b, offer_1, score=0.6, seen=False)
     db_session.flush()
 
-    counts = dict(_mod._count_unseen_matches_by_user(db_session, ["user-1"])["user-1"])
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
+    by_name = {entry.cv_name: entry for entry in entries["user-1"]}
 
-    assert counts == {"CV A": 2, "CV B": 1}
+    assert by_name["CV A"].unseen_count == 2
+    assert by_name["CV A"].top_offer_title == "Offer 2"
+    assert by_name["CV A"].top_offer_score_pct == 70
+    assert by_name["CV B"].unseen_count == 1
+    assert by_name["CV B"].top_offer_title == "Offer 1"
 
 
-def test_count_unseen_matches_by_user_batches_across_multiple_users(db_session: Session) -> None:
-    """One call covering several user_ids returns each user's own counts, not mixed together."""
+def test_load_cv_digest_entries_by_user_batches_across_multiple_users(db_session: Session) -> None:
+    """One call covering several user_ids returns each user's own entries, not mixed together."""
     cv_1 = _add_cv(db_session, "user-1", "CV 1")
     cv_2 = _add_cv(db_session, "user-2", "CV 2")
-    _add_match(db_session, cv_1, seen=False)
-    _add_match(db_session, cv_2, seen=False)
-    _add_match(db_session, cv_2, seen=False)
+    offer_a = _add_offer(db_session, title="Offer A")
+    offer_b = _add_offer(db_session, title="Offer B")
+    offer_c = _add_offer(db_session, title="Offer C")
+    _add_match(db_session, cv_1, offer_a, score=0.4, seen=False)
+    _add_match(db_session, cv_2, offer_b, score=0.5, seen=False)
+    _add_match(db_session, cv_2, offer_c, score=0.9, seen=False)
     db_session.flush()
 
-    counts = _mod._count_unseen_matches_by_user(db_session, ["user-1", "user-2"])
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1", "user-2"])
 
-    assert dict(counts["user-1"]) == {"CV 1": 1}
-    assert dict(counts["user-2"]) == {"CV 2": 2}
+    assert len(entries["user-1"]) == 1
+    assert entries["user-1"][0].unseen_count == 1
+    assert len(entries["user-2"]) == 1
+    assert entries["user-2"][0].unseen_count == 2
+    assert entries["user-2"][0].top_offer_title == "Offer C"
+
+
+def test_load_cv_digest_entries_by_user_falls_back_to_department_when_location_blank(
+    db_session: Session,
+) -> None:
+    cv_id = _add_cv(db_session, "user-1", "CV")
+    offer_id = _add_offer(db_session, location="", department="75 - Paris")
+    _add_match(db_session, cv_id, offer_id, score=0.8, seen=False)
+    db_session.flush()
+
+    entries = _mod._load_cv_digest_entries_by_user(db_session, ["user-1"])
+
+    assert entries["user-1"][0].top_offer_location == "75 - Paris"
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +479,9 @@ class TestMainOrchestration:
 
     def test_recipient_without_email_is_skipped_and_counted(self, mocker: MockerFixture) -> None:
         self._mock_common_deps(mocker)
+        recipient = _mod.Recipient(user_id="user-1", email=None, display_name=None, notification_days=[3])
         mocker.patch.object(
-            _mod, "_load_recipients_and_counts", return_value=([("user-1", None)], {})
+            _mod, "_load_recipients_and_counts", return_value=([recipient], {})
         )
         send_digest = mocker.patch.object(_mod, "_send_digest")
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
@@ -288,10 +501,13 @@ class TestMainOrchestration:
         self, mocker: MockerFixture
     ) -> None:
         self._mock_common_deps(mocker)
+        recipient = _mod.Recipient(
+            user_id="user-1", email="user@example.com", display_name=None, notification_days=[3]
+        )
         mocker.patch.object(
             _mod,
             "_load_recipients_and_counts",
-            return_value=([("user-1", "user@example.com")], {}),
+            return_value=([recipient], {}),
         )
         send_digest = mocker.patch.object(_mod, "_send_digest")
         mock_logger_info = mocker.patch.object(_mod.logger, "info")
@@ -311,10 +527,16 @@ class TestMainOrchestration:
         self, mocker: MockerFixture
     ) -> None:
         self._mock_common_deps(mocker)
-        recipients = [("user-1", "a@example.com"), ("user-2", "b@example.com")]
-        counts_by_user = {"user-1": [("CV A", 2)], "user-2": [("CV B", 1)]}
+        recipients = [
+            _mod.Recipient(user_id="user-1", email="a@example.com", display_name=None, notification_days=[3]),
+            _mod.Recipient(user_id="user-2", email="b@example.com", display_name=None, notification_days=[3]),
+        ]
+        entries_by_user = {
+            "user-1": [_make_cv_entry(cv_name="CV A", unseen_count=2)],
+            "user-2": [_make_cv_entry(cv_name="CV B", unseen_count=1)],
+        }
         mocker.patch.object(
-            _mod, "_load_recipients_and_counts", return_value=(recipients, counts_by_user)
+            _mod, "_load_recipients_and_counts", return_value=(recipients, entries_by_user)
         )
         mocker.patch.object(_mod, "_build_email_content", return_value=("text", "html"))
         send_digest = mocker.patch.object(
