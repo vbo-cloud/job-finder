@@ -8743,6 +8743,11 @@ mais dans la même couche :
   `job-jf-dev-frc-notifications` — sans ça le nouveau Container App Job créé par Terraform
   référencerait une image jamais construite. Repéré par `reviewer-infra` (le workflow ne connaissait
   aucun des deux avant cette PR).
+- **`envs/dev/monitoring.tf`** : ajout de `notifications = module.job_notifications.id` à
+  `local.all_job_ids` — sans ça le nouveau job n'aurait pas d'alerte `job_execution_failed` dédiée
+  (le commentaire du bloc dit explicitement d'ajouter les nouveaux jobs ici). Repéré par
+  `reviewer-infra`. `job_offer_fetch_scheduler` manque encore à cette liste — dette préexistante,
+  hors périmètre de cette PR (ce job n'est pas touché ici).
 - **`envs/dev/container_apps.tf`** : nouveau module `job_notifications` (Container App Job, trigger
   `timer`, `cron_expression = "0 17,18 * * *"` — mêmes deux horaires UTC susceptibles de correspondre
   à 19h Paris selon l'heure d'été/hiver, exactement le même mécanisme que
@@ -8796,13 +8801,18 @@ mais dans la même couche :
 - `terraform fmt -check` et `terraform validate` : propres sur `envs/dev`.
 - `terraform plan` sur `envs/dev` (avec `az login` local + `-var alert_email=...` fourni en ligne de
   commande pour contourner l'absence de cette variable en local, non liée à cette PR) : le diff
-  contient exactement les deux changements attendus —
-  `module.email_communication.azurerm_email_communication_service_domain_sender_username.this` remplacé
-  et `module.job_notifications.azurerm_container_app_job.this` créé. Le plan complet affichait aussi
-  des changements sur `jumpbox`, `webapp`, et l'action group d'alerte : dérive préexistante causée par
-  des variables (`portfolio_contact_function_url`, valeur réelle d'`alert_email`) absentes du
-  `terraform.tfvars` local — confirmée sans rapport avec cette PR via `git diff --stat`, qui ne montre
-  que `variables.tf` et `container_apps.tf` modifiés sous `envs/dev`.
+  contient les changements attendus pour cette PR —
+  `module.email_communication.azurerm_email_communication_service_domain_sender_username.this` remplacé,
+  `module.job_notifications.azurerm_container_app_job.this` créé, et
+  `azurerm_monitor_metric_alert.job_execution_failed["notifications"]` créé (ajout à `all_job_ids`).
+  Le plan complet affichait aussi des changements sur `jumpbox`, `webapp`, l'action group d'alerte, et
+  un écart d'image (`:<sha>` réel vs `:latest` désiré) sur plusieurs jobs existants non touchés par
+  cette PR (`cleanup`, `cv-analysis`, `matching`, `match-analysis`, `offer-fetching`,
+  `offer-fetch-scheduler`) : dérive préexistante, en partie causée par des variables
+  (`portfolio_contact_function_url`, valeur réelle d'`alert_email`) absentes du `terraform.tfvars`
+  local, en partie par un déploiement CI réel sur `dev` survenu entre deux exécutions locales de
+  `plan` pendant cette session — confirmée sans rapport avec cette PR via `git diff --stat`, qui ne
+  montre que `variables.tf`, `container_apps.tf`, et `monitoring.tf` modifiés sous `envs/dev`.
 - `pytest` : 403 tests passent (21 pour `agents/notifications`), suite complète du repo.
 - Pas de `ruff`/linter configuré dans le repo à ce jour (aucune config, aucune dépendance) — rien à
   exécuter sur ce point.
