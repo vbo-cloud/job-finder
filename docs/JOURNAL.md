@@ -8820,3 +8820,28 @@ mais dans la même couche :
   déclencher un run manuel (portail ou `az containerapp job start`) avec au moins un profil de test
   ayant `notification_days` incluant le jour du test et un match non vu — sinon le run se termine en
   no-op silencieux (comportement attendu).
+
+### Correctif post-PR : CI `unitTests.yml` en échec (dépendance manquante)
+
+`unitTests.yml` installe `agents/webapp/requirements.txt` (verrouillé par `pip-compile` à partir de
+`agents/webapp/requirements.in`) pour lancer `pytest` sur tout `JobFinder/python` — pas le
+`JobFinder/python/requirements.txt` racine édité plus haut dans cette PR, qui ne sert qu'aux
+`Dockerfile` de chaque agent. `azure-communication-email` manquait donc à ce fichier verrouillé,
+faisant échouer la collecte de `agents/notifications/tests/test_notifications.py` en CI
+(`ModuleNotFoundError`) alors que la suite passait en local (venv différent, dépendance déjà
+installée manuellement pendant le développement).
+
+- **`agents/webapp/requirements.in`** : ajout de `azure-communication-email`.
+- **`agents/webapp/requirements.txt`** régénéré via `pip-compile` : au passage, `pip-compile` a
+  aussi ajouté tout l'arbre de dépendances transitives d'`azure-monitor-opentelemetry` (les paquets
+  `opentelemetry-instrumentation-*`, `msrest`, `wrapt`, etc.) qui étaient absents du fichier
+  verrouillé — celui-ci contenait la ligne `azure-monitor-opentelemetry==1.8.8` sans ses propres
+  dépendances, signe qu'il avait été édité à la main plutôt que régénéré à l'introduction de ce
+  paquet. Épinglé exactement sur `1.8.8` dans `requirements.in` pour ne pas bouger la version
+  documentée dans `shared/telemetry.py` (comportement vérifié empiriquement contre cette version
+  précise) : `pip-compile` échoue à résoudre ce pin exact (conflit de contraintes internes,
+  `RuntimeError: No stable configuration...`). Laissé sans pin — résolu à `1.8.9` (patch). Vérifié
+  que le comportement documenté (kwarg `resource=` vs `service_name=`) tient toujours : les 9 tests
+  de `tests/test_telemetry.py` passent avec `1.8.9` installé, dont
+  `test_configure_azure_monitor_not_called_service_name_kwarg` qui couvre précisément ce point.
+- Suite complète rejouée avec ce nouveau lock file installé : 399 tests passent.
