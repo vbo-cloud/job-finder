@@ -34,11 +34,15 @@ from pytest_mock import MockerFixture
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
+from shared.unsubscribe_token import verify_unsubscribe_token
+
 _NOTIFICATIONS_DIR = Path(__file__).parent.parent
 _spec = importlib.util.spec_from_file_location("notifications_main", _NOTIFICATIONS_DIR / "main.py")
 _mod = importlib.util.module_from_spec(_spec)
 sys.modules["notifications_main"] = _mod
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+
+TEST_UNSUBSCRIBE_URL = "https://webapp.jobfinder.example/notifications/unsubscribe?token=test-token"
 
 
 def _make_cv_entry(**overrides: object) -> "_mod.CvDigestEntry":
@@ -101,7 +105,7 @@ def test_build_email_content_includes_cv_name_and_count() -> None:
     entry = _make_cv_entry(cv_name="Alternance Cloud", unseen_count=3)
 
     plain_text, html_body = _mod._build_email_content(
-        None, [3], 3, [entry], "https://jobfinder.example"
+        None, [3], 3, [entry], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
     )
 
     assert "Alternance Cloud : 3 nouvelle(s) offre(s)" in plain_text
@@ -114,7 +118,7 @@ def test_build_email_content_uses_placeholder_for_unnamed_cv() -> None:
     entry = _make_cv_entry(cv_name=None, unseen_count=1)
 
     plain_text, html_body = _mod._build_email_content(
-        None, [3], 3, [entry], "https://jobfinder.example"
+        None, [3], 3, [entry], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
     )
 
     assert "CV sans nom : 1 nouvelle(s) offre(s)" in plain_text
@@ -124,7 +128,9 @@ def test_build_email_content_uses_placeholder_for_unnamed_cv() -> None:
 def test_build_email_content_lists_every_cv() -> None:
     entries = [_make_cv_entry(cv_name="CV A", unseen_count=2), _make_cv_entry(cv_name="CV B", unseen_count=5)]
 
-    plain_text, _ = _mod._build_email_content(None, [3], 3, entries, "https://jobfinder.example")
+    plain_text, _ = _mod._build_email_content(
+        None, [3], 3, entries, "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
+    )
 
     assert "CV A : 2 nouvelle(s) offre(s)" in plain_text
     assert "CV B : 5 nouvelle(s) offre(s)" in plain_text
@@ -134,7 +140,9 @@ def test_build_email_content_escapes_cv_name_in_html() -> None:
     """A CV name containing HTML-significant characters must not break the markup."""
     entry = _make_cv_entry(cv_name="<script>", unseen_count=1)
 
-    _, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
+    _, html_body = _mod._build_email_content(
+        None, [3], 3, [entry], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
+    )
 
     assert "<script>" not in html_body
     assert "&lt;script&gt;" in html_body
@@ -144,7 +152,9 @@ def test_build_email_content_escapes_offer_title_and_company_in_html() -> None:
     """Offer.title/Offer.company are free text (like CV.name) — must be escaped too."""
     entry = _make_cv_entry(top_offer_title="<b>Dev</b>", top_offer_company="<script>Corp</script>")
 
-    _, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
+    _, html_body = _mod._build_email_content(
+        None, [3], 3, [entry], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
+    )
 
     assert "<b>Dev</b>" not in html_body
     assert "&lt;b&gt;Dev&lt;/b&gt;" in html_body
@@ -154,7 +164,7 @@ def test_build_email_content_escapes_offer_title_and_company_in_html() -> None:
 
 def test_build_email_content_greets_generically_without_display_name() -> None:
     plain_text, html_body = _mod._build_email_content(
-        None, [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+        None, [3], 3, [_make_cv_entry()], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
     )
 
     assert "Bonjour," in plain_text
@@ -165,7 +175,7 @@ def test_build_email_content_greets_generically_without_display_name() -> None:
 
 def test_build_email_content_personalizes_greeting_with_display_name() -> None:
     plain_text, html_body = _mod._build_email_content(
-        "Camille", [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+        "Camille", [3], 3, [_make_cv_entry()], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
     )
 
     assert "Bonjour Camille," in plain_text
@@ -176,7 +186,7 @@ def test_build_email_content_escapes_display_name_in_html() -> None:
     """display_name is a best-effort JWT claim (free text) — must be escaped in HTML, same
     as CV.name/Offer.title/Offer.company. The plain-text greeting stays unescaped."""
     plain_text, html_body = _mod._build_email_content(
-        "<script>", [3], 3, [_make_cv_entry()], "https://jobfinder.example"
+        "<script>", [3], 3, [_make_cv_entry()], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
     )
 
     assert "Bonjour <script>," in plain_text
@@ -187,12 +197,75 @@ def test_build_email_content_escapes_display_name_in_html() -> None:
 def test_build_email_content_omits_location_separator_when_offer_location_is_blank() -> None:
     entry = _make_cv_entry(top_offer_location="", top_offer_company="Doctolib", top_offer_contract_type="CDI")
 
-    plain_text, html_body = _mod._build_email_content(None, [3], 3, [entry], "https://jobfinder.example")
+    plain_text, html_body = _mod._build_email_content(
+        None, [3], 3, [entry], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
+    )
 
     assert "Doctolib · CDI" in plain_text
     assert "Doctolib · CDI" in html_body
     assert "Doctolib —" not in plain_text
     assert "Doctolib —" not in html_body
+
+
+def test_build_email_content_footer_links_to_unsubscribe_url_not_profile() -> None:
+    """The footer's "Se désabonner" link must be the signed one-click URL, not a bare
+    /profile link — same URL as the RFC 8058 List-Unsubscribe header sent by _send_digest,
+    so a human's click and a mail client's automated POST do the same thing."""
+    plain_text, html_body = _mod._build_email_content(
+        None, [3], 3, [_make_cv_entry()], "https://jobfinder.example", TEST_UNSUBSCRIBE_URL
+    )
+
+    assert TEST_UNSUBSCRIBE_URL in plain_text
+    assert f'href="{TEST_UNSUBSCRIBE_URL}"' in html_body
+    assert "https://jobfinder.example/profile" not in plain_text
+    assert "https://jobfinder.example/profile" not in html_body
+
+
+# ---------------------------------------------------------------------------
+# _build_unsubscribe_url
+# ---------------------------------------------------------------------------
+
+
+def test_build_unsubscribe_url_points_at_webapp_base_url_not_frontend_url() -> None:
+    url = _mod._build_unsubscribe_url("user-123")
+
+    assert url.startswith(_mod._webapp_base_url)
+    assert "/notifications/unsubscribe?token=" in url
+
+
+def test_build_unsubscribe_url_token_verifies_back_to_the_same_user_id() -> None:
+    url = _mod._build_unsubscribe_url("user-123")
+    token = url.split("token=", 1)[1]
+
+    assert verify_unsubscribe_token(token) == "user-123"
+
+
+def test_webapp_base_url_has_no_trailing_slash_even_if_configured_with_one(
+    mocker: MockerFixture,
+) -> None:
+    """A misconfigured WEBAPP_BASE_URL with a trailing slash must not double up with the
+    leading "/" in _build_unsubscribe_url's f-string (defensive rstrip("/") in there)."""
+    mocker.patch.object(_mod, "_webapp_base_url", "https://webapp.jobfinder.example/")
+
+    url = _mod._build_unsubscribe_url("user-123")
+
+    assert "example//notifications" not in url
+    assert url.startswith("https://webapp.jobfinder.example/notifications/unsubscribe?token=")
+
+
+# ---------------------------------------------------------------------------
+# _send_digest — RFC 8058 headers
+# ---------------------------------------------------------------------------
+
+
+def test_send_digest_sets_list_unsubscribe_headers() -> None:
+    client = MagicMock()
+
+    _mod._send_digest(client, "user@example.com", "subject", "text", "<html></html>", TEST_UNSUBSCRIBE_URL)
+
+    sent_message = client.begin_send.call_args.args[0]
+    assert sent_message["headers"]["List-Unsubscribe"] == f"<{TEST_UNSUBSCRIBE_URL}>"
+    assert sent_message["headers"]["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
 
 
 # ---------------------------------------------------------------------------

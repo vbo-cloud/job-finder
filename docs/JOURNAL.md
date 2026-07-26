@@ -9464,3 +9464,192 @@ explicitement à Vincent dans la description de cette PR, pas seulement document
   non nul dans les logs — seule preuve que l'URL choisie fonctionne réellement en authentification par
   token. Revérifier au passage que le role assignment `caj` est toujours présent (simple confirmation,
   aucune recréation attendue ici).
+
+---
+
+## PR #245 — feat(backend): lien de désabonnement one-click signé HMAC (RFC 8058) pour le récap notifications
+
+**Date :** 2026-07-26
+**Branche :** `feature/notifications-one-click-unsubscribe` → `dev`
+
+### Contexte
+
+PR 2/2 du plan `docs/prompts/prompt-email-one-click-unsubscribe.md` (rédigé avec Claude Cowork, dans
+le dépôt/worktree `job-finder` séparé — absent de cet arbre, cohérent avec les autres références de
+prompt-file du projet). La PR #243 avait posé le secret Key Vault partagé
+(`NOTIFICATIONS_UNSUBSCRIBE_SECRET`, wiré sur `notifications` et `webapp`) sans aucun code
+consommateur. Cette PR ajoute le code applicatif : signature/vérification du token, endpoint de
+désabonnement, et les en-têtes RFC 8058 sur l'envoi du récap.
+
+Motivation RFC 8058 : sans les en-têtes `List-Unsubscribe`/`List-Unsubscribe-Post`, Gmail/Outlook
+n'affichent pas de bouton natif de désabonnement — un destinataire agacé clique alors "Signaler comme
+spam", ce qui dégrade la réputation d'envoi de tous les mails suivants via ACS. Les deux en-têtes
+ensemble déclenchent le bouton natif et la désinscription en un clic, sans passer par le "Signaler
+comme spam".
+
+### Ce qui a été fait
+
+- **`shared/unsubscribe_token.py`** (nouveau) : `sign_unsubscribe_token(user_id)` /
+  `verify_unsubscribe_token(token)`, HMAC-SHA256 sur `user_id`, sans expiration par choix (voir
+  Décisions techniques). Placé dans `shared/` plutôt que dans l'un des deux agents consommateurs —
+  ni `agents/notifications` ni `agents/webapp` n'importe le code de l'autre.
+- **`agents/webapp/routers/notifications.py`** (nouveau) : `POST/GET /notifications/unsubscribe`,
+  premier endpoint non authentifié du webapp — l'identité vient du token signé, pas d'un JWT. Vide
+  `UserProfile.notification_days` via un UPDATE idempotent ; réponse 200 identique que le profil
+  existe ou non, pour ne pas révéler l'existence d'un compte à un appelant non authentifié.
+  Enregistré dans `agents/webapp/main.py` (`app.include_router(notifications.router)`).
+- **`agents/notifications/main.py`** : `_build_unsubscribe_url`, branché dans le pied de page de
+  l'email (remplace l'ancien lien nu vers `/profile`) et dans `_send_digest` comme en-têtes
+  `List-Unsubscribe` / `List-Unsubscribe-Post` sur l'appel `begin_send` d'Azure Communication
+  Services.
+- **`JobFinder/Terraform/envs/dev/container_apps.tf`** : ajout de la variable d'environnement
+  `WEBAPP_BASE_URL` sur le Container App Job `job_notifications` (= `module.webapp.fqdn`) — découvert
+  tardivement, après le merge de la PR #243, que l'agent a besoin de connaître l'URL publique du
+  webapp lui-même (et non celle du frontend) pour construire ce lien : le POST automatisé du
+  RFC 8058 vient du serveur/client mail, jamais d'un navigateur, donc il doit taper directement le
+  backend FastAPI. Repris dans cette PR plutôt que d'ouvrir une troisième PR pour une seule variable.
+- Tests : couverture de `shared/unsubscribe_token.py`, de l'endpoint `/notifications/unsubscribe`, et
+  du lien/en-têtes RFC 8058 du récap (`tests/test_unsubscribe_token.py`,
+  `tests/test_webapp_notifications.py`, `agents/notifications/tests/test_notifications.py`, fixtures
+  `conftest.py` associées).
+
+### Décisions techniques
+
+- **Pas de JWT réutilisé pour ce token** : `agents/webapp/auth.py` valide contre Entra External ID
+  (rotation de clés, audience) — hors sujet pour un token à usage unique (identifier un `user_id` pour
+  un désabonnement, sans notion de session). Un HMAC dédié, scopé par un `_PURPOSE = "unsubscribe"`
+  constant, suffit et évite de coupler ce cas à la logique Entra.
+- **Pas d'expiration sur le token** : le pire cas d'un token deviné ou fuité est un désabonnement non
+  désiré (`notification_days` réinitialisé à `[]`), pas une fuite de données — alors qu'un lien
+  expiré après quelques jours produirait un pire résultat (clic "Signaler comme spam" par un
+  utilisateur qui rouvre un vieil email).
+- **`container_apps.tf` inclus dans une PR par ailleurs Python, malgré la règle invoquée par la
+  PR #243** : l'entrée de la PR #243 justifiait explicitement le découpage en deux PR par l'interdit
+  CLAUDE.md de mélanger plateforme (`envs/dev/`) et app dans une même PR. Cette PR réintroduit
+  pourtant un changement `envs/dev/container_apps.tf` aux côtés du code Python — exactement le mélange
+  que la PR #243 disait vouloir éviter. Accepté en connaissance de cause : une seule variable
+  d'environnement découverte après coup, plutôt qu'une troisième PR pour ce seul ajout (voir
+  Ce qui a été fait) ; la tension avec la justification de la PR #243 n'est pas résolue, seulement
+  jugée mineure au regard du coût d'une PR dédiée à un `env` var.
+- **`send_test_notification.py` non créé** : le prompt mentionne ce script pour une vérification
+  manuelle via Gmail des en-têtes reçus. Son absence de tout l'historique (`git log --all
+  --diff-filter=D`, déjà vérifié et signalé dans l'entrée de la PR #243) est reprise ici telle quelle,
+  non re-vérifiée dans cette passe (pas d'accès Bash/`git log` depuis ce rôle, voir Vérification) —
+  cette étape de vérification manuelle n'a pas été réalisée pour cette PR non plus.
+
+### Vérification
+
+- Relecture des docstrings des fichiers Python touchés (`shared/unsubscribe_token.py`,
+  `agents/webapp/routers/notifications.py`, `agents/webapp/main.py`, `agents/notifications/main.py`)
+  contre `conventions-python` (Google style, Args/Returns/Raises) :
+  - `shared/unsubscribe_token.py` : le Returns de `verify_unsubscribe_token` qualifiait le user_id
+    retourné d'"encoded" alors que le code retourne la valeur **décodée**
+    (`base64.urlsafe_b64decode(...).decode()`) — corrigé.
+  - `agents/webapp/routers/notifications.py` : `unsubscribe()` n'avait pas de section `Raises` alors
+    qu'elle propage `SQLAlchemyError` depuis `_clear_notification_days` (500 côté appelant) — ajoutée.
+  - `agents/notifications/main.py` : le docstring de module renvoyait, pour la contrainte
+    "webapp et non le frontend" de `WEBAPP_BASE_URL`, vers `shared/unsubscribe_token.py` — ce module
+    ne couvre que le HMAC/l'absence d'expiration/le placement partagé, pas cette distinction
+    webapp/frontend. Corrigé pour pointer vers `_build_unsubscribe_url` (même fichier), qui l'explique
+    réellement.
+  - Le reste (`agents/notifications/main.py`, docstring de module hors ce renvoi, et
+    l'enregistrement du router dans `main.py`) était déjà exact et complet — rien d'autre à changer.
+- `container_apps.tf` : le commentaire au-dessus de `WEBAPP_BASE_URL` a été relu contre la valeur
+  réelle de `module.webapp.fqdn` (`modules/container_app/outputs.tf` :
+  `value = "https://${azurerm_container_app.this.ingress[0].fqdn}"`) — le schéma `https://` est bien
+  inclus, donc les docstrings Python qui décrivent cette variable comme une "Base URL"/"Absolute URL"
+  sont exactes ; pas de lien sans schéma à signaler.
+- Pas d'accès Bash/`git diff`/`gh` depuis ce rôle. Numéro de PR dérivé du dernier titre `## PR #244`
+  de ce fichier (+1 = #245) — confirmé exact ensuite via `gh pr list --state all --limit 3`.
+- Aucune entrée `## PR #245` ni entrée existante pour cette branche dans `docs/JOURNAL.md` avant cette
+  passe — nouvelle entrée ajoutée en fin de fichier.
+- Deux corrections faites après la passe doc-writer, sur son signalement (hors périmètre docs) :
+  - `shared/unsubscribe_token.py` : `hmac.compare_digest` lève `TypeError` (pas `ValueError`) sur un
+    opérande `str` non-ASCII — un `signature` malveillant/corrompu extrait d'un token pouvait donc
+    faire planter `verify_unsubscribe_token` (500 sur cet endpoint non authentifié) au lieu de
+    renvoyer `None`. Corrigé en incluant l'appel `hmac.compare_digest` dans le `try` et en catchant
+    aussi `TypeError`. Nouveau test `test_rejects_a_non_ascii_signature_without_raising`.
+  - `shared/unsubscribe_token.py` : `_PURPOSE` était déclarée après le bloc fail-fast de
+    `NOTIFICATIONS_UNSUBSCRIBE_SECRET`, violant la règle `conventions-python` (constantes
+    immédiatement après les imports, avant toute variable d'environnement). Réordonné.
+- **Revue `reviewer-backend` : CHANGEMENTS REQUIS, puis APPROUVÉ après corrections.**
+  - Point bloquant : `agents/webapp/routers/notifications.py` déclarait `router`/`logger` avant
+    les constantes `_INVALID_TOKEN_HTML`/`_UNSUBSCRIBED_HTML` — même violation d'ordre que
+    `routers/cv.py` (non conforme), à l'inverse de `routers/profile.py` (conforme). Réordonné.
+  - Remarque non-bloquante prise au sérieux et corrigée (pas seulement notée) : le endpoint
+    répondait initialement de façon identique en GET et en POST, les deux désabonnant
+    immédiatement. Or le lien visible du footer est un GET, et les liens visibles d'un email
+    sont couramment suivis automatiquement par des prefetchers de liens (Outlook Safe Links,
+    passerelles antivirus/anti-spam) sans intervention humaine — un GET qui mute aurait
+    désabonné silencieusement des utilisateurs n'ayant jamais cliqué. Séparé en deux routes :
+    `GET /notifications/unsubscribe` (nouveau `confirm_unsubscribe`) affiche désormais une page
+    de confirmation avec un formulaire, sans aucune mutation ; `POST /notifications/unsubscribe`
+    (`unsubscribe`, inchangé) reste la seule route qui vide `notification_days`. Le POST
+    automatique RFC 8058 (`List-Unsubscribe-Post: List-Unsubscribe=One-Click`) continue de
+    désabonner en un clic sans changement ; un humain doit désormais soumettre le formulaire
+    (un second POST explicite) pour confirmer. Tests de `tests/test_webapp_notifications.py`
+    réorganisés en conséquence (`TestConfirmUnsubscribeGet` / `TestUnsubscribePost`).
+  - Remarque non-bloquante, corrigée : `python/.env.example` ne listait ni
+    `NOTIFICATIONS_UNSUBSCRIBE_SECRET` ni `WEBAPP_BASE_URL` — ajoutées (le fichier reste
+    incomplet pour d'autres variables déjà absentes avant cette PR, hors périmètre ici).
+  - Remarque non-bloquante, non corrigée (hors périmètre, systémique à tous les agents CAJ) :
+    aucun agent hors `agents/webapp/auth.py` n'appelle `load_dotenv()` — comportement préexistant
+    à cette PR, pas introduit par elle.
+- **Deuxième aller-retour `reviewer-backend` : CHANGEMENTS REQUIS, injection HTML réelle trouvée
+  et corrigée.** En vérifiant spécifiquement la sécurité de l'interpolation de `token` dans
+  l'attribut `action` de la page de confirmation (GET), le reviewer a démontré — pas seulement
+  supposé — qu'un token peut être forgé pour contenir des caractères `"`/`<`/`>` tout en
+  vérifiant toujours avec succès : le décodeur `base64.urlsafe_b64decode` de Python **ignore
+  silencieusement** les octets hors alphabet au lieu de les rejeter, donc des caractères
+  injectés dans le segment `encoded_user_id` (en nombre multiple de 4, pour ne pas dérégler le
+  calcul du padding) sont simplement supprimés au décodage — le `user_id` récupéré et sa
+  signature HMAC restent inchangés. Le commentaire précédent affirmant que l'alphabet d'un
+  token vérifié est nécessairement sûr pour du HTML était donc factuellement faux. Reproduit et
+  confirmé manuellement avant correction (`base64.urlsafe_b64decode('dXN""""lci0xMjM' + '=')`
+  décode bien en `b'user-123'`, sans erreur). Corrections :
+  - `agents/webapp/routers/notifications.py` : `_CONFIRM_HTML.format(token=token)` (violation
+    du style f-strings-exclusif, seul usage de `.format()` du dépôt) remplacé par une fonction
+    `_render_confirm_html(token)` qui échappe `token` via `html.escape()` avant de l'interpoler
+    dans un f-string — même discipline que `CV.name`/`Offer.title`/`display_name` ailleurs dans
+    le projet : ne jamais présumer qu'une valeur est sûre pour du HTML sous prétexte qu'elle a
+    été validée pour un autre usage (ici, la vérification de signature).
+  - Nouveau test `test_escapes_a_token_crafted_to_break_out_of_the_form_action_attribute` —
+    forge un token avec 4 guillemets injectés, vérifie qu'il valide toujours
+    (`verify_unsubscribe_token` retourne bien le user_id), puis que la page de confirmation
+    l'échappe (`&quot;&quot;&quot;&#x27;` présent, `"""'` brut absent).
+- **Troisième revue externe (hors reviewer-backend/-infra) : deux points appliqués, un rejeté
+  comme non-bug, deux suggestions déclinées.**
+  - Rejeté : "`_clear_notification_days` ne convertit pas `SQLAlchemyError` en réponse HTTP
+    explicite, incohérent avec le reste du webapp" — vérifié faux par grep sur tous les
+    `except SQLAlchemyError` de `agents/webapp/routers/*.py` (`cv.py`, `profile.py`,
+    `matches.py`, `feedback.py`) : sans exception, chaque route logue puis relance nu
+    (`raise`), laissant FastAPI produire le 500 par défaut — aucune ne convertit en
+    `HTTPException` explicite. Le pattern de `notifications.py` est donc identique à
+    l'existant, pas une régression ; corriger isolément ce fichier aurait introduit
+    l'incohérence, pas résolu une incohérence préexistante.
+  - Appliqué : absence d'expiration/révocation du token — rotation de
+    `NOTIFICATIONS_UNSUBSCRIBE_SECRET` casse instantanément tous les liens déjà envoyés
+    (emails immuables une fois délivrés, aucun rattrapage possible). Documenté directement
+    dans `shared/unsubscribe_token.py` (nouveau paragraphe "Operational consequence") plutôt
+    que seulement ici, pour rester visible à quiconque touche ce fichier plus tard : prévoir
+    une période de transition acceptant l'ancien ET le nouveau secret dans
+    `verify_unsubscribe_token` avant toute rotation, ou accepter la casse comme coût ponctuel
+    assumé.
+  - Appliqué : `_webapp_base_url` avec un slash final (`WEBAPP_BASE_URL=".../"` mal configuré)
+    aurait produit `.../notifications//unsubscribe` (double slash). `module.webapp.fqdn`
+    n'en a pas aujourd'hui (vérifié en PR #245 ci-dessus), mais `_build_unsubscribe_url` fait
+    désormais `_webapp_base_url.rstrip("/")` avant de construire l'URL, par défense plutôt que
+    par confiance dans la valeur Terraform actuelle. Nouveau test
+    `test_webapp_base_url_has_no_trailing_slash_even_if_configured_with_one` — vérifié qu'il
+    échoue bien sans le correctif avant de le committer (`git` diff temporaire, restauré
+    ensuite), pas seulement écrit après coup.
+  - Décliné : script `send_test_notification.py` pour vérifier manuellement les en-têtes RFC
+    8058 via un vrai client mail — suggestion déjà reconnue comme un écart documenté (voir
+    ci-dessus), pas un nouveau point, aucune action supplémentaire.
+  - Décliné : ajouter un paramètre optionnel `issued_at`/`token_max_age` à `_signature` pour
+    anticiper un futur besoin d'expiration. Explicitement qualifié de "low priority" par la
+    suggestion elle-même et non requis par le besoin actuel — ajouter cette surface
+    d'interface maintenant serait concevoir pour une exigence hypothétique plutôt que pour
+    celle qui existe, à l'inverse de la convention du projet ("no premature complexity").
+    Si un vrai besoin d'expiration apparaît un jour, l'ajouter à ce moment-là, avec ses propres
+    tests, plutôt que de porter un paramètre mort dans l'intervalle.

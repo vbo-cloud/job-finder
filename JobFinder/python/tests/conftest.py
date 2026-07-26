@@ -17,6 +17,7 @@ _ENV_STUBS: dict[str, str] = {
     "ENTRA_EXTERNAL_CLIENT_ID": "00000000-0000-0000-0000-000000000001",
     "AZURE_STORAGE_ACCOUNT_URL": "https://teststorage.blob.core.windows.net",
     "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": "test.servicebus.windows.net",
+    "NOTIFICATIONS_UNSUBSCRIBE_SECRET": "test-unsubscribe-secret",
     # Pinned to a deployment that supports temperature/seed so existing determinism
     # assertions (kwargs["temperature"]/["seed"]) hold without every test needing to
     # patch AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT itself — the module default is
