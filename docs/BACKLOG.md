@@ -393,12 +393,12 @@ par service (`envs/dev/container_apps.tf` et jobs associés).
 
 ## Azure OpenAI
 
-### [hardening, pre-v1.0.0] Passer local_auth_enabled = false + Managed Identity sur OpenAI — ✅ FAIT (PR #232, #234, #243)
+### [hardening, pre-v1.0.0] Passer local_auth_enabled = false + Managed Identity sur OpenAI — ✅ FAIT (PR #232, #234, #244)
 
 Bascule Managed Identity faite en PR #232/#234 (`local_auth_enabled = false`, rôle `Cognitive Services OpenAI User`
 assigné à la UAMI, secrets `openai-api-key` supprimés). Il manquait le prérequis `custom_subdomain_name`
 sur le compte — sans lui, l'endpoint reste l'URL régionale partagée qui refuse l'auth par token AD
-(400 BadRequest, logs prod du 2026-07-26). Posé en PR #243.
+(400 BadRequest, logs prod du 2026-07-26). Posé en PR #244.
 
 ---
 

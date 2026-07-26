@@ -9319,7 +9319,7 @@ l'instant.
 
 ---
 
-## PR #243 — feat(openai): custom_subdomain_name sur le compte Azure OpenAI
+## PR #244 — feat(openai): custom_subdomain_name sur le compte Azure OpenAI
 
 **Date :** 2026-07-26
 **Branche :** `feature/openai-custom-subdomain` → `dev`
