@@ -1,10 +1,10 @@
 """Offer fetch scheduler — timer-triggered relay that asks offer_fetching to run a full refresh.
 
-Runs as a Container App Job on the same UTC cron_expression job_offer_fetching used before this
-agent existed (see container_apps.tf) — Azure's schedule trigger has no timezone/DST awareness, so
-Terraform still fires this job at every UTC hour that could map to 18:00 Europe/Paris under
-either CET or CEST; _is_scheduled_local_hour no-ops the firing that doesn't match the current DST
-state, exactly as offer_fetching's own main() used to before it became purely event-driven — see
+Runs as a Container App Job on a UTC cron_expression (see container_apps.tf) — Azure's schedule
+trigger has no timezone/DST awareness, so Terraform fires this job at every UTC hour that could
+map to 18:00 Europe/Paris under either CET or CEST; _is_scheduled_local_hour no-ops the firing that
+doesn't match the current DST state. This DST-guard pattern is inherited from offer_fetching's own
+main(), which used to schedule itself the same way before it became purely event-driven — see
 docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
 
 This agent never talks to France Travail, OpenAI, or the database — its only job is publishing one
@@ -25,8 +25,9 @@ from shared.telemetry import configure_telemetry
 
 OFFER_FETCH_REQUEST_QUEUE = "offer-fetch-request"
 PARIS_TZ = ZoneInfo("Europe/Paris")
-# Kept in sync with the UTC hours covered by container_apps.tf's cron_expression
-# for job_offer_fetch_scheduler — see _is_scheduled_local_hour.
+# Europe/Paris local hour(s) this job is meant to fire at. Must stay in sync with the UTC
+# hours covered by container_apps.tf's cron_expression for job_offer_fetch_scheduler — see
+# _is_scheduled_local_hour, which converts now_utc to Europe/Paris before comparing.
 SCHEDULED_LOCAL_HOURS = (18,)
 
 logger = structlog.get_logger()

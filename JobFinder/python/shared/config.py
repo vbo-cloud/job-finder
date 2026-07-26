@@ -17,8 +17,8 @@ assert 0 < INTENT_EMBEDDING_WEIGHT < 1, (
 # courant, cf. ADR-018). Fixé à 20 en bêta — inclus dans le palier gratuit, ne consomme aucun crédit.
 MATCH_ANALYSIS_AUTO_TOP_N = int(os.getenv("MATCH_ANALYSIS_AUTO_TOP_N", "20"))
 # 2 jours : une offre non revue lors des derniers fetches est considérée clôturée.
-# L'agent fetch tourne 2×/jour ; 2 jours = 4 cycles de grâce avant suppression.
-# Configurable via CLEANUP_COLLECTED_AGE_DAYS.
+# L'agent fetch tourne 1×/jour (offer_fetch_scheduler, 18h Europe/Paris) ; 2 jours = 2 cycles
+# de grâce avant suppression. Configurable via CLEANUP_COLLECTED_AGE_DAYS.
 CLEANUP_COLLECTED_AGE_DAYS = int(os.getenv("CLEANUP_COLLECTED_AGE_DAYS", "2"))
 # Température basse + seed fixe pour les appels d'analyse GPT-4o-mini (qualité CV, paires CV<->offre) :
 # la cohérence du score/de la review d'une exécution à l'autre sur le même contenu prime sur la
