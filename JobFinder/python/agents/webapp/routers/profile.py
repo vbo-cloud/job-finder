@@ -518,10 +518,11 @@ def refill_credits(
 def _send_credits_alert_email(user_id: str, email: str | None, display_name: str | None) -> bool:
     """Send the "more credits requested" alert to OWNER_ALERT_EMAIL via ACS.
 
-    Fire-and-forget, same trade-off as _dispatch_start_matching's ServiceBusError
-    handling: the signal is already committed to the DB by the time
-    request_more_credits calls this, so an ACS outage must not turn into a 500
-    the user sees — logged and swallowed instead of raised.
+    Blocking (`.result()`), not fire-and-forget — the boolean return is load-bearing:
+    request_more_credits only stamps more_credits_requested_at when this returns True,
+    so a failed send never starts the cooldown (see PR #254 in docs/JOURNAL.md). An ACS
+    outage must not turn into a 500 the user sees, so AzureError is logged and swallowed
+    into a False return rather than raised.
 
     Args:
         user_id: Authenticated user ID, included in the email body.
@@ -532,6 +533,7 @@ def _send_credits_alert_email(user_id: str, email: str | None, display_name: str
         True if the email was sent successfully, False on an ACS failure.
     """
     who = display_name or email or user_id
+    logger.info("more_credits_alert_email_started", user_id=user_id)
     try:
         _email_client.begin_send(
             {
@@ -551,7 +553,7 @@ def _send_credits_alert_email(user_id: str, email: str | None, display_name: str
         ).result()
         return True
     except AzureError:
-        logger.error("more_credits_requested_failed", user_id=user_id, exc_info=True)
+        logger.error("more_credits_alert_email_failed", user_id=user_id, exc_info=True)
         return False
 
 
@@ -569,6 +571,11 @@ def request_more_credits(
     spam the alert email for a user who still has credits) — the response never reveals
     which branch was taken.
 
+    more_credits_requested_at is stamped only after a successful send (never on a
+    deduplicated or a failed one) — a failed ACS send must not start the cooldown, or
+    the user's next click would silently keep being deduplicated for
+    MORE_CREDITS_REQUEST_COOLDOWN_SECONDS without ever actually reaching Vincent.
+
     Args:
         user_id: Authenticated user ID from the JWT sub claim.
         session: Active database session.
@@ -579,29 +586,35 @@ def request_more_credits(
         profile = session.execute(
             select(UserProfile).where(UserProfile.user_id == user_id)
         ).scalar_one_or_none()
-
-        if profile is None or profile.analysis_credits_remaining != 0:
-            return
-
-        now = datetime.now(timezone.utc)
-        deduplicated = profile.more_credits_requested_at is not None and (
-            now - profile.more_credits_requested_at
-        ).total_seconds() < MORE_CREDITS_REQUEST_COOLDOWN_SECONDS
-        email, display_name = profile.email, profile.display_name
-
-        session.execute(
-            update(UserProfile)
-            .where(UserProfile.user_id == user_id)
-            .values(more_credits_requested_at=now)
-        )
-        session.commit()
     except SQLAlchemyError:
         # Base class is intentional — any DB error (connection lost, timeout)
         # should abort the request and return 500.
-        logger.error("more_credits_requested_failed", user_id=user_id, exc_info=True)
+        logger.error("more_credits_lookup_failed", user_id=user_id, exc_info=True)
         raise
 
-    email_sent = not deduplicated and _send_credits_alert_email(user_id, email, display_name)
+    if profile is None or profile.analysis_credits_remaining != 0:
+        return
+
+    now = datetime.now(timezone.utc)
+    deduplicated = profile.more_credits_requested_at is not None and (
+        now - profile.more_credits_requested_at
+    ).total_seconds() < MORE_CREDITS_REQUEST_COOLDOWN_SECONDS
+
+    email_sent = False
+    if not deduplicated:
+        email_sent = _send_credits_alert_email(user_id, profile.email, profile.display_name)
+        if email_sent:
+            try:
+                session.execute(
+                    update(UserProfile)
+                    .where(UserProfile.user_id == user_id)
+                    .values(more_credits_requested_at=now)
+                )
+                session.commit()
+            except SQLAlchemyError:
+                logger.error("more_credits_stamp_failed", user_id=user_id, exc_info=True)
+                raise
+
     logger.info("more_credits_requested_completed", user_id=user_id, email_sent=email_sent)
 
 

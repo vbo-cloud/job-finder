@@ -194,10 +194,11 @@ class UserProfile(Base):
     analysis_credits_reset_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Stamped unconditionally by POST /credits/request-more on every accepted call (once
-    # the 0-credit gate passes) — read back on the next request to enforce
-    # MORE_CREDITS_REQUEST_COOLDOWN_SECONDS, which only decides whether the alert email
-    # is (re-)sent, not whether this column gets updated. NULL = never requested.
+    # Stamped by POST /credits/request-more only after a successful alert email send —
+    # never on a deduplicated call or a failed ACS send, so a failed send can never
+    # silently start MORE_CREDITS_REQUEST_COOLDOWN_SECONDS and block the next retry
+    # (see PR #254 in docs/JOURNAL.md). Read back on the next request to enforce that
+    # cooldown. NULL = never requested (or never successfully requested).
     more_credits_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -2,9 +2,10 @@
 
 Support column for the "I'd like more credits" signal button, shown only when a user is
 at 0 analysis credits — see docs/prompts/prompt-credits-signals-and-request-more.md.
-Stamped unconditionally by POST /credits/request-more on every accepted call (i.e. once
-the 0-credit gate passes) — the cooldown it also enforces only decides whether the alert
-email is actually (re-)sent, not whether this column gets updated.
+Stamped by POST /credits/request-more only after a successful alert email send — never
+on a deduplicated call (cooldown still running) nor on a failed ACS send, so a failed
+send can never silently start the cooldown and block the user's next retry (see PR #254
+in docs/JOURNAL.md).
 
 No backfill: the column starts at NULL for every existing profile, which correctly means
 "never requested" for everyone until their first request after this deploy — correct by

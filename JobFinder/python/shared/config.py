@@ -38,7 +38,9 @@ EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
 # sauvegardé immédiatement ; seul le déclenchement du recalcul est retardé.
 INTENT_DISPATCH_COOLDOWN_SECONDS = int(os.getenv("INTENT_DISPATCH_COOLDOWN_SECONDS", "300"))
 # 24h : borne la fréquence des emails d'alerte envoyés à Vincent quand un utilisateur à 0
-# crédit reclique plusieurs fois sur "Je voudrais plus de crédits" — le signal reste
-# enregistré en base à chaque clic (more_credits_requested_at), seul l'envoi d'email est
-# dédupliqué.
+# crédit reclique plusieurs fois sur "Je voudrais plus de crédits". more_credits_requested_at
+# n'est réécrit qu'après un envoi d'email réussi (jamais sur un clic dédupliqué ni sur un
+# échec ACS) — sinon un premier envoi en échec démarrerait quand même le cooldown et
+# bloquerait silencieusement les tentatives suivantes pendant 24h sans jamais alerter
+# Vincent (voir PR #254 dans docs/JOURNAL.md).
 MORE_CREDITS_REQUEST_COOLDOWN_SECONDS = int(os.getenv("MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", "86400"))
