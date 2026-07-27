@@ -311,12 +311,31 @@ class TestUploadCv:
         )
         assert resp.status_code == 422
 
-    def test_rejects_empty_pdf_magic_bytes(self, test_client):
+    @pytest.mark.parametrize("existing_count", [0, 1])
+    def test_rejects_empty_pdf_magic_bytes(self, test_client, mock_session, existing_count):
+        # existing_count stays below MAX_CVS_PER_USER (2), proving the cap guard
+        # let the request through to the next check instead of blocking it.
+        mock_session.execute.return_value.scalar_one.return_value = existing_count
+
         resp = test_client.post(
             "/cv/upload",
             files={"file": ("resume.pdf", b"NOT_A_PDF_HEADER", "application/pdf")},
         )
         assert resp.status_code == 422
+
+    def test_rejects_upload_at_cap(self, test_client, mock_session, mocker):
+        mock_session.execute.return_value.scalar_one.return_value = cv_router_module.MAX_CVS_PER_USER
+        mock_blob = mocker.patch.object(cv_router_module, "_upload_cv_blob")
+        mock_embed = mocker.patch.object(cv_router_module, "embed")
+
+        resp = test_client.post(
+            "/cv/upload",
+            files={"file": ("resume.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert resp.status_code == 403
+        mock_blob.assert_not_called()
+        mock_embed.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

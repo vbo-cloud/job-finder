@@ -23,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import send_message
-from shared.constants import THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
+from shared.constants import MAX_CVS_PER_USER, THUMBNAIL_SCALE, THUMBNAIL_SCALE_LG
 from shared.embedder import embed
 from shared.models import CV, CvAnalysis, Match, MatchAnalysis, Offer, UserProfile
 from auth import UserIdentity, get_current_identity, get_current_user
@@ -440,6 +440,7 @@ async def upload_cv(
         CVUploadOut with the CV ID, blob URL, and a confirmation message.
 
     Raises:
+        HTTPException 403: If the user has already reached MAX_CVS_PER_USER.
         HTTPException 422: If the uploaded file is not a valid PDF.
         HTTPException 503: If Azure Blob Storage is unavailable.
     """
@@ -450,6 +451,16 @@ async def upload_cv(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Only PDF files are accepted.",
+        )
+
+    existing_count = session.execute(
+        select(func.count()).select_from(CV).where(CV.user_id == user_id)
+    ).scalar_one()
+    if existing_count >= MAX_CVS_PER_USER:
+        logger.info("cv_upload_rejected_at_cap", user_id=user_id, cv_count=existing_count)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Maximum number of CVs reached ({MAX_CVS_PER_USER}).",
         )
 
     contents = await file.read()
