@@ -37,3 +37,8 @@ EXPERIENCE_MAX_PENALTY = float(os.getenv("EXPERIENCE_MAX_PENALTY", "0.3"))
 # jamais déclencher un volume illimité d'appels IA, même gratuits. Le profil est toujours
 # sauvegardé immédiatement ; seul le déclenchement du recalcul est retardé.
 INTENT_DISPATCH_COOLDOWN_SECONDS = int(os.getenv("INTENT_DISPATCH_COOLDOWN_SECONDS", "300"))
+# 24h : borne la fréquence des emails d'alerte envoyés à Vincent quand un utilisateur à 0
+# crédit reclique plusieurs fois sur "Je voudrais plus de crédits" — le signal reste
+# enregistré en base à chaque clic (more_credits_requested_at), seul l'envoi d'email est
+# dédupliqué.
+MORE_CREDITS_REQUEST_COOLDOWN_SECONDS = int(os.getenv("MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", "86400"))

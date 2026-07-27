@@ -3,6 +3,16 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import MatchItem, { type MatchItemData } from "@/app/_components/MatchItem";
 import type { MatchAnalysisOut, MatchOut } from "@/lib/api/types";
 
+jest.mock("@/lib/api/client", () => ({
+  __esModule: true,
+  default: { post: jest.fn().mockResolvedValue({}) },
+}));
+
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { capture: jest.fn(), identify: jest.fn(), setPersonProperties: jest.fn() },
+}));
+
 function makeMatch(
   score = 0.85,
   offerOverrides: Partial<MatchOut["offer"]> = {},
@@ -59,6 +69,7 @@ function makeProps(overrides: Partial<MatchItemData> = {}): MatchItemData {
     isExpanded: false,
     analysisPending: false,
     analysisError: null,
+    creditsExhausted: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onReject: jest.fn(),

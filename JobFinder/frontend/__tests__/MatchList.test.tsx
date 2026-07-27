@@ -3,6 +3,16 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import MatchList, { SKELETON_COUNT, type MatchItemData } from "@/app/_components/MatchList";
 import type { MatchOut } from "@/lib/api/types";
 
+jest.mock("@/lib/api/client", () => ({
+  __esModule: true,
+  default: { post: jest.fn().mockResolvedValue({}) },
+}));
+
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { capture: jest.fn(), identify: jest.fn(), setPersonProperties: jest.fn() },
+}));
+
 function makeMatch(id: string, score = 0.8): MatchOut {
   return {
     score,
@@ -33,6 +43,7 @@ function makeItem(id: string, score = 0.8): MatchItemData {
     isExpanded: false,
     analysisPending: false,
     analysisError: null,
+    creditsExhausted: false,
     onSelect: jest.fn(),
     onSave: jest.fn(),
     onReject: jest.fn(),

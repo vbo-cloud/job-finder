@@ -63,6 +63,10 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   // the parent refetches (the prop only refreshes on CV/zone change).
   const [analysisOverrides, setAnalysisOverrides] = useState(new Map<string, MatchAnalysisOut>());
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  // Distinguishes a 0-credit rejection from a generic analysis failure, so
+  // MatchAnalysisPanel can offer the "request more credits" CTA specifically
+  // for this case rather than matching on analysisError's message text.
+  const [creditsExhausted, setCreditsExhausted] = useState(false);
   const hasTrackedMatchesViewedRef = useRef(false);
 
   useEffect(() => {
@@ -142,6 +146,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     if (analysisPending.has(offerId)) return;
 
     setAnalysisError(null);
+    setCreditsExhausted(false);
     // Optimistic: flip to pending and reserve the credit synchronously, in the
     // same tick as the click, so the spinner/credit badge react instantly and
     // the button (which only renders while !inProgress) disappears before a
@@ -176,6 +181,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
           // No real consumption happened on this request (rejected before spending
           // a credit) — hence "exhausted", not "credit_consumed", for analytics.
           posthog.capture("credits_exhausted");
+          setCreditsExhausted(true);
         } else {
           notifyCreditsReleased();
         }
@@ -208,6 +214,10 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
     const opening = selectedId !== id;
     setSelectedId(opening ? id : null);
     setAnalysisError(null);
+    // Same reset as analysisError — otherwise reopening an offer after an
+    // earlier 402 on a *different* offer selection could still show the CTA
+    // from that stale attempt instead of only after a fresh one.
+    setCreditsExhausted(false);
     if (opening && !seenIds.has(id)) {
       setSeenIds((prev) => {
         const next = new Set(prev);
@@ -299,6 +309,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       isExpanded: selectedId === m.offer.id,
       analysisPending: analysisPending.has(m.offer.id),
       analysisError: selectedId === m.offer.id ? analysisError : null,
+      creditsExhausted: selectedId === m.offer.id ? creditsExhausted : false,
       searchQuery,
       onSelect:   () => toggleExpand(m.offer.id),
       onSave:     () => toggleSaved(m.offer.id),

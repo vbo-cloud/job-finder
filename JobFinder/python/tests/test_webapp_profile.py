@@ -2,7 +2,9 @@
 
 Covers: GET /profile, PUT /profile (happy path, 404, 500, partial-update
 upsert behaviour, intent_embedding recomputation, start-matching re-trigger on
-intent change), DELETE /profile (account erasure).
+intent change), POST /credits/refill (admin-only recharge), POST
+/credits/request-more (0-credit signal + cooldown-deduplicated alert email),
+DELETE /profile (account erasure).
 """
 import sys
 import uuid
@@ -11,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.core.exceptions import AzureError
 from azure.servicebus.exceptions import ServiceBusError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -45,6 +48,7 @@ def _make_profile() -> MagicMock:
     # that doesn't specifically exercise the cooldown itself.
     profile.last_intent_dispatch_at = None
     profile.intent_updated_at = None
+    profile.more_credits_requested_at = None
     # ProfileOut declares is_admin (computed field, not a DB column) — without a
     # concrete value, model_validate would read a MagicMock and fail validation.
     profile.is_admin = False
@@ -715,6 +719,104 @@ class TestRefillCredits:
 
         with self._ADMIN_PATCH:
             resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 500
+        mock_session.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/credits/request-more
+# ---------------------------------------------------------------------------
+
+
+class TestRequestMoreCredits:
+    def test_noops_when_credits_remain(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 5
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_not_called()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_noops_when_no_profile(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_not_called()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_sends_alert_email_and_stamps_timestamp_at_zero_credits(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_called_once()
+        mock_email_client.begin_send.assert_called_once()
+        message = mock_email_client.begin_send.call_args.args[0]
+        assert message["recipients"]["to"][0]["address"] == "owner@test.example.com"
+
+    def test_deduplicates_email_within_cooldown_but_still_stamps_timestamp(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", 86400), patch(
+            "routers.profile._email_client"
+        ) as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_called_once()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_sends_email_again_once_cooldown_has_expired(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = datetime.now(timezone.utc) - timedelta(seconds=90000)
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", 86400), patch(
+            "routers.profile._email_client"
+        ) as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_email_client.begin_send.assert_called_once()
+
+    def test_acs_failure_is_tolerated_and_still_returns_202(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            mock_email_client.begin_send.side_effect = AzureError("ACS down")
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_called_once()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post("/profile/credits/request-more")
 
         assert resp.status_code == 500
         mock_session.commit.assert_not_called()

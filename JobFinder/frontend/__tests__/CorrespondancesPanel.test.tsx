@@ -462,9 +462,23 @@ describe("CorrespondancesPanel — manual analysis request", () => {
     await waitFor(() => expect(screen.getByText("Crédits d'analyse épuisés")).toBeInTheDocument());
     expect(onConsumed).toHaveBeenCalledTimes(1);
     expect(onReleased).not.toHaveBeenCalled();
+    // The 402 branch is the only one that surfaces the "request more credits" CTA —
+    // see MatchAnalysisPanel's creditsExhausted prop.
+    expect(screen.getByRole("button", { name: "Je voudrais plus de crédits" })).toBeInTheDocument();
 
     unsubConsumed();
     unsubReleased();
+  });
+
+  it("does not show the 'request more credits' CTA for a generic (non-402) failure", async () => {
+    (apiClient.post as jest.Mock).mockRejectedValueOnce(new Error("network down"));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyser cette offre avec l'IA" }));
+
+    await waitFor(() => expect(screen.getByText("Veuillez réessayer")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Je voudrais plus de crédits" })).not.toBeInTheDocument();
   });
 });
 

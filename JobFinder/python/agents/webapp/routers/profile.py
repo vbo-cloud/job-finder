@@ -1,8 +1,12 @@
 """Profile endpoints — read and upsert the authenticated user's job search preferences."""
 
+import os
 from datetime import datetime, timezone
 
 import structlog
+from azure.communication.email import EmailClient
+from azure.core.exceptions import AzureError
+from azure.identity import DefaultAzureCredential
 from azure.servicebus.exceptions import ServiceBusError
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select, update
@@ -11,7 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from shared.bus import send_message
-from shared.config import INTENT_DISPATCH_COOLDOWN_SECONDS
+from shared.config import INTENT_DISPATCH_COOLDOWN_SECONDS, MORE_CREDITS_REQUEST_COOLDOWN_SECONDS
 from shared.embedder import embed
 from shared.models import CV, UserProfile
 from auth import (
@@ -33,6 +37,22 @@ _INTENT_FIELDS = {"experience_level", "candidate_description"}
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 logger = structlog.get_logger()
+
+ACS_EMAIL_ENDPOINT_HOSTNAME = os.environ.get("ACS_EMAIL_ENDPOINT_HOSTNAME")
+if not ACS_EMAIL_ENDPOINT_HOSTNAME:
+    raise ValueError("ACS_EMAIL_ENDPOINT_HOSTNAME environment variable is not set")
+
+ACS_EMAIL_SENDER_ADDRESS = os.environ.get("ACS_EMAIL_SENDER_ADDRESS")
+if not ACS_EMAIL_SENDER_ADDRESS:
+    raise ValueError("ACS_EMAIL_SENDER_ADDRESS environment variable is not set")
+
+OWNER_ALERT_EMAIL = os.environ.get("OWNER_ALERT_EMAIL")
+if not OWNER_ALERT_EMAIL:
+    raise ValueError("OWNER_ALERT_EMAIL environment variable is not set")
+
+# Module-level singleton — same rationale as routers/cv.py's _blob_service_client:
+# connection pool intentionally shared across requests, never explicitly closed.
+_email_client = EmailClient(f"https://{ACS_EMAIL_ENDPOINT_HOSTNAME}", DefaultAzureCredential())
 
 
 def _build_intent_text(candidate_description: str | None) -> str:
@@ -493,6 +513,96 @@ def refill_credits(
 
     logger.info("credits_refill_completed", user_id=user_id, new_balance=new_balance)
     return CreditsRefillOut(analysis_credits_remaining=new_balance)
+
+
+def _send_credits_alert_email(user_id: str, email: str | None, display_name: str | None) -> bool:
+    """Send the "more credits requested" alert to OWNER_ALERT_EMAIL via ACS.
+
+    Fire-and-forget, same trade-off as _dispatch_start_matching's ServiceBusError
+    handling: the signal is already committed to the DB by the time
+    request_more_credits calls this, so an ACS outage must not turn into a 500
+    the user sees — logged and swallowed instead of raised.
+
+    Args:
+        user_id: Authenticated user ID, included in the email body.
+        email: UserProfile.email, best-effort (may be None).
+        display_name: UserProfile.display_name, best-effort (may be None).
+
+    Returns:
+        True if the email was sent successfully, False on an ACS failure.
+    """
+    who = display_name or email or user_id
+    try:
+        _email_client.begin_send(
+            {
+                "senderAddress": ACS_EMAIL_SENDER_ADDRESS,
+                "content": {
+                    "subject": "Job Finder — demande de crédits supplémentaires",
+                    "plainText": (
+                        f"{who} (user_id={user_id}"
+                        f"{f', email={email}' if email else ''}) est à 0 crédit "
+                        "d'analyse et a cliqué sur \"Je voudrais plus de crédits\".\n\n"
+                        "Ceci est un simple signal d'intérêt, pas une demande formelle "
+                        "à traiter automatiquement."
+                    ),
+                },
+                "recipients": {"to": [{"address": OWNER_ALERT_EMAIL}]},
+            }
+        ).result()
+        return True
+    except AzureError:
+        logger.error("more_credits_requested_failed", user_id=user_id, exc_info=True)
+        return False
+
+
+@router.post("/credits/request-more", status_code=status.HTTP_202_ACCEPTED)
+def request_more_credits(
+    user_id: str = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """Record a "more credits" interest signal and alert Vincent by email.
+
+    Deliberately not a real recharge flow (see docs/prompts/prompt-credits-signals-and-
+    request-more.md) — a lightweight signal so Vincent doesn't have to poll PostHog for
+    users stuck at 0 credits. No-op, still 202, if the caller isn't actually at 0 credits
+    (the frontend only shows the button then, but a direct API call must not be able to
+    spam the alert email for a user who still has credits) — the response never reveals
+    which branch was taken.
+
+    Args:
+        user_id: Authenticated user ID from the JWT sub claim.
+        session: Active database session.
+    """
+    logger.info("more_credits_requested_started", user_id=user_id)
+
+    try:
+        profile = session.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        ).scalar_one_or_none()
+
+        if profile is None or profile.analysis_credits_remaining != 0:
+            return
+
+        now = datetime.now(timezone.utc)
+        deduplicated = profile.more_credits_requested_at is not None and (
+            now - profile.more_credits_requested_at
+        ).total_seconds() < MORE_CREDITS_REQUEST_COOLDOWN_SECONDS
+        email, display_name = profile.email, profile.display_name
+
+        session.execute(
+            update(UserProfile)
+            .where(UserProfile.user_id == user_id)
+            .values(more_credits_requested_at=now)
+        )
+        session.commit()
+    except SQLAlchemyError:
+        # Base class is intentional — any DB error (connection lost, timeout)
+        # should abort the request and return 500.
+        logger.error("more_credits_requested_failed", user_id=user_id, exc_info=True)
+        raise
+
+    email_sent = not deduplicated and _send_credits_alert_email(user_id, email, display_name)
+    logger.info("more_credits_requested_completed", user_id=user_id, email_sent=email_sent)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)

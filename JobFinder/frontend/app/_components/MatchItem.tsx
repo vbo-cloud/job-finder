@@ -15,6 +15,10 @@ export interface MatchItemData {
   analysisPending: boolean;
   /** Immediate request-level failure (e.g. credits exhausted) for this offer's analysis, if any. */
   analysisError: string | null;
+  /** True when analysisError specifically came from a 402 (0 credits) — lets
+   * MatchAnalysisPanel show the "request more credits" CTA without matching
+   * on analysisError's message text. */
+  creditsExhausted: boolean;
   /** Active search bar text, used to highlight matches inside the offer description. Empty/absent = no highlight. */
   searchQuery?: string;
   onSelect: () => void;
@@ -96,7 +100,7 @@ function logoBadge(company: string): { mono: string; bg: string; fg: string } {
 }
 
 export default function MatchItem({
-  match, isNew, isSaved, isExpanded, analysisPending, analysisError, searchQuery,
+  match, isNew, isSaved, isExpanded, analysisPending, analysisError, creditsExhausted, searchQuery,
   onSelect, onSave, onReject, onAnalyze,
 }: MatchItemData) {
   const { offer } = match;
@@ -317,6 +321,7 @@ export default function MatchItem({
             analysis={match.analysis}
             analysisPending={analysisPending}
             analysisError={analysisError}
+            creditsExhausted={creditsExhausted}
             onAnalyze={onAnalyze}
           />
         </div>

@@ -9926,3 +9926,120 @@ principal et bouton par CV) ne restait pas centré une fois passé à la ligne s
   non rejoués dans cette passe (pas d'accès Bash depuis ce rôle).
 - Numéro de PR dérivé du dernier titre `## PR #NNN` de ce fichier (#249) + 1, faute d'accès à `gh`
   depuis ce rôle (aucun outil Bash disponible) — non confirmé via GitHub dans cette passe.
+
+## PR #251 — feat: solde de crédits dans PostHog + signal "je voudrais plus de crédits"
+
+**Date :** 2026-07-27
+**Branche :** `feature/credits-signals-and-request-more` → `dev`
+
+### Contexte
+
+Demande initiale de Vincent : dashboard Grafana "crédits dépensés par jour" + requête KQL pour
+lister les utilisateurs à zéro crédit + réfléchir à un moyen de proposer plus de crédits. Après
+investigation par Claude Cowork (voir `docs/prompts/prompt-credits-signals-and-request-more.md`),
+le plan a changé de forme — **rien de tout ceci ne passe par Grafana, Terraform de monitoring ou
+KQL** :
+
+- `credit_consumed` est déjà capturé côté frontend en PostHog depuis PR #221 (24/07,
+  `CorrespondancesPanel.tsx`), sur succès serveur uniquement. Vérifié en interrogeant PostHog
+  directement : le pipeline fonctionne, mais `credit_consumed`/`credits_exhausted` étaient à 0
+  occurrence faute d'usage réel — un Trend PostHog quotidien sur cet event donnera "crédits
+  dépensés par jour" sans changement de code, une fois de l'usage disponible (hors périmètre de
+  cette PR, Claude Cowork s'en charge).
+- Pour la liste "zéro crédit" : aucune person property PostHog ne portait le solde. Il manquait une
+  seule ligne pour rendre `analysis_credits_remaining` filtrable côté Persons — pas de Grafana/KQL
+  nécessaire (Partie 1 ci-dessous).
+- Pour "proposer plus de crédits" : Vincent voulait un signal léger, pas une vraie feature de
+  rechargement — un bouton visible uniquement à 0 crédit, qui capture l'intérêt et alerte Vincent
+  par email immédiatement plutôt que de devoir vérifier PostHog périodiquement (Parties 2-5).
+
+Point d'architecture qui a simplifié l'implémentation : le webapp partage déjà l'identité managée
+`caj`, qui détient déjà le rôle `Communication and Email Service Owner` sur la ressource ACS
+(PR #236) — envoi d'email possible sans aucun changement RBAC, seulement deux nouvelles variables
+d'environnement (Partie 4).
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/CreditsBadge.tsx`** : `fetchCredits()` appelle désormais
+  `posthog.setPersonProperties({ analysis_credits_remaining })` à chaque fetch réussi (rien sur le
+  404 "pas encore de profil"). Rend le solde filtrable côté PostHog Persons — c'est la seule chose
+  nécessaire pour que la liste "zéro crédit" existe. Tests étendus dans
+  `__tests__/CreditsBadge.test.tsx` (mock `posthog-js`, vérifie l'appel à chaque fetch réussi et
+  son absence quand non authentifié).
+- **`JobFinder/python/migrations/versions/035_add_more_credits_requested_at.py`** (révision 035,
+  down_revision 034) : colonne nullable `more_credits_requested_at` sur `user_profiles`. Pas de
+  backfill (`NULL` = "jamais demandé", correct par construction — même logique que 031/034), pas
+  d'index (lue uniquement en comparaison sur une ligne déjà chargée par clé primaire). Champ
+  correspondant ajouté sur `UserProfile` dans `shared/models.py`, à côté des autres champs crédits.
+- **`POST /profile/credits/request-more`** (`JobFinder/python/agents/webapp/routers/profile.py`) :
+  authentifié (tout utilisateur, pas admin-only comme `refill_credits`), 202 Accepted. No-op
+  silencieux (toujours 202, ne révèle jamais l'état interne) sauf si
+  `analysis_credits_remaining == 0`. À 0 crédit : compare `more_credits_requested_at` à une
+  nouvelle constante `MORE_CREDITS_REQUEST_COOLDOWN_SECONDS` (`shared/config.py`, défaut 86400s/24h,
+  même pattern que `INTENT_DISPATCH_COOLDOWN_SECONDS`) pour décider si un email d'alerte part vers
+  `OWNER_ALERT_EMAIL` via Azure Communication Services (singleton module-level `EmailClient`, même
+  pattern que le `_blob_service_client` de `routers/cv.py`) — mais `more_credits_requested_at` est
+  toujours réécrit à `now`, que l'email parte ou soit dédupliqué par le cooldown. Panne ACS loguée
+  et tolérée, ne fait jamais échouer la requête HTTP (même trade-off que
+  `match_analysis_request_dispatch_failed`). Nouvelles variables d'environnement fail-fast
+  `ACS_EMAIL_ENDPOINT_HOSTNAME`, `ACS_EMAIL_SENDER_ADDRESS`, `OWNER_ALERT_EMAIL`, ajoutées comme
+  stubs à `tests/conftest.py`. Tests dans `tests/test_webapp_profile.py`
+  (`TestRequestMoreCredits`) — docstring du module de test étendu pour lister aussi la couverture
+  `/credits/refill` et `/credits/request-more`, absente de la liste précédente. Suite à une
+  remarque bloquante de `reviewer-backend` (`request_more_credits` mélangeait trois
+  responsabilités — porte DB, timestamp, envoi d'email — sur ~75 lignes), l'envoi d'email a été
+  extrait dans un helper privé placé juste avant, sur le modèle de `_dispatch_start_matching`/
+  `_dispatch_cv_reanalysis` déjà présents dans ce fichier. Extraction pure, aucun changement de
+  comportement.
+- **`JobFinder/Terraform/envs/dev/webapp.tf`** : les trois variables ci-dessus ajoutées à
+  `env_vars` du module `webapp`, sourcées depuis `module.email_communication` (déjà utilisé par
+  `job_notifications`) et `var.alert_email` (déjà utilisé par l'action group `owner`). Aucun
+  nouveau rôle, aucune nouvelle ressource. `terraform fmt -check`/`validate`/`plan` propres sur
+  `envs/dev` — le plan ne touche que les `env_vars` du module `webapp`, drift pré-existant (jumpbox,
+  tags d'image) confirmé sans rapport via isolation stash/pop.
+- **Bouton "Je voudrais plus de crédits"** : nouvel état `creditsExhausted` (booléen, scopé par
+  offre comme `analysisError`) posé dans `CorrespondancesPanel.tsx::requestAnalysis` sur la branche
+  402 existante → threadé dans `MatchItemData` (`MatchItem.tsx`) → consommé par
+  `MatchAnalysisPanel.tsx` (nouveau sous-composant `MoreCreditsCta`) : au clic, POST
+  `/credits/request-more`, `posthog.capture("more_credits_requested")`, bascule optimiste (sans
+  attendre la réponse API) vers "Merci, votre demande a été transmise !", état local à l'instance du
+  panneau (la demande est globale à l'utilisateur, pas à cette offre). Tests étendus dans les trois
+  fichiers de composants concernés, plus `MatchList.test.tsx` (nouveaux mocks `posthog-js` et
+  `@/lib/api/client`, désormais importés transitivement via `MatchAnalysisPanel`). Suite à une
+  remarque non-bloquante de `reviewer-frontend`, `creditsExhausted` est désormais réinitialisé
+  dans `toggleExpand` aux côtés d'`analysisError` — sans ce reset, rouvrir une offre après un 402
+  survenu sur une offre différente pouvait afficher un CTA obsolète.
+
+### Décisions techniques
+
+- **Pas de test dédié upgrade/downgrade pour la migration 035**, contrairement à ce que listait la
+  section "Vérification attendue" du prompt initial : aucune des 34 migrations précédentes n'en a
+  un — la suite de tests mocke entièrement la session DB, il n'existe nulle part dans le repo de
+  test de migration sur une vraie base. Précédent suivi plutôt qu'introduction d'un pattern
+  ponctuel isolé. À noter explicitement ici pour qu'une session future ne redécouvre pas ce même
+  écart et ne le prenne pas pour un oubli.
+- **Correction doc appliquée pendant cette passe** (`doc-writer`) : le docstring de la migration
+  035 et le commentaire du champ `more_credits_requested_at` dans `shared/models.py` affirmaient
+  tous deux que la colonne n'était réécrite que "whenever the request isn't deduplicated by the
+  cooldown" — faux, le code (`routers/profile.py`) la réécrit inconditionnellement à chaque appel
+  accepté (une fois la porte 0-crédit passée), seul l'envoi de l'email dépend de la déduplication.
+  Corrigé dans les deux fichiers ; le test
+  `test_deduplicates_email_within_cooldown_but_still_stamps_timestamp` couvre déjà ce comportement.
+- Mélange Terraform (`envs/dev`) + Python (webapp) + frontend dans une seule PR : autorisé par les
+  règles du repo (seul le mélange `envs/lz_*` + `envs/dev` est interdit), précédent déjà établi par
+  PR #235.
+
+### Vérification
+
+- `pytest` : 469 tests passent (inchangé après l'extraction `_send_credits_alert_email`, refactor
+  pur — les 53 tests de `test_webapp_profile.py` passent sans modification).
+- `jest` : 185 tests passent (22 suites, inchangé après le reset `creditsExhausted` dans
+  `toggleExpand` — les 27 tests de `CorrespondancesPanel.test.tsx` passent sans modification).
+- `tsc --noEmit` et `eslint` : propres sur les fichiers touchés.
+- `terraform fmt -check` / `validate` / `plan` propres sur `envs/dev`.
+- Vérification manuelle post-merge (Vincent, pas Claude Code) : après apply CI, cliquer le bouton
+  en dev et confirmer la réception réelle de l'email — non fait dans cette passe, Claude Code n'a
+  pas accès à la boîte mail.
+- Numéro de PR confirmé via `gh pr list` : #250 est déjà pris par une PR ouverte sans rapport
+  (`fix(notifications): ...`), donc #251 (et non #249 + 1 = #250 comme l'aurait laissé supposer le
+  dernier titre de ce fichier).
