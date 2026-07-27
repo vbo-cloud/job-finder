@@ -10086,3 +10086,106 @@ tous les services restaient sur l'image précédente tant que ce step n'était p
   CI rapportée), réussit avec le nouveau.
 - Après merge : un push sur `dev` doit déclencher `buildAgents.yml` et faire aller le job jusqu'au
   bout, y compris "Update Container App and Container App Job images" pour tous les services.
+
+## PR #254 — fix(webapp): cooldown crédits déclenché par un envoi ACS en échec + export Application Insights du webapp
+
+**Date :** 2026-07-27
+**Branche :** `fix/credits-request-cooldown-and-webapp-telemetry` → `dev`
+
+### Contexte
+
+Deux corrections indépendantes, regroupées dans une même PR (même règle que PR #235/#251 :
+seul le mélange `envs/lz_*` + `envs/dev` est interdit, `envs/dev` + Python webapp est autorisé).
+
+- **Bug cooldown (`POST /profile/credits/request-more`, introduit par PR #251)** :
+  `more_credits_requested_at` était réécrit en base **avant** de savoir si
+  `_send_credits_alert_email` avait réellement réussi. Un premier envoi ACS en échec
+  démarrait quand même le cooldown de `MORE_CREDITS_REQUEST_COOLDOWN_SECONDS` (24h),
+  bloquant silencieusement tous les clics suivants pendant 24h sans que l'alerte
+  n'atteigne jamais Vincent — l'endpoint renvoie toujours 202, donc l'utilisateur ne
+  voyait jamais l'échec côté frontend. Effet de bord additionnel : un clic dédupliqué
+  (dans la fenêtre de cooldown) réécrivait quand même la colonne à chaque appel,
+  prolongeant silencieusement le cooldown indéfiniment tant que l'utilisateur recliquait.
+- **Télémétrie webapp jamais exportée** : le module `webapp` (`envs/dev/webapp.tf`) n'a
+  jamais eu `APPLICATIONINSIGHTS_CONNECTION_STRING` câblée, contrairement à tous les
+  Container App Jobs (`container_apps.tf`) qui l'ont depuis leur création — oubli initial,
+  jamais corrigé depuis. Conséquence : aucun `logger.info(...)` du webapp n'a jamais atteint
+  AppTraces dans Application Insights ; `configure_telemetry()` (`shared/telemetry.py`,
+  appelé depuis `agents/webapp/main.py`) tournait en permanence en mode dégradé
+  (`telemetry_disabled`, no-op silencieux) sans que rien ne le signale.
+
+### Ce qui a été fait
+
+- **`JobFinder/python/agents/webapp/routers/profile.py`** (`request_more_credits`,
+  `_send_credits_alert_email`) : restructuration de l'ordre des opérations. Le SELECT du
+  profil reste dans son propre `try/except SQLAlchemyError` → 500. La porte 0-crédit est
+  vérifiée juste après. `deduplicated` se calcule à partir de la valeur *existante* de
+  `more_credits_requested_at` (inchangé). Seulement si NON dédupliqué,
+  `_send_credits_alert_email` est appelé ; seulement si celui-ci retourne `True`,
+  l'`UPDATE ... more_credits_requested_at = now` + commit s'exécute (dans son propre
+  `try/except SQLAlchemyError` → 500). Un clic dédupliqué ne touche donc plus la DB du
+  tout — l'effet de bord de réécriture silencieuse à chaque clic dédupliqué disparaît
+  aussi, puisque seul un envoi *réussi* stampe désormais la colonne. Docstrings de
+  `request_more_credits` et `_send_credits_alert_email` mises à jour pour refléter le
+  nouvel ordre (la seconde ne décrit plus un envoi fire-and-forget avec commit préalable
+  — c'est désormais un appel bloquant dont la valeur de retour conditionne le commit).
+  Suite à deux remarques non-bloquantes de `reviewer-backend`, les trois échecs distincts
+  de ce flux (lookup profil, échec envoi ACS, échec UPDATE du stamp) portent désormais
+  chacun leur propre nom d'événement (`more_credits_lookup_failed`,
+  `more_credits_alert_email_failed`, `more_credits_stamp_failed`, au lieu du même
+  `more_credits_requested_failed` pour les trois) et `_send_credits_alert_email` loggue
+  `more_credits_alert_email_started` avant l'appel ACS, sur le modèle de
+  `_dispatch_start_matching`/`_dispatch_cv_reanalysis`.
+- **`JobFinder/python/tests/test_webapp_profile.py`** (`TestRequestMoreCredits`) : renommé
+  `test_deduplicates_email_within_cooldown_but_still_stamps_timestamp` →
+  `test_deduplicates_email_within_cooldown_without_restamping` (assertion inversée,
+  `commit.assert_called_once()` → `commit.assert_not_called()`), renommé
+  `test_acs_failure_is_tolerated_and_still_returns_202` →
+  `test_acs_failure_is_tolerated_returns_202_and_does_not_start_a_cooldown` (même
+  inversion). Ajout de `test_retries_immediately_after_a_failed_send` : premier appel
+  avec `begin_send` qui lève `AzureError`, second avec un `begin_send` qui réussit
+  (`MagicMock`) — vérifie que les deux appels renvoient 202, que `begin_send` est appelé
+  deux fois (donc pas dédupliqué malgré l'échec du premier), et que `commit` n'est appelé
+  qu'une seule fois, pour l'envoi réussi.
+- **`JobFinder/Terraform/envs/dev/webapp.tf`** : ajout de
+  `{ name = "appinsights-connection-string", value = module.application_insights.connection_string }`
+  à `secrets` et `{ name = "APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name =
+  "appinsights-connection-string" }` à `env_vars` du module `webapp` — copie exacte du
+  pattern déjà en place pour chaque Container App Job dans `container_apps.tf`. Aucun
+  changement RBAC, aucune nouvelle ressource ; `shared/telemetry.py` lit déjà ce nom de
+  variable et se dégrade silencieusement (log `telemetry_disabled`) en son absence, donc
+  côté Python rien à changer pour ce volet.
+
+### Décisions techniques
+
+- **Corrections doc appliquées pendant cette passe (`doc-writer`)** : PR #251 avait
+  documenté (docstring de la migration 035, commentaire du champ dans `shared/models.py`,
+  commentaire de `MORE_CREDITS_REQUEST_COOLDOWN_SECONDS` dans `shared/config.py`) que
+  `more_credits_requested_at` était réécrit *inconditionnellement* à chaque appel accepté,
+  seul l'envoi d'email étant dédupliqué par le cooldown — exact au moment où PR #251 a été
+  écrite, mais rendu faux par cette PR. Les trois commentaires ont été corrigés pour
+  refléter le nouveau comportement (stamp uniquement sur envoi réussi), avec renvoi vers
+  cette entrée de JOURNAL.
+- **Numéro de PR** : confirmé via `gh pr list` — #253 est déjà pris par une PR ouverte sans
+  rapport, #252 est la dernière mergée ; #254 (et non #252 + 1 = #253 comme l'aurait laissé
+  supposer une simple incrémentation depuis le dernier titre de ce fichier). Le numéro
+  #254 est référencé en dur dans quatre commentaires de code (`profile.py`, `models.py`,
+  `config.py`, `035_add_more_credits_requested_at.py`) — si le numéro final de la PR
+  diffère, ces quatre fichiers et cette entrée doivent être mis à jour ensemble.
+- Même règle de mélange de couches que PR #235/#251 : `envs/dev` (Terraform) + Python
+  webapp dans une seule PR, autorisé (seul `envs/lz_*` + `envs/dev` est interdit).
+
+### Vérification
+
+- 475 tests backend passent (54 dans `test_webapp_profile.py`).
+- `terraform fmt -check` / `validate` / `plan` propres sur `envs/dev` : le plan isolé
+  (stash/pop d'un checkout non modifié) montre que `module.webapp.azurerm_container_app.this`
+  était déjà en "will be updated in-place" avant ce diff, à cause d'un drift pré-existant
+  déjà documenté dans des entrées de JOURNAL antérieures (tag d'image, `workload_profile_name`
+  passant à null) — ce diff ajoute exactement un bloc `secret` et un bloc `env` en plus,
+  aucun remplacement de ressource imputable à cette PR.
+- Vérification manuelle post-merge (Vincent, pas Claude Code) : après apply CI, recliquer
+  sur "Je voudrais plus de crédits" et confirmer dans **AppTraces** (et non
+  `ContainerAppConsoleLogs_CL` — les logs structlog du webapp n'y arrivaient jamais avant
+  cette PR) l'apparition d'une ligne `more_credits_requested_completed` avec
+  `email_sent: true` — preuve que les deux correctifs fonctionnent ensemble.
