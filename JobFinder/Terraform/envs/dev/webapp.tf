@@ -50,6 +50,10 @@ module "webapp" {
       name  = "notifications-unsubscribe-secret"
       value = local.notifications_unsubscribe_secret
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
 
   env_vars = [
@@ -127,6 +131,10 @@ module "webapp" {
     {
       name  = "OWNER_ALERT_EMAIL"
       value = var.alert_email
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }
