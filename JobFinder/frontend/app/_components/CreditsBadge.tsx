@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useIsAuthenticated } from "@azure/msal-react";
 import { Coins } from "lucide-react";
 import Link from "next/link";
+import posthog from "posthog-js";
 
 import apiClient from "@/lib/api/client";
 import type { ProfileData } from "@/lib/api/types";
@@ -27,7 +28,12 @@ export default function CreditsBadge() {
     const fetchCredits = () => {
       apiClient
         .get<ProfileData>("/profile")
-        .then((res) => setCredits(res.data.analysis_credits_remaining))
+        .then((res) => {
+          setCredits(res.data.analysis_credits_remaining);
+          posthog.setPersonProperties({
+            analysis_credits_remaining: res.data.analysis_credits_remaining,
+          });
+        })
         .catch((err: unknown) => {
           const httpStatus = (err as { response?: { status?: number } })?.response?.status;
           if (httpStatus === 404) return; // no profile yet — nothing to show

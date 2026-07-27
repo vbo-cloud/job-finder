@@ -3,10 +3,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import CreditsBadge from "@/app/_components/CreditsBadge";
 import apiClient from "@/lib/api/client";
 import { notifyCreditsConsumed, notifyCreditsReleased, notifyCreditsReserved } from "@/lib/creditsBus";
+import posthog from "posthog-js";
 
 jest.mock("@/lib/api/client", () => ({
   __esModule: true,
   default: { get: jest.fn() },
+}));
+
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { capture: jest.fn(), identify: jest.fn(), setPersonProperties: jest.fn() },
 }));
 
 const mockUseIsAuthenticated = jest.fn();
@@ -17,6 +23,7 @@ jest.mock("@azure/msal-react", () => ({
 beforeEach(() => {
   (apiClient.get as jest.Mock).mockReset();
   mockUseIsAuthenticated.mockReset();
+  (posthog.setPersonProperties as jest.Mock).mockReset();
 });
 
 describe("CreditsBadge", () => {
@@ -39,6 +46,7 @@ describe("CreditsBadge", () => {
 
     await waitFor(() => expect(screen.getByText("27")).toBeInTheDocument());
     expect(screen.getByRole("link")).toHaveAttribute("href", "/profile");
+    expect(posthog.setPersonProperties).toHaveBeenCalledWith({ analysis_credits_remaining: 27 });
   });
 
   it("renders nothing when the user has no profile yet (404)", async () => {
@@ -49,6 +57,7 @@ describe("CreditsBadge", () => {
 
     await waitFor(() => expect(apiClient.get).toHaveBeenCalled());
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(posthog.setPersonProperties).not.toHaveBeenCalled();
   });
 
   it("refetches the balance when a credits-consumed event fires elsewhere in the tree", async () => {
@@ -65,6 +74,7 @@ describe("CreditsBadge", () => {
 
     await waitFor(() => expect(screen.getByText("29")).toBeInTheDocument());
     expect(apiClient.get).toHaveBeenCalledTimes(2);
+    expect(posthog.setPersonProperties).toHaveBeenLastCalledWith({ analysis_credits_remaining: 29 });
   });
 
   it("decrements the balance optimistically on credits-reserved, without refetching", async () => {
