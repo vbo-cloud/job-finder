@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useIsAuthenticated } from "@azure/msal-react";
+import posthog from "posthog-js";
 
 import apiClient from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -146,6 +147,17 @@ export default function LibrarySection({
     const id = setInterval(() => void fetchCvs(), POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [cvs, fetchCvs, isAuthenticated]);
+
+  // Person property (not an event counter) so a PostHog "breakdown by person
+  // property" insight can list every distinct CV count without any code or
+  // graph change when the unlocked-slot cap moves. Depends on cvs.length, not
+  // cvs, so the 3s poll (above) doesn't re-post the same value on every tick
+  // while a CV is still pending/processing/done. The loading guard avoids
+  // writing a premature current_cv_count: 0 before the first fetch resolves.
+  useEffect(() => {
+    if (!isAuthenticated || loading) return;
+    posthog.setPersonProperties({ current_cv_count: cvs.length });
+  }, [cvs.length, isAuthenticated, loading]);
 
   // When showing the optimistic card, it occupies the first slot; real CVs fill the rest.
   // This slice is a display-only cap: any account that already held more than

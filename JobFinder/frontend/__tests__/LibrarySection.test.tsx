@@ -1,8 +1,9 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
+const mockUseIsAuthenticated = jest.fn(() => true);
 jest.mock("@azure/msal-react", () => ({
-  useIsAuthenticated: () => true,
+  useIsAuthenticated: () => mockUseIsAuthenticated(),
 }));
 
 const mockGet = jest.fn();
@@ -17,12 +18,18 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+jest.mock("posthog-js", () => ({
+  __esModule: true,
+  default: { setPersonProperties: jest.fn(), capture: jest.fn() },
+}));
+
 // Component import must come after the jest.mock calls above: Jest hoists
 // jest.mock to the top of the file regardless of where it's written, but the
 // import below is what actually pulls in the module tree that needs mocking —
 // keeping it after the mocks here matches evaluation order and avoids the
 // temptation to "clean up" by moving it to the top.
 import LibrarySection from "@/app/_components/LibrarySection";
+import posthog from "posthog-js";
 import type { CVData } from "@/lib/api/types";
 
 const baseCvs: CVData[] = [
@@ -43,6 +50,7 @@ const baseCvs: CVData[] = [
 describe("LibrarySection — add CV slot", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseIsAuthenticated.mockReturnValue(true);
     mockGet.mockResolvedValue({ data: baseCvs });
   });
 
@@ -127,6 +135,87 @@ describe("LibrarySection — add CV slot", () => {
       expect(screen.getAllByTitle(lockedTooltip)).toHaveLength(8);
       expect(screen.getByText("2 / 2")).toBeInTheDocument();
       expect(screen.queryByText("Ajouter un CV")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("current_cv_count person property", () => {
+    it("posts the count after the initial fetch resolves", async () => {
+      mockGet.mockResolvedValue({ data: baseCvs });
+      render(<LibrarySection />);
+
+      await waitFor(() =>
+        expect(posthog.setPersonProperties).toHaveBeenCalledWith({ current_cv_count: 1 }),
+      );
+    });
+
+    it("does not post before the initial fetch resolves", async () => {
+      let resolveFetch: (value: { data: CVData[] }) => void = () => {};
+      mockGet.mockReturnValue(
+        new Promise<{ data: CVData[] }>((res) => { resolveFetch = res; }),
+      );
+      render(<LibrarySection />);
+
+      expect(posthog.setPersonProperties).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveFetch({ data: baseCvs });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(posthog.setPersonProperties).toHaveBeenCalledWith({ current_cv_count: 1 }),
+      );
+    });
+
+    it("never posts while not authenticated", async () => {
+      mockUseIsAuthenticated.mockReturnValue(false);
+      mockGet.mockResolvedValue({ data: baseCvs });
+      render(<LibrarySection />);
+
+      await new Promise((res) => setTimeout(res, 0));
+      expect(posthog.setPersonProperties).not.toHaveBeenCalled();
+    });
+
+    it("posts the new total after a local deletion", async () => {
+      mockDelete.mockResolvedValue({ data: null });
+      mockGet.mockResolvedValue({ data: baseCvs });
+      render(<LibrarySection />);
+
+      await waitFor(() =>
+        expect(posthog.setPersonProperties).toHaveBeenCalledWith({ current_cv_count: 1 }),
+      );
+
+      fireEvent.click(screen.getByLabelText("Supprimer ce CV"));
+      fireEvent.click(screen.getByLabelText("Confirmer la suppression"));
+
+      await waitFor(() =>
+        expect(posthog.setPersonProperties).toHaveBeenCalledWith({ current_cv_count: 0 }),
+      );
+    });
+
+    it("does not repost when consecutive polls return the same CV count", async () => {
+      jest.useFakeTimers();
+      const pendingCv = { ...baseCvs[0], status: "processing" as const };
+      mockGet.mockResolvedValue({ data: [pendingCv] });
+      render(<LibrarySection />);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
+
+      // POLL_INTERVAL_MS in LibrarySection.tsx — same CV count comes back,
+      // so cvs.length hasn't changed and the effect must not re-fire.
+      await act(async () => {
+        jest.advanceTimersByTime(3000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
     });
   });
 });
