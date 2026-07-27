@@ -758,6 +758,8 @@ class TestRequestMoreCredits:
         profile = _make_profile()
         profile.analysis_credits_remaining = 0
         profile.more_credits_requested_at = None
+        profile.display_name = "Jane Doe"
+        profile.email = "jane@test.example.com"
         mock_session.execute.return_value.scalar_one_or_none.return_value = profile
 
         with patch("routers.profile._email_client") as mock_email_client:
@@ -768,6 +770,13 @@ class TestRequestMoreCredits:
         mock_email_client.begin_send.assert_called_once()
         message = mock_email_client.begin_send.call_args.args[0]
         assert message["recipients"]["to"][0]["address"] == "owner@test.example.com"
+        assert message["content"]["subject"] == "CREDITS REQUEST : Jane Doe"
+        assert message["content"]["plainText"] == (
+            "Demande de crédit faite par : \n"
+            "Nom : Jane Doe\n"
+            "Mail : jane@test.example.com\n"
+            f"user id : {TEST_USER_ID}"
+        )
 
     def test_deduplicates_email_within_cooldown_without_restamping(
         self, test_client, mock_session

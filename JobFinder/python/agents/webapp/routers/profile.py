@@ -539,13 +539,12 @@ def _send_credits_alert_email(user_id: str, email: str | None, display_name: str
             {
                 "senderAddress": ACS_EMAIL_SENDER_ADDRESS,
                 "content": {
-                    "subject": "Job Finder — demande de crédits supplémentaires",
+                    "subject": f"CREDITS REQUEST : {who}",
                     "plainText": (
-                        f"{who} (user_id={user_id}"
-                        f"{f', email={email}' if email else ''}) est à 0 crédit "
-                        "d'analyse et a cliqué sur \"Je voudrais plus de crédits\".\n\n"
-                        "Ceci est un simple signal d'intérêt, pas une demande formelle "
-                        "à traiter automatiquement."
+                        "Demande de crédit faite par : \n"
+                        f"Nom : {display_name or 'non renseigné'}\n"
+                        f"Mail : {email or 'non renseigné'}\n"
+                        f"user id : {user_id}"
                     ),
                 },
                 "recipients": {"to": [{"address": OWNER_ALERT_EMAIL}]},
