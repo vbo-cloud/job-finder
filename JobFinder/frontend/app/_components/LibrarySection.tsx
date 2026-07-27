@@ -148,6 +148,17 @@ export default function LibrarySection({
   }, [cvs, fetchCvs, isAuthenticated]);
 
   // When showing the optimistic card, it occupies the first slot; real CVs fill the rest.
+  // This slice is a display-only cap: any account that already held more than
+  // UNLOCKED_CV_SLOTS CVs before this cap existed keeps every excess CV server-side —
+  // their embedding and ROME extraction were one-off costs already paid at upload time,
+  // but they keep being matched daily by the matching agent (which iterates every CV
+  // with an embedding regardless of this constant, see agents/matching/main.py) and
+  // keep enqueuing their own top-N match_analyses each run — the recurring LLM cost
+  // this cap is meant to reduce. Only the library grid and the "x / N" badge below
+  // stop showing them; there is no reconciliation/archival step, and the two caps
+  // (see MAX_CVS_PER_USER in shared/constants.py) only ever block *new* uploads.
+  // Intentional: the cost reduction this cap buys only applies going forward, not
+  // retroactively to CVs uploaded before it existed.
   const optimisticCount   = showOptimistic ? 1 : 0;
   const realCvs            = showOptimistic ? cvs.slice(0, UNLOCKED_CV_SLOTS - 1) : cvs.slice(0, UNLOCKED_CV_SLOTS);
   const used               = optimisticCount + realCvs.length;

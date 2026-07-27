@@ -441,6 +441,7 @@ async def upload_cv(
 
     Raises:
         HTTPException 403: If the user has already reached MAX_CVS_PER_USER.
+        HTTPException 413: If the uploaded file exceeds MAX_PDF_BYTES.
         HTTPException 422: If the uploaded file is not a valid PDF.
         HTTPException 503: If Azure Blob Storage is unavailable.
     """
