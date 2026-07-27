@@ -10189,3 +10189,39 @@ seul le mélange `envs/lz_*` + `envs/dev` est interdit, `envs/dev` + Python weba
   `ContainerAppConsoleLogs_CL` — les logs structlog du webapp n'y arrivaient jamais avant
   cette PR) l'apparition d'une ligne `more_credits_requested_completed` avec
   `email_sent: true` — preuve que les deux correctifs fonctionnent ensemble.
+
+## PR #253 — fix(frontend): rafraîchissement des badges de compétences après une analyse manuelle
+
+**Date :** 2026-07-27
+**Branche :** `fix/manual-analysis-badge-refresh` → `dev`
+
+### Contexte
+
+Après une analyse manuelle d'une offre (bouton "Analyser"), les badges de compétences sur la carte
+restaient invisibles tant que la page n'était pas rafraîchie, alors même que le spinner disparaissait
+et l'analyse s'affichait correctement dès que le polling la détectait terminée. Cause racine dans
+`CorrespondancesPanel.tsx` : le `useEffect` de polling ne copiait que le champ `analysis` de la
+réponse `/matches/cv/{cvId}` dans `analysisOverrides` (son state local qui prime sur le prop
+`matches` jusqu'au prochain refetch complet), jamais `offer` — or les badges de compétences
+s'affichent depuis `offer.key_skills`, un champ `null` tant qu'aucune analyse n'a tourné et qui
+n'est mis à jour que dans un `offer` frais. `toItemData` ne fusionnait donc jamais le `key_skills`
+à jour tant que `matches` (le prop) ne se rechargeait pas lui-même — ce qui n'arrive qu'au
+changement de CV/zone ou à un refresh de page.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/CorrespondancesPanel.tsx`** : le polling (`useEffect`
+  autour de la ligne 104-143) garde désormais `{ offer, analysis }` dans `analysisOverrides` au
+  lieu de seulement `analysis`, et `toItemData` (ligne ~307) fusionne les deux champs de l'override
+  au lieu d'un seul. Commentaire WHY ajouté au-dessus de la construction de `byOffer` dans le
+  polling pour expliquer pourquoi `offer` doit voyager avec `analysis` (sans lui, les badges restent
+  masqués malgré une analyse terminée).
+- **`JobFinder/frontend/__tests__/CorrespondancesPanel.test.tsx`** : nouveau test de non-régression
+  "shows skill badges as soon as polling picks up completion, without a page refresh", ajouté juste
+  après le test existant "polls and picks up completion for a pending analysis the user never
+  clicked" — vérifie que les badges (`Terraform`, `Azure`) apparaissent dès le tick de polling qui
+  détecte la complétion, sans dépendre d'un refetch de `matches`.
+
+**Vérification :** relecture du polling et de `toItemData` confrontée au nouveau test ; aucun autre
+endroit du composant ne lisait `key_skills` depuis une source qui aurait pu rester obsolète par
+ailleurs.

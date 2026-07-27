@@ -527,4 +527,35 @@ describe("CorrespondancesPanel — analysis enqueued server-side (status pending
 
     jest.useRealTimers();
   });
+
+  it("shows skill badges as soon as polling picks up completion, without a page refresh", async () => {
+    // Regression: the poll used to copy only `analysis` into the override,
+    // dropping the fresh `offer` (and its now-populated `key_skills`, null
+    // until an analysis has run) — badges stayed hidden until the `matches`
+    // prop itself refetched (CV/zone change or a hard page refresh).
+    jest.useFakeTimers();
+    const pendingMatch = makeMatch({ analysis: makeAnalysis({ status: "pending" }) });
+    const doneMatch = {
+      ...pendingMatch,
+      offer: { ...pendingMatch.offer, key_skills: ["Terraform", "Azure"] },
+      analysis: makeAnalysis({ status: "done", matched_skills: ["Terraform"] }),
+    };
+    (apiClient.get as jest.Mock).mockResolvedValue({ data: { matches: [doneMatch] } });
+
+    renderPanel([pendingMatch]);
+    fireEvent.click(screen.getByRole("button", { name: /Ingénieur Cloud/i })); // expand
+
+    expect(screen.queryByText("Terraform")).not.toBeInTheDocument();
+
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByText("Terraform").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Azure").length).toBeGreaterThan(0);
+
+    jest.useRealTimers();
+  });
 });
