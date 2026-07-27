@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cn } from "@/lib/utils";
 import apiClient from "@/lib/api/client";
-import type { CVMatchesOut, MatchAnalysisOut, MatchOut } from "@/lib/api/types";
+import type { CVMatchesOut, MatchOut } from "@/lib/api/types";
 import { notifyCreditsConsumed, notifyCreditsReleased, notifyCreditsReserved } from "@/lib/creditsBus";
 import MarkAllSeenButton from "./MarkAllSeenButton";
 import MatchList from "./MatchList";
@@ -61,7 +61,9 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   const [analysisPending, setAnalysisPending] = useState(new Set<string>());
   // Fresher analyses fetched by the polling — supersede the `matches` prop until
   // the parent refetches (the prop only refreshes on CV/zone change).
-  const [analysisOverrides, setAnalysisOverrides] = useState(new Map<string, MatchAnalysisOut>());
+  const [analysisOverrides, setAnalysisOverrides] = useState(
+    new Map<string, Pick<MatchOut, "offer" | "analysis">>(),
+  );
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   // Distinguishes a 0-credit rejection from a generic analysis failure, so
   // MatchAnalysisPanel can offer the "request more credits" CTA specifically
@@ -105,19 +107,27 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
       apiClient
         .get<CVMatchesOut>(`/matches/cv/${cvId}`)
         .then((res) => {
-          const byOffer = new Map(res.data.matches.map((m) => [m.offer.id, m.analysis]));
+          // `offer` must travel alongside `analysis` here, not just `analysis`:
+          // the skill badges on the card render from `offer.key_skills`, which
+          // is null until the analysis completes and only lands in a fresh
+          // `offer` payload — an override carrying just `analysis` leaves the
+          // badges hidden until something else refetches `matches` in full
+          // (CV/zone change or a page refresh).
+          const byOffer = new Map(
+            res.data.matches.map((m) => [m.offer.id, { offer: m.offer, analysis: m.analysis }]),
+          );
           setAnalysisOverrides((prev) => {
             const next = new Map(prev);
             analysisPending.forEach((id) => {
-              const analysis = byOffer.get(id);
-              if (analysis) next.set(id, analysis);
+              const entry = byOffer.get(id);
+              if (entry?.analysis) next.set(id, entry);
             });
             return next;
           });
           setAnalysisPending((prev) => {
             const next = new Set(
               Array.from(prev).filter((id) => {
-                const analysis = byOffer.get(id);
+                const analysis = byOffer.get(id)?.analysis;
                 return !(analysis && (analysis.status === "done" || analysis.status === "error"));
               }),
             );
@@ -303,7 +313,7 @@ export default function CorrespondancesPanel({ cvId, matches, loading, error, on
   function toItemData(m: MatchOut, searchQuery?: string): MatchItemData {
     const override = analysisOverrides.get(m.offer.id);
     return {
-      match:      override ? { ...m, analysis: override } : m,
+      match:      override ? { ...m, offer: override.offer, analysis: override.analysis } : m,
       isNew:      m.is_new && !seenIds.has(m.offer.id),
       isSaved:    saved.has(m.offer.id),
       isExpanded: selectedId === m.offer.id,
