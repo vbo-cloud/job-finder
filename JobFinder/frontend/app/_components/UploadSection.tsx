@@ -7,6 +7,7 @@ import posthog from "posthog-js";
 import apiClient from "@/lib/api/client";
 import { loginRequest } from "@/lib/auth/msalConfig";
 import { cn } from "@/lib/utils";
+import { UNLOCKED_CV_SLOTS } from "@/lib/cvSlots";
 
 import OrbitAnimation from "./OrbitAnimation";
 import ScrollHint from "./ScrollHint";
@@ -23,6 +24,8 @@ interface Props {
   onEnterMap?: () => void;
   /** Scrolls to the library section — owned by HomeClient, which knows about the sibling's DOM id. */
   onScrollToLibrary?: () => void;
+  /** Current number of CVs already stored — drives the at-cap block below. */
+  cvCount?: number;
 }
 
 export interface UploadSectionHandle {
@@ -35,21 +38,33 @@ export interface UploadSectionHandle {
 }
 
 const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSection(
-  { onUploadComplete, onAnimationComplete, libraryAccessible = false, onEnterMap, onScrollToLibrary },
+  { onUploadComplete, onAnimationComplete, libraryAccessible = false, onEnterMap, onScrollToLibrary, cvCount = 0 },
   ref,
 ) {
   const [animState, setAnimState]       = useState<AnimState>("idle");
   const [isDragging, setIsDragging]     = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [capRejected, setCapRejected]   = useState(false);
+  const [rejectTick, setRejectTick]     = useState(0);
   const fileInputRef                    = useRef<HTMLInputElement>(null);
   const pendingRevokeRef                = useRef<string | null>(null);
+  const capRejectedTimerRef             = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { instance }                    = useMsal();
   const isAuthenticated                 = useIsAuthenticated();
   const mousePosRef                     = useRef<{ x: number; y: number } | null>(null);
   const clickFlashRef                   = useRef<number>(0);
+  const atCap                           = cvCount >= UNLOCKED_CV_SLOTS;
+
+  const rejectAdd = useCallback(() => {
+    setCapRejected(true);
+    setRejectTick((n) => n + 1); // forces the shake keyframes to restart on a re-click while already showing
+    if (capRejectedTimerRef.current) clearTimeout(capRejectedTimerRef.current);
+    capRejectedTimerRef.current = setTimeout(() => setCapRejected(false), 1800);
+  }, []);
 
   const handleFile = useCallback(
     (file: File): void => {
+      if (atCap) { rejectAdd(); return; }
       if (file.type !== "application/pdf") return;
       if (file.size > MAX_PDF_BYTES) return;
       if (!isAuthenticated) {
@@ -72,7 +87,7 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         })
         .catch(() => { /* silent — library card shows regardless */ });
     },
-    [isAuthenticated, instance, onUploadComplete],
+    [atCap, rejectAdd, isAuthenticated, instance, onUploadComplete],
   );
 
   const handleThumbnailReady = useCallback(() => {
@@ -102,17 +117,19 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         void instance.loginRedirect(loginRequest);
         return;
       }
+      if (atCap) { rejectAdd(); return; }
       clickFlashRef.current = 1.0;
       fileInputRef.current?.click();
     }
-  }, [animState, isAuthenticated, instance]);
+  }, [animState, isAuthenticated, instance, atCap, rejectAdd]);
 
   useImperativeHandle(ref, () => ({
     openPicker: () => {
       if (animState !== "idle") return;
+      if (atCap) { rejectAdd(); return; }
       fileInputRef.current?.click();
     },
-  }), [animState]);
+  }), [animState, atCap, rejectAdd]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -135,6 +152,7 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
       />
 
       <div
+        key={rejectTick}
         onClick={handleClick}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -148,7 +166,12 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={cn("absolute inset-0", isDragging && "ring-1 ring-subtle")}
+        className={cn(
+          "absolute inset-0",
+          isDragging && "ring-1 ring-subtle",
+          capRejected && "ring-2 ring-destructive",
+        )}
+        style={capRejected ? { animation: "shakeReject 0.4s ease-in-out" } : undefined}
         aria-label="Importer un CV"
       />
 
@@ -161,8 +184,11 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
       />
 
       {animState === "idle" && (
-        <p className="pointer-events-none absolute bottom-[88px] left-0 right-0 text-center text-xs text-hint">
-          Déposez votre CV (PDF) · ou cliquez pour parcourir
+        <p className={cn(
+          "pointer-events-none absolute bottom-[88px] left-0 right-0 text-center text-xs",
+          capRejected ? "text-destructive" : "text-hint",
+        )}>
+          {capRejected ? "Tous vos emplacements sont occupés" : "Déposez votre CV (PDF) · ou cliquez pour parcourir"}
         </p>
       )}
 

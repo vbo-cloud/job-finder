@@ -276,6 +276,7 @@ export default function HomeClient() {
             onAnimationComplete: handleAnimationComplete,
             libraryAccessible,
             onScrollToLibrary: handleCloseDetail,
+            cvCount: cvList.length,
           }}
           uploadSectionRef={uploadSectionRef}
           onZoneSaved={handleZoneSaved}

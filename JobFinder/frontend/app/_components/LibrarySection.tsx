@@ -5,16 +5,17 @@ import { useIsAuthenticated } from "@azure/msal-react";
 
 import apiClient from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { TOTAL_LIBRARY_SLOTS, UNLOCKED_CV_SLOTS } from "@/lib/cvSlots";
 import type { CVData } from "@/lib/api/types";
 
 import CVCard from "./CVCard";
+import CVCardLocked from "./CVCardLocked";
 import CVCardOptimistic from "./CVCardOptimistic";
 import CVCardPlaceholder from "./CVCardPlaceholder";
 import CVCardSkeleton from "./CVCardSkeleton";
 import ScrollHint from "./ScrollHint";
 
 const POLL_INTERVAL_MS = 3000;
-const MAX_CVS = 10;
 
 // Mobile-first: narrower minimum column and shorter rows so a 375px screen
 // fits two card columns instead of one card stretched full-width; the desktop
@@ -147,12 +148,13 @@ export default function LibrarySection({
   }, [cvs, fetchCvs, isAuthenticated]);
 
   // When showing the optimistic card, it occupies the first slot; real CVs fill the rest.
-  const optimisticCount  = showOptimistic ? 1 : 0;
-  const realCvs           = showOptimistic ? cvs.slice(0, MAX_CVS - 1) : cvs.slice(0, MAX_CVS);
-  const used              = optimisticCount + realCvs.length;
-  const canAdd            = used < MAX_CVS;
-  const placeholderCount  = Math.max(0, MAX_CVS - used - (canAdd ? 1 : 0));
-  const showGrid          = showOptimistic || cvs.length > 0;
+  const optimisticCount   = showOptimistic ? 1 : 0;
+  const realCvs            = showOptimistic ? cvs.slice(0, UNLOCKED_CV_SLOTS - 1) : cvs.slice(0, UNLOCKED_CV_SLOTS);
+  const used               = optimisticCount + realCvs.length;
+  const canAdd             = used < UNLOCKED_CV_SLOTS;
+  const emptyUnlockedCount = Math.max(0, UNLOCKED_CV_SLOTS - used - (canAdd ? 1 : 0));
+  const lockedCount        = Math.max(0, TOTAL_LIBRARY_SLOTS - UNLOCKED_CV_SLOTS);
+  const showGrid           = showOptimistic || cvs.length > 0;
 
   // "ACCUEIL" hint: scroll home.
   const handleAccueilClick = () => onScrollToHome?.();
@@ -207,7 +209,7 @@ export default function LibrarySection({
             <div className="flex flex-none items-center gap-[9px]">
               <span className="text-[9px] tracking-widest text-label">CV IMPORTÉS</span>
               <span className="text-[9px] tracking-widest text-label">
-                {Math.min(cvs.length, MAX_CVS)} / {MAX_CVS}
+                {Math.min(cvs.length, UNLOCKED_CV_SLOTS)} / {UNLOCKED_CV_SLOTS}
               </span>
             </div>
           </div>
@@ -258,8 +260,11 @@ export default function LibrarySection({
                     <span className="text-[13px] font-semibold">Ajouter un CV</span>
                   </button>
                 )}
-                {Array.from({ length: placeholderCount }).map((_, i) => (
+                {Array.from({ length: emptyUnlockedCount }).map((_, i) => (
                   <CVCardPlaceholder key={`placeholder-${i}`} />
+                ))}
+                {Array.from({ length: lockedCount }).map((_, i) => (
+                  <CVCardLocked key={`locked-${i}`} />
                 ))}
               </div>
             )}
