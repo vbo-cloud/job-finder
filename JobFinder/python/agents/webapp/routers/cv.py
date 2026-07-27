@@ -418,6 +418,31 @@ def _extract_page_text(page: pdfplumber.page.Page) -> tuple[str, int]:
     return f"{left_text}\n\n{right_text}", 2
 
 
+def _enforce_cv_cap(session: Session, user_id: str) -> None:
+    """Reject the upload with 403 if the user already holds MAX_CVS_PER_USER CVs.
+
+    Args:
+        session: Active database session.
+        user_id: Authenticated user ID.
+
+    Raises:
+        HTTPException 403: If the user has already reached MAX_CVS_PER_USER.
+    """
+    try:
+        existing_count = session.execute(
+            select(func.count()).select_from(CV).where(CV.user_id == user_id)
+        ).scalar_one()
+    except SQLAlchemyError:
+        logger.error("cv_upload_count_failed", user_id=user_id, exc_info=True)
+        raise
+    if existing_count >= MAX_CVS_PER_USER:
+        logger.info("cv_upload_rejected_at_cap", user_id=user_id, cv_count=existing_count)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Maximum number of CVs reached ({MAX_CVS_PER_USER}).",
+        )
+
+
 @router.post("/upload", response_model=CVUploadOut)
 async def upload_cv(
     file: UploadFile,
@@ -454,15 +479,7 @@ async def upload_cv(
             detail="Only PDF files are accepted.",
         )
 
-    existing_count = session.execute(
-        select(func.count()).select_from(CV).where(CV.user_id == user_id)
-    ).scalar_one()
-    if existing_count >= MAX_CVS_PER_USER:
-        logger.info("cv_upload_rejected_at_cap", user_id=user_id, cv_count=existing_count)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Maximum number of CVs reached ({MAX_CVS_PER_USER}).",
-        )
+    _enforce_cv_cap(session, user_id)
 
     contents = await file.read()
     if len(contents) > MAX_PDF_BYTES:

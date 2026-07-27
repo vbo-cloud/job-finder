@@ -1,7 +1,8 @@
 """Tests for agents/webapp/routers/cv.py.
 
-Covers: POST /upload (content-type validation), GET /cv/ (list), GET thumbnail/pdf
-(not found), PATCH mark-all-seen (happy path + not found), DELETE (not found).
+Covers: POST /upload (content-type validation, MAX_CVS_PER_USER cap rejection),
+GET /cv/ (list), GET thumbnail/pdf (not found), PATCH mark-all-seen (happy path +
+not found), DELETE (not found).
 
 POST /upload happy path is intentionally excluded: it requires mocking pdfplumber,
 embed(), azure blob upload, and send_message() simultaneously — tested manually
