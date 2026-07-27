@@ -153,7 +153,16 @@ export default function LibrarySection({
   // graph change when the unlocked-slot cap moves. Depends on cvs.length, not
   // cvs, so the 3s poll (above) doesn't re-post the same value on every tick
   // while a CV is still pending/processing/done. The loading guard avoids
-  // writing a premature current_cv_count: 0 before the first fetch resolves.
+  // writing a premature current_cv_count: 0 before the first fetch resolves —
+  // though it doesn't cover every zero: if fetchCvs's retry also fails, cvs
+  // stays [] and loading still flips to false in its finally, so this does
+  // post 0 for a user whose fetch is erroring, same as a genuine empty library.
+  // Two alternatives were considered and rejected: counting cv_uploaded events
+  // (already tracked in UploadSection.tsx) per user breaks the moment a
+  // deletion happens — upload → delete → re-upload reads as 2 CVs for someone
+  // who only ever holds 1; and a one-off "blocked at cap" event (dropped from
+  // the earlier slot-lock prompt) only fires for users already at the cap, so
+  // it says nothing about the 1-vs-2 distribution across everyone else.
   useEffect(() => {
     if (!isAuthenticated || loading) return;
     posthog.setPersonProperties({ current_cv_count: cvs.length });
