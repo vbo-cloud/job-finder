@@ -153,7 +153,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
     }
 
     // ── Document icon ──────────────────────────────────────────
-    function drawDocument(isHover: boolean, textRgb: string, rejectRgb: string, isRejected: boolean) {
+    function drawDocument(textRgb: string, rejectRgb: string, isRejected: boolean) {
       const x = CX - 22, y = CY - 27;
       const fold = 12, r = 4;
       ctx.save();
@@ -346,7 +346,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         const dx = shakeStart !== null ? shakeOffset(performance.now() - shakeStart) : 0;
         ctx.save();
         ctx.translate(dx, 0);
-        drawDocument(isHover, iconTextRgb, rejectRgb, rejectedRef.current);
+        drawDocument(iconTextRgb, rejectRgb, rejectedRef.current);
         ctx.restore();
       }
       if (s === "uploaded") { drawThumbnail(0, 1); }
@@ -354,7 +354,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         // isRejected hardcoded false: rejection feedback is scoped to idle by
         // design, not because "rejected" can't be true here too (it can, if a
         // drop is rejected mid-animation — see the Props doc above).
-        drawDocument(false, iconTextRgb, rejectRgb, false);
+        drawDocument(iconTextRgb, rejectRgb, false);
         drawThumbnail(doneOffset(dp), Math.max(0, 1 - dp * 1.35));
       }
 
