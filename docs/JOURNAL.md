@@ -10464,3 +10464,96 @@ visualiser, même découpage que le Trend "crédits dépensés par jour" d'une P
   existante pour cette branche dans `docs/JOURNAL.md` avant cette révision.
 - Pas d'exécution de `jest` depuis ce rôle — vérification par relecture du code et des tests
   ajoutés uniquement, pas par exécution.
+
+## PR #259 — fix(frontend): move the at-cap rejection feedback onto the icon itself
+
+**Date :** 2026-07-27
+**Branche :** `fix/upload-reject-icon-shake` → `dev`
+
+### Contexte
+
+Retour direct de Vincent sur le comportement de blocage au plafond de la PR #257. Le premier
+rendu de ce blocage — anneau rouge (`ring-2 ring-destructive`) et animation `shakeReject` en
+CSS sur le `<div>` invisible plein écran de `UploadSection.tsx` — se lisait comme "des barres en
+dehors" de l'écran. Demande : que l'icône document/fichier au centre de l'écran reçoive un
+contour rouge, que son "+" devienne rouge aussi, et que le shake s'applique à l'icône elle-même,
+pas au conteneur.
+
+L'icône document est dessinée sur un canvas HTML5 par
+`JobFinder/frontend/app/_components/OrbitAnimation.tsx` (fonction `drawDocument`), pas comme des
+éléments DOM — la correction ne pouvait donc pas passer par une classe CSS et a nécessité une
+approche différente.
+
+### Ce qui a été fait
+
+- **`OrbitAnimation.tsx`** : deux nouvelles props optionnelles sur `Props`, `rejected?: boolean`
+  (reflète l'état `capRejected` de `UploadSection` — tant que vrai, le contour et le "+" de
+  l'icône se dessinent en rouge, uniquement en état `idle` : l'icône n'est pas dessinée en
+  "uploaded" et se dessine toujours non teintée en "done") et `rejectTick?: number` (incrémenté à
+  chaque tentative rejetée, relance une salve de shake de la même façon que `clickFlashRef` relance
+  déjà l'effet de ripple au clic ailleurs dans ce fichier). Deux nouveaux refs (`rejectedRef`,
+  `rejectShakeStartRef`) répercutent ces props dans la boucle d'animation sans relancer tout
+  l'effet du canvas (même pattern que `stateRef` existant). Ajout d'un helper
+  `shakeOffset(elapsedMs)` — une oscillation sinusoïdale continue et amortie sur
+  `SHAKE_DURATION_MS = 400` — en remplacement compatible-canvas des anciens keyframes CSS
+  `shakeReject` (le canvas n'a pas de pourcentages de keyframes discrets à réutiliser).
+  `drawDocument` prend désormais des paramètres `rejectRgb`/`isRejected` : quand rejeté, elle
+  re-trace en rouge le contour du corps du document en réutilisant le path déjà tracé (`fill()` ne
+  vide pas le path courant, donc le contour suit exactement le même tracé), et le strokeStyle de la
+  croix "+" passe au rouge plein au lieu de la couleur translucide habituelle. L'appel à
+  `drawDocument` en état `idle` s'enveloppe dans un `ctx.translate(dx, 0)` où `dx` vient de
+  `shakeOffset`.
+- **Nouveau token de thème `--canvas-reject`** : ajouté à `lib/theme/types.ts`,
+  `lib/theme/themes/dark.ts` (`"248, 113, 113"`, aligné sur le rouge dark de
+  `--ring-destructive`), `lib/theme/themes/light.ts` (`"220, 38, 38"`, aligné sur le rouge light
+  de `--ring-destructive`), et le `:root` par défaut de `app/globals.css`. Suit l'exception
+  documentée par le skill `conventions-frontend` pour `OrbitAnimation.tsx` : le canvas a besoin de
+  triplets RGB bruts en custom properties CSS lus via `getComputedStyle`, pas de classes Tailwind,
+  qu'il ne peut pas consommer directement.
+- **`UploadSection.tsx`** : retrait de la classe conditionnelle
+  `ring-2 ring-destructive animate-[shakeReject_0.4s_ease-in-out]` et du `key={rejectTick}` (les
+  deux devenus inutiles) sur le `<div>` de la zone de dépôt ; passe désormais
+  `rejected={capRejected}` et `rejectTick={rejectTick}` à `<OrbitAnimation>`. Le message texte
+  rouge de rejet sous l'icône est inchangé — le retour de Vincent portait spécifiquement sur
+  l'anneau/shake du conteneur, pas sur le texte.
+- **`app/globals.css`** : retrait du bloc `@keyframes shakeReject`, devenu orphelin.
+- **Commentaires WHY ajoutés lors de cette revue de documentation** : la docstring de la prop
+  `rejected` précisait initialement "tinte le contour et le + en rouge" sans mentionner que ce
+  tintage est volontairement limité à l'état `idle` — complétée pour couvrir explicitement les
+  états "uploaded" (icône non dessinée) et "done" (`isRejected` figé à `false` sur l'appel
+  `drawDocument` correspondant, désormais commenté ; `rejected` peut pourtant y être vrai aussi,
+  cf. décision ci-dessous — le tintage y est supprimé par choix, pas parce que les deux états ne
+  peuvent pas coexister). Commentaire ajouté sur le garde `if (rejectTick > 0)` : n'est pas une
+  redondance mais évite un shake parasite au montage, puisque `rejectTick` démarre à 0.
+
+### Décisions techniques
+
+- **Shake en oscillation continue plutôt qu'en keyframes** : le canvas ne peut pas rejouer des
+  pourcentages de keyframes CSS, donc `shakeOffset` reconstruit l'équivalent avec une sinusoïde
+  amortie sur une durée fixe (`SHAKE_DURATION_MS`), pilotée par un timestamp de départ
+  (`rejectShakeStartRef`) plutôt que par une classe/key React qui redéclenche un remount.
+- **Réutilisation du path existant pour le contour** plutôt qu'un rectangle de contour séparé :
+  `fill()` ne vide pas le path courant sur un canvas 2D, donc un simple `stroke()` juste après
+  trace exactement le même contour arrondi que le corps du document, sans dupliquer la géométrie
+  du path.
+- **Signalé, non corrigé (hors scope de cette PR) :** `handleFile` appelle `rejectAdd()` avant
+  toute vérification de `animState` (contrairement à `handleClick`/`openPicker`), donc un drop
+  pendant un `animState !== "idle"` positionne `capRejected`/`rejectTick` sans aucun retour
+  visible : l'icône n'est pas dessinée hors `idle`, et le message texte est lui aussi gardé par
+  `idle`. Atteignable si `cvCount` atteint le plafond de façon optimiste en cours d'animation.
+
+### Vérification
+
+- Relecture de `OrbitAnimation.tsx` (props `Props`, `shakeOffset`, `drawDocument`), de
+  `UploadSection.tsx` et de `app/globals.css` : commentaires WHY cohérents avec le comportement
+  réel après correction de la docstring de `rejected` (voir ci-dessus, corrigée par ce rôle).
+- `grep` sur `shakeReject` et `ring-2 ring-destructive` dans `JobFinder/frontend/` : aucune
+  occurrence restante hors du commentaire WHY qui les mentionne comme contexte historique — pas
+  de résidu de debug, pas de classe orpheline.
+- Numéro de PR confirmé par le prompt parent via `gh pr list` (dernière entrée de ce fichier :
+  `## PR #258`, donc #259 cohérent) ; aucune entrée existante pour la branche
+  `fix/upload-reject-icon-shake` dans `docs/JOURNAL.md` avant cette révision.
+- Pas d'accès Bash/`gh`/`git diff` propre depuis ce rôle — pas d'exécution de `jest` : la suite de
+  tests jsdom existante (`UploadSection.test.tsx`, `LibrarySection.test.tsx`) n'exerce de toute
+  façon pas le dessin canvas, cohérent avec la vérification manuelle en dev server décrite par le
+  prompt parent.

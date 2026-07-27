@@ -76,6 +76,7 @@
   --canvas-orbit:     170, 210, 255;
   --canvas-icon:      #383838;
   --canvas-icon-text: 255, 255, 255;
+  --canvas-reject:    248, 113, 113; /* matches --ring-destructive */
 }
 
 /* Leaflet chrome (CommuneZonePicker) — the map has no tiles: a transparent
@@ -147,12 +148,4 @@
 @keyframes emgROut {
   from { opacity: 1; transform: translateX(0) scale(1); }
   to   { opacity: 0; transform: translateX(-24px) scale(.4); }
-}
-
-/* UploadSection: rejected-at-cap feedback (a user tries to add a 3rd CV). */
-@keyframes shakeReject {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(2px); }
-  30%, 50%, 70% { transform: translateX(-4px); }
-  40%, 60% { transform: translateX(4px); }
 }
