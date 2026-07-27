@@ -18,6 +18,9 @@ _ENV_STUBS: dict[str, str] = {
     "AZURE_STORAGE_ACCOUNT_URL": "https://teststorage.blob.core.windows.net",
     "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": "test.servicebus.windows.net",
     "NOTIFICATIONS_UNSUBSCRIBE_SECRET": "test-unsubscribe-secret",
+    "ACS_EMAIL_ENDPOINT_HOSTNAME": "test-acs.communication.azure.com",
+    "ACS_EMAIL_SENDER_ADDRESS": "donotreply@test.example.com",
+    "OWNER_ALERT_EMAIL": "owner@test.example.com",
     # Pinned to a deployment that supports temperature/seed so existing determinism
     # assertions (kwargs["temperature"]/["seed"]) hold without every test needing to
     # patch AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT itself — the module default is

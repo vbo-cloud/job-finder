@@ -194,6 +194,13 @@ class UserProfile(Base):
     analysis_credits_reset_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Stamped unconditionally by POST /credits/request-more on every accepted call (once
+    # the 0-credit gate passes) — read back on the next request to enforce
+    # MORE_CREDITS_REQUEST_COOLDOWN_SECONDS, which only decides whether the alert email
+    # is (re-)sent, not whether this column gets updated. NULL = never requested.
+    more_credits_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
