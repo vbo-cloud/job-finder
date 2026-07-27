@@ -10302,3 +10302,101 @@ avoir à parser une phrase.
 - Vérification manuelle post-merge (Vincent, pas Claude Code) : recliquer sur "Je voudrais plus
   de crédits" en dev et confirmer visuellement le nouvel objet et le nouveau corps dans l'email
   reçu.
+
+## PR #257 — feat: plafond de CVs à 2 emplacements débloqués (portfolio-readiness)
+
+**Date :** 2026-07-27
+**Branche :** `feature/cv-slot-lock-portfolio` → `dev`
+
+### Contexte
+
+Effort "portfolio-readiness" : minimiser le coût récurrent par utilisateur (extraction PDF,
+embedding, extraction ROME, matching quotidien) tout en gardant visible la fonctionnalité
+différenciante multi-CV de l'app. Prompt Cowork
+(`docs/prompts/prompt-cv-slot-lock-portfolio.md`, dépôt principal job-finder, pas ce worktree).
+
+### Ce qui a été fait
+
+- **`JobFinder/python/shared/constants.py`** : nouvelle constante `MAX_CVS_PER_USER: int = 2`,
+  déclarée avec les autres constantes de module, commentaire WHY expliquant qu'elle est la seule
+  source de vérité côté serveur et qu'elle doit être tenue synchronisée manuellement avec
+  `UNLOCKED_CV_SLOTS` côté frontend (aucune source commune entre les deux runtimes aujourd'hui).
+- **`JobFinder/python/agents/webapp/routers/cv.py`** (`upload_cv`) : garde ajoutée juste après la
+  vérification du `content_type`, avant `file.read()` — un `COUNT` sur `cvs` filtré par `user_id`
+  (même pattern non indexé que `list_cvs` existant, pas une régression) ; renvoie 403 si
+  `existing_count >= MAX_CVS_PER_USER`, avec un log `cv_upload_rejected_at_cap`. Docstring mise à
+  jour (`Raises: HTTPException 403`, et `413` ajouté au passage — omis avant cette PR alors que
+  `MAX_PDF_BYTES` existait déjà).
+- **`JobFinder/python/tests/test_webapp_cv.py`** : nouveau test `test_rejects_upload_at_cap`, et
+  `test_rejects_empty_pdf_magic_bytes` paramétré pour vérifier que le garde-fou laisse bien passer
+  une requête sous le plafond avant d'atteindre la vérification suivante.
+- **`JobFinder/frontend/lib/cvSlots.ts`** (nouveau) : `UNLOCKED_CV_SLOTS = 2` et
+  `TOTAL_LIBRARY_SLOTS = 10` — la grille de la bibliothèque garde ses 10 cellules, elle ne
+  rétrécit pas.
+- **`JobFinder/frontend/app/_components/CVCardLocked.tsx`** (nouveau) : carte verrouillée (icône
+  `Lock` de lucide-react + `title` "Emplacement non disponible pour le moment"), affichée par
+  `LibrarySection.tsx` pour chaque emplacement au-delà de `UNLOCKED_CV_SLOTS`. Le badge d'en-tête
+  affiche désormais "x / 2" au lieu de "x / 10".
+- **`JobFinder/frontend/app/_components/UploadSection.tsx`** : les trois chemins de déclenchement
+  d'upload (`handleFile`, `handleClick`, la méthode impérative `openPicker` exposée via
+  `useImperativeHandle`) sont bloqués dès que `cvCount >= UNLOCKED_CV_SLOTS` — nouvelle prop
+  `cvCount` passée depuis `HomeClient.tsx` (`cvList.length`). Message rouge "Tous vos emplacements
+  sont occupés" et animation `shakeReject` (nouveau `@keyframes` dans `app/globals.css`) sur la
+  zone de dépôt.
+- **`JobFinder/frontend/__tests__/UploadSection.test.tsx`** (nouveau) et
+  **`LibrarySection.test.tsx`** (bloc `describe` ajouté pour les emplacements verrouillés).
+- **`JobFinder/frontend/app/_components/LibrarySection.tsx`** : commentaire WHY ajouté au-dessus
+  du slice `realCvs` (voir Décisions techniques ci-dessous).
+
+### Décisions techniques
+
+- **2 emplacements débloqués, pas 1.** Un seul emplacement aurait entièrement évité un bug de
+  non-déterminisme connu dans l'extraction des codes ROME (uploader deux fois le même CV peut
+  aujourd'hui produire des codes ROME différents → des pools de matching différents — voir
+  JOURNAL/mémoire de session autour de `gpt-5-mini`), mais 2 a été choisi délibérément pour
+  continuer à démontrer la fonctionnalité de recherche multi-CV. Ce bug est explicitement hors
+  scope de cette PR et ne doit pas être rouvert ici.
+- **Deux constantes séparées, aucune source commune.** `MAX_CVS_PER_USER` (Python) et
+  `UNLOCKED_CV_SLOTS` (TypeScript) vivent dans deux runtimes distincts sans mécanisme de
+  synchronisation automatique — elles doivent être maintenues à la main. Exposer le plafond via
+  l'API pour éliminer cette duplication est explicitement différé : aucun système de plan/tier
+  n'existe encore sur `UserProfile`. Si les deux valeurs venaient à diverger avec le frontend
+  au-dessus du backend, `handleFile` avale silencieusement l'échec 403 (`.catch(() => {})`) — la
+  carte optimiste apparaît puis disparaît sans message d'erreur, ce qui rendrait la divergence
+  difficile à repérer côté UI.
+- **Pas de rétro-application aux comptes existants.** Le plafond ne bloque que les *nouveaux*
+  uploads. Un compte qui détenait déjà plus de `UNLOCKED_CV_SLOTS` CVs avant cette PR conserve tous
+  ses CVs excédentaires côté serveur — leur embedding et leur extraction ROME ont déjà été payés
+  une fois à l'upload (pas de coût récurrent de ce côté-là), mais ils continuent d'être matchés
+  quotidiennement par l'agent de matching (`agents/matching/main.py`, qui itère sur "every CV with
+  an embedding" sans notion de plafond) et de faire enqueuer leurs propres `match_analyses` top-N à
+  chaque run (`agents/matching/main.py`, ~lignes 261-270) — c'est ce coût LLM récurrent-là que
+  cette PR cherche à réduire, et il continue de s'accumuler pour les CVs excédentaires devenus
+  invisibles. Seuls la grille de la bibliothèque et le badge "x / 2" cessent de les afficher
+  au-delà des 2 premiers. Aucune étape de réconciliation/archivage n'existe pour ces CVs
+  excédentaires ; l'économie de coût visée par cette PR ne s'applique donc qu'aux comptes créés (ou
+  aux CVs uploadés) après son déploiement. Documenté ici pour ne pas être redécouvert comme un
+  problème non documenté — pas de correctif dans cette PR.
+  Le garde-fou d'upload reste cohérent malgré cette troncature d'affichage : `HomeClient.tsx`
+  passe à `UploadSection` la longueur de la liste `cvs` complète, non tronquée
+  (`onCvsChange?.(cvs)` dans `LibrarySection.tsx`), donc un compte legacy à 5 CVs est bien détecté
+  comme au plafond et bloqué en upload, même si la grille n'en affiche que 2 et que le badge lit
+  "2 / 2".
+- **Pas de nouvel événement PostHog** pour ce changement — explicitement hors scope, différé à un
+  travail séparé ultérieur.
+- **Pas de migration Alembic** nécessaire — juste un `COUNT` sur la table `cvs` existante, même
+  pattern non indexé par `user_id` que `list_cvs` déjà en place, pas une régression introduite par
+  cette PR.
+
+### Vérification
+
+- Relecture de `upload_cv`, de la garde 403 et de sa docstring, des deux constantes
+  (`MAX_CVS_PER_USER` / `UNLOCKED_CV_SLOTS`) et de leurs commentaires WHY de synchronisation
+  manuelle, et de `LibrarySection.tsx`/`UploadSection.tsx` : cohérents avec le comportement décrit
+  ci-dessus.
+- Pas d'accès Bash/`git diff`/`gh` depuis ce rôle. Numéro de PR dérivé du dernier titre
+  `## PR #256` de ce fichier ; aucune entrée `## PR #257` ni entrée existante pour cette branche
+  dans `docs/JOURNAL.md` avant cette révision.
+- Pas d'exécution de `pytest`/`jest` depuis ce rôle — vérification par relecture du code et des
+  tests ajoutés (`test_rejects_upload_at_cap`, `UploadSection.test.tsx`, bloc `describe` ajouté à
+  `LibrarySection.test.tsx`) uniquement, pas par exécution.

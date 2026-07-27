@@ -81,11 +81,52 @@ describe("LibrarySection — add CV slot", () => {
 
   it("hides the add-CV slot once the quota is reached", async () => {
     mockGet.mockResolvedValue({
-      data: Array.from({ length: 10 }, (_, i) => ({ ...baseCvs[0], id: `cv-${i}` })),
+      data: Array.from({ length: 2 }, (_, i) => ({ ...baseCvs[0], id: `cv-${i}` })),
     });
     render(<LibrarySection />);
 
-    await waitFor(() => expect(screen.getAllByText("cv1.pdf")).toHaveLength(10));
+    await waitFor(() => expect(screen.getAllByText("cv1.pdf")).toHaveLength(2));
     expect(screen.queryByText("Ajouter un CV")).not.toBeInTheDocument();
+  });
+
+  // UNLOCKED_CV_SLOTS = 2, TOTAL_LIBRARY_SLOTS = 10: 8 slots stay locked
+  // regardless of how many of the 2 unlocked slots are actually filled.
+  describe("locked slots (UNLOCKED_CV_SLOTS = 2)", () => {
+    const lockedTooltip = "Emplacement non disponible pour le moment";
+
+    it("renders 8 locked slots with 0 real CVs", async () => {
+      // 0 confirmed CVs alone leaves the section inaccessible (hidden) — the
+      // grid only renders with an optimistic upload in flight, which is the
+      // only way to reach a 0-real-CV grid render in this component.
+      mockGet.mockResolvedValue({ data: [] });
+      render(
+        <LibrarySection optimisticUpload={{ thumbnailUrl: "blob:fake", cvId: null }} />,
+      );
+
+      await waitFor(() => expect(screen.getAllByTitle(lockedTooltip)).toHaveLength(8));
+      expect(screen.getByText("0 / 2")).toBeInTheDocument();
+      expect(screen.getByLabelText("Ajouter un CV")).toBeInTheDocument();
+    });
+
+    it("renders 8 locked slots with 1 real CV", async () => {
+      mockGet.mockResolvedValue({ data: baseCvs });
+      render(<LibrarySection />);
+
+      await waitFor(() => expect(screen.getAllByTitle(lockedTooltip)).toHaveLength(8));
+      expect(screen.getByText("1 / 2")).toBeInTheDocument();
+      expect(screen.getByLabelText("Ajouter un CV")).toBeInTheDocument();
+    });
+
+    it("renders 8 locked slots with 2 real CVs and hides the add slot", async () => {
+      mockGet.mockResolvedValue({
+        data: Array.from({ length: 2 }, (_, i) => ({ ...baseCvs[0], id: `cv-${i}` })),
+      });
+      render(<LibrarySection />);
+
+      await waitFor(() => expect(screen.getAllByText("cv1.pdf")).toHaveLength(2));
+      expect(screen.getAllByTitle(lockedTooltip)).toHaveLength(8);
+      expect(screen.getByText("2 / 2")).toBeInTheDocument();
+      expect(screen.queryByText("Ajouter un CV")).not.toBeInTheDocument();
+    });
   });
 });
