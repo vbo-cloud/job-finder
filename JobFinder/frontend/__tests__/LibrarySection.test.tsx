@@ -196,26 +196,29 @@ describe("LibrarySection — add CV slot", () => {
 
     it("does not repost when consecutive polls return the same CV count", async () => {
       jest.useFakeTimers();
-      const pendingCv = { ...baseCvs[0], status: "processing" as const };
-      mockGet.mockResolvedValue({ data: [pendingCv] });
-      render(<LibrarySection />);
+      try {
+        const pendingCv = { ...baseCvs[0], status: "processing" as const };
+        mockGet.mockResolvedValue({ data: [pendingCv] });
+        render(<LibrarySection />);
 
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
 
-      // POLL_INTERVAL_MS in LibrarySection.tsx — same CV count comes back,
-      // so cvs.length hasn't changed and the effect must not re-fire.
-      await act(async () => {
-        jest.advanceTimersByTime(3000);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+        // POLL_INTERVAL_MS in LibrarySection.tsx — same CV count comes back,
+        // so cvs.length hasn't changed and the effect must not re-fire.
+        await act(async () => {
+          jest.advanceTimersByTime(3000);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
 
-      expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
-      jest.useRealTimers();
+        expect(posthog.setPersonProperties).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });
