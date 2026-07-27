@@ -135,7 +135,8 @@ jobs:
           # (shared/bus.py), AZURE_OPENAI_ENDPOINT (shared/embedder.py),
           # NOTIFICATIONS_UNSUBSCRIBE_SECRET (shared/unsubscribe_token.py),
           # ENTRA_EXTERNAL_TENANT_ID/ENTRA_EXTERNAL_CLIENT_ID (agents/webapp/auth.py),
-          # AZURE_STORAGE_ACCOUNT_URL (agents/webapp/routers/cv.py). Whenever a new module
+          # AZURE_STORAGE_ACCOUNT_URL (agents/webapp/routers/cv.py), ACS_EMAIL_ENDPOINT_HOSTNAME/
+          # ACS_EMAIL_SENDER_ADDRESS/OWNER_ALERT_EMAIL (agents/webapp/routers/profile.py). Whenever a new module
           # anywhere in that import graph gains its own fail-fast env var, add it here too,
           # or this step will fail and block every step after it, including all
           # `az containerapp update`/`az containerapp job update` calls (see docs/JOURNAL.md).
@@ -147,6 +148,9 @@ jobs:
             -e AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE=x.servicebus.windows.net \
             -e AZURE_OPENAI_ENDPOINT=https://x.openai.azure.com \
             -e NOTIFICATIONS_UNSUBSCRIBE_SECRET=x \
+            -e ACS_EMAIL_ENDPOINT_HOSTNAME=x.communication.azure.com \
+            -e ACS_EMAIL_SENDER_ADDRESS=donotreply@x.example.com \
+            -e OWNER_ALERT_EMAIL=owner@x.example.com \
             webapp-local:${{ github.sha }} \
             python -c "import main; print('smoke-test OK')"
 

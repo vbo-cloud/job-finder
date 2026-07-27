@@ -10043,3 +10043,46 @@ d'environnement (Partie 4).
 - Numéro de PR confirmé via `gh pr list` : #250 est déjà pris par une PR ouverte sans rapport
   (`fix(notifications): ...`), donc #251 (et non #249 + 1 = #250 comme l'aurait laissé supposer le
   dernier titre de ce fichier).
+
+## PR #252 — fix(ci): ajouter les variables ACS au smoke-test webapp
+
+**Date :** 2026-07-27
+**Branche :** `fix/buildagents-webapp-smoke-test-acs-vars` → `dev`
+
+### Contexte
+
+Même classe de bug que PR #249, à peine un jour après : PR #251 a ajouté trois nouvelles variables
+d'environnement fail-fast dans `agents/webapp/routers/profile.py`
+(`ACS_EMAIL_ENDPOINT_HOSTNAME`, `ACS_EMAIL_SENDER_ADDRESS`, `OWNER_ALERT_EMAIL`, pour l'endpoint
+`POST /credits/request-more`), sans les ajouter à l'étape "Smoke-test webapp image" de
+`.github/workflows/buildAgents.yml`, qui lance `python -c "import main"` dans l'image webapp avec
+un set fixe de variables. Conséquence observée après merge de PR #251 sur `dev` : le smoke-test
+échouait avec `ValueError: ACS_EMAIL_ENDPOINT_HOSTNAME environment variable is not set`, bloquant
+le job avant l'étape "Update Container App and Container App Job images" — comme pour PR #249,
+tous les services restaient sur l'image précédente tant que ce step n'était pas corrigé.
+
+### Ce qui a été fait
+
+- **`.github/workflows/buildAgents.yml`** : ajout de `-e ACS_EMAIL_ENDPOINT_HOSTNAME=...`,
+  `-e ACS_EMAIL_SENDER_ADDRESS=...`, `-e OWNER_ALERT_EMAIL=...` à l'étape "Smoke-test webapp
+  image", et mise à jour du commentaire listant les variables fail-fast couvertes et leur module
+  d'origine. Repro locale avant/après (import direct de `main` avec `PYTHONPATH` pointant sur
+  `agents/webapp`, hors Docker) : échec reproduit à l'identique avec l'ancien set de variables,
+  succès avec le nouveau.
+
+### Décisions techniques
+
+- Ce type de régression (nouvelle variable fail-fast oubliée dans le smoke-test) s'est maintenant
+  produit deux fois en trois PRs (#249, puis #250 et #251 sans incident, puis cette PR). La liste
+  reste volontairement manuelle (voir commentaire dans le workflow) plutôt que dérivée
+  automatiquement des imports — accepté comme compromis pour l'instant, mais à surveiller si ça se
+  reproduit une troisième fois.
+
+### Vérification
+
+- YAML validé (`yaml.safe_load`).
+- Import de `agents/webapp/main.py` reproduit localement (hors Docker, `PYTHONPATH` pointant sur
+  le dossier `agents/webapp`) : échoue avec l'ancien set de variables (reproduit exactement l'erreur
+  CI rapportée), réussit avec le nouveau.
+- Après merge : un push sur `dev` doit déclencher `buildAgents.yml` et faire aller le job jusqu'au
+  bout, y compris "Update Container App and Container App Job images" pour tous les services.
