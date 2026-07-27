@@ -13,7 +13,12 @@ interface Props {
   clickFlashRef:     React.MutableRefObject<number>;
   /** True while a blocked (at-cap) upload attempt's rejection message is
    * showing — tints the document icon's contour and "+" red for the same
-   * window. */
+   * window. This tint is deliberately idle-only: the icon isn't drawn in
+   * "uploaded" state, and "done" always renders untinted (hardcoded `false`
+   * on that draw call below) even though `rejected` can still be true there
+   * — e.g. a drop rejected mid-animation, since `rejectAdd()` isn't gated on
+   * `animState`. The rejection feedback is scoped to idle on purpose, not
+   * because the two states can't overlap. */
   rejected?:         boolean;
   /** Incremented on every rejected attempt (even while `rejected` is already
    * true) so the icon's shake burst restarts on a re-click, the same way
@@ -66,6 +71,8 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
   useEffect(() => { onThumbnailReadyRef.current = onThumbnailReady; }, [onThumbnailReady]);
   useEffect(() => { rejectedRef.current = rejected; }, [rejected]);
   useEffect(() => {
+    // Guard, not redundancy: rejectTick starts at 0, so this skips the effect's
+    // mount run — without it the icon would shake once on every page load.
     if (rejectTick > 0) rejectShakeStartRef.current = performance.now();
   }, [rejectTick]);
 
@@ -344,6 +351,9 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
       }
       if (s === "uploaded") { drawThumbnail(0, 1); }
       if (s === "done") {
+        // isRejected hardcoded false: rejection feedback is scoped to idle by
+        // design, not because "rejected" can't be true here too (it can, if a
+        // drop is rejected mid-animation — see the Props doc above).
         drawDocument(false, iconTextRgb, rejectRgb, false);
         drawThumbnail(doneOffset(dp), Math.max(0, 1 - dp * 1.35));
       }
