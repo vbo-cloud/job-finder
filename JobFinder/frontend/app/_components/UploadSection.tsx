@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import posthog from "posthog-js";
 
@@ -62,8 +62,17 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
     capRejectedTimerRef.current = setTimeout(() => setCapRejected(false), 1800);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (capRejectedTimerRef.current) clearTimeout(capRejectedTimerRef.current);
+    };
+  }, []);
+
   const handleFile = useCallback(
     (file: File): void => {
+      // Checked before the auth redirect (unlike handleClick below): a drop can
+      // deliver a file without any preceding click, so this is the only
+      // gate a dropped file is guaranteed to pass through.
       if (atCap) { rejectAdd(); return; }
       if (file.type !== "application/pdf") return;
       if (file.size > MAX_PDF_BYTES) return;
@@ -169,9 +178,8 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         className={cn(
           "absolute inset-0",
           isDragging && "ring-1 ring-subtle",
-          capRejected && "ring-2 ring-destructive",
+          capRejected && "ring-2 ring-destructive animate-[shakeReject_0.4s_ease-in-out]",
         )}
-        style={capRejected ? { animation: "shakeReject 0.4s ease-in-out" } : undefined}
         aria-label="Importer un CV"
       />
 

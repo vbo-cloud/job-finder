@@ -237,7 +237,7 @@ export default function LibrarySection({
             {/* Skeleton only on initial load, before any CV (real or optimistic) is known */}
             {loading && !showGrid && (
               <div className={GRID_CLASSES}>
-                {Array.from({ length: 10 }).map((_, i) => <CVCardSkeleton key={i} />)}
+                {Array.from({ length: TOTAL_LIBRARY_SLOTS }).map((_, i) => <CVCardSkeleton key={i} />)}
               </div>
             )}
 
