@@ -769,7 +769,7 @@ class TestRequestMoreCredits:
         message = mock_email_client.begin_send.call_args.args[0]
         assert message["recipients"]["to"][0]["address"] == "owner@test.example.com"
 
-    def test_deduplicates_email_within_cooldown_but_still_stamps_timestamp(
+    def test_deduplicates_email_within_cooldown_without_restamping(
         self, test_client, mock_session
     ):
         profile = _make_profile()
@@ -783,7 +783,9 @@ class TestRequestMoreCredits:
             resp = test_client.post("/profile/credits/request-more")
 
         assert resp.status_code == 202
-        mock_session.commit.assert_called_once()
+        # A deduplicated click never touches the DB — only a successful send restamps
+        # more_credits_requested_at (see the failure/retry tests below).
+        mock_session.commit.assert_not_called()
         mock_email_client.begin_send.assert_not_called()
 
     def test_sends_email_again_once_cooldown_has_expired(self, test_client, mock_session):
@@ -800,7 +802,9 @@ class TestRequestMoreCredits:
         assert resp.status_code == 202
         mock_email_client.begin_send.assert_called_once()
 
-    def test_acs_failure_is_tolerated_and_still_returns_202(self, test_client, mock_session):
+    def test_acs_failure_is_tolerated_returns_202_and_does_not_start_a_cooldown(
+        self, test_client, mock_session
+    ):
         profile = _make_profile()
         profile.analysis_credits_remaining = 0
         profile.more_credits_requested_at = None
@@ -811,6 +815,29 @@ class TestRequestMoreCredits:
             resp = test_client.post("/profile/credits/request-more")
 
         assert resp.status_code == 202
+        # A failed send must not stamp more_credits_requested_at — otherwise the next
+        # click would be silently deduplicated for 24h without Vincent ever being
+        # alerted (see test_retries_immediately_after_a_failed_send below).
+        mock_session.commit.assert_not_called()
+
+    def test_retries_immediately_after_a_failed_send(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            mock_email_client.begin_send.side_effect = [AzureError("ACS down"), MagicMock()]
+
+            first = test_client.post("/profile/credits/request-more")
+            second = test_client.post("/profile/credits/request-more")
+
+        assert first.status_code == 202
+        assert second.status_code == 202
+        # Not deduplicated on the second attempt — the first failure never stamped
+        # more_credits_requested_at, so profile.more_credits_requested_at is still
+        # None going into the second call.
+        assert mock_email_client.begin_send.call_count == 2
         mock_session.commit.assert_called_once()
 
     def test_returns_500_on_db_error(self, test_client, mock_session):
