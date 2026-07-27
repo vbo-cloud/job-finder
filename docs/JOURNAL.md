@@ -10225,3 +10225,39 @@ changement de CV/zone ou à un refresh de page.
 **Vérification :** relecture du polling et de `toItemData` confrontée au nouveau test ; aucun autre
 endroit du composant ne lisait `key_skills` depuis une source qui aurait pu rester obsolète par
 ailleurs.
+
+## PR #255 — fix(frontend): corrige le chemin API du bouton "plus de crédits"
+
+**Date :** 2026-07-27
+**Branche :** `fix/request-more-credits-wrong-path` → `dev`
+
+### Contexte
+
+`MatchAnalysisPanel.tsx` appelait `apiClient.post("/credits/request-more")`, un chemin qui n'a
+jamais existé : le router `profile.py` (`JobFinder/python/agents/webapp/routers/profile.py:38`)
+est monté avec `prefix="/profile"`, donc l'endpoint réel est `/profile/credits/request-more` —
+exactement comme `AdminRefillButton.tsx` appelle déjà correctement `/profile/credits/refill`. Le
+clic sur "Je voudrais plus de crédits" affichait quand même la confirmation optimiste (voir PR
+#251/#254) puisque `requestMoreCredits()` ne dépend pas de la réponse pour basculer son state
+local, donc le bug 404 passait inaperçu côté UI comme en CI — le test associé asserte lui-même
+l'ancien chemin erroné, ce qui l'a laissé passer sans jamais taper le vrai endpoint.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/MatchAnalysisPanel.tsx`** : `apiClient.post(...)` pointe
+  désormais vers `/profile/credits/request-more` ; le commentaire WHY juste au-dessus, qui
+  référençait déjà (mais avec le mauvais chemin) `POST /credits/request-more`, est corrigé en
+  même temps.
+- **`JobFinder/frontend/__tests__/MatchAnalysisPanel.test.tsx`** : l'assertion
+  `expect(apiClient.post).toHaveBeenCalledWith(...)` vérifie maintenant `/profile/credits/request-more`.
+
+### Vérification
+
+- `npx jest __tests__/MatchAnalysisPanel.test.tsx` : 9/9 tests passent.
+- Recherche de toute autre occurrence de `/credits/request-more` (sans le préfixe) dans
+  `JobFinder/frontend` : aucune restante.
+- Vérification manuelle post-merge (Vincent, pas Claude Code) : recliquer sur "Je voudrais plus
+  de crédits" en dev et confirmer dans **AppTraces** (message contenant `"more_credits_requested"`)
+  qu'un `more_credits_requested_started` puis `_completed` apparaissent enfin — la preuve que la
+  requête atteint désormais le backend, ce qui n'était jamais arrivé avant cette PR malgré la
+  confirmation optimiste affichée côté UI.

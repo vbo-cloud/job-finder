@@ -66,8 +66,8 @@ export default function MatchAnalysisPanel({
   const inProgress =
     analysisPending || analysis?.status === "processing" || analysis?.status === "pending";
   // Local to this panel instance, not this offer specifically — the request itself
-  // is global to the user (see POST /credits/request-more), so no need to thread it
-  // back up through CorrespondancesPanel.
+  // is global to the user (see POST /profile/credits/request-more), so no need to
+  // thread it back up through CorrespondancesPanel.
   const [moreCreditsRequested, setMoreCreditsRequested] = useState(false);
 
   function requestMoreCredits() {
@@ -76,7 +76,7 @@ export default function MatchAnalysisPanel({
     // email or the request was deduplicated by the cooldown.
     setMoreCreditsRequested(true);
     posthog.capture("more_credits_requested");
-    apiClient.post("/credits/request-more").catch((err: unknown) => {
+    apiClient.post("/profile/credits/request-more").catch((err: unknown) => {
       console.error("[jf] request-more-credits failed:", err);
     });
   }
