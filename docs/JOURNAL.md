@@ -10261,3 +10261,44 @@ l'ancien chemin erroné, ce qui l'a laissé passer sans jamais taper le vrai end
   qu'un `more_credits_requested_started` puis `_completed` apparaissent enfin — la preuve que la
   requête atteint désormais le backend, ce qui n'était jamais arrivé avant cette PR malgré la
   confirmation optimiste affichée côté UI.
+
+## PR #256 — fix(backend): objet et corps du mail d'alerte crédits plus actionnables
+
+**Date :** 2026-07-27
+**Branche :** `fix/credits-alert-email-content` → `dev`
+
+### Contexte
+
+Le mail envoyé à `OWNER_ALERT_EMAIL` par `_send_credits_alert_email` (déclenché par
+`POST /profile/credits/request-more`, voir PR #251/#254/#255) avait un objet générique
+("Job Finder — demande de crédits supplémentaires") identique à chaque envoi, et un corps
+narratif en une phrase mélangeant nom, user_id et email conditionnellement. Vincent doit pouvoir
+identifier l'auteur de la demande dès l'objet du mail (utile en scan rapide depuis une
+notification push) et retrouver nom/mail/user_id sur des lignes séparées dans le corps, sans
+avoir à parser une phrase.
+
+### Ce qui a été fait
+
+- **`JobFinder/python/agents/webapp/routers/profile.py`** (`_send_credits_alert_email`,
+  ligne ~518) :
+  - `subject` devient `f"CREDITS REQUEST : {who}"` (`who` déjà calculé juste au-dessus =
+    `display_name or email or user_id`).
+  - `plainText` devient trois lignes fixes (`Nom`, `Mail`, `user id`), chacune avec un fallback
+    `"non renseigné"` pour `display_name`/`email` — contrairement à `who`, ces deux champs
+    s'affichent maintenant indépendamment l'un de l'autre plutôt qu'en cascade.
+- **`JobFinder/python/tests/test_webapp_profile.py`**
+  (`TestRequestMoreCredits.test_sends_alert_email_and_stamps_timestamp_at_zero_credits`) : le
+  profile de test fixe désormais `display_name`/`email` à des valeurs concrètes
+  (`"Jane Doe"` / `"jane@test.example.com"`, au lieu des `MagicMock` par défaut de
+  `_make_profile`), et le test asserte l'objet et le corps exacts du mail plutôt que seulement
+  l'adresse du destinataire.
+
+### Vérification
+
+- `pytest tests/test_webapp_profile.py` : 54/54 passent (8/8 sur `TestRequestMoreCredits`).
+- Recherche globale de l'ancien texte narratif ("demande de crédits supplémentaires", "est à 0
+  crédit") : aucune occurrence résiduelle en dehors d'un libellé de `describe()` Jest sans
+  rapport (`MatchAnalysisPanel.test.tsx`).
+- Vérification manuelle post-merge (Vincent, pas Claude Code) : recliquer sur "Je voudrais plus
+  de crédits" en dev et confirmer visuellement le nouvel objet et le nouveau corps dans l'email
+  reçu.
