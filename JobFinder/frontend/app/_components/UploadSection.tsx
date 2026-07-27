@@ -57,7 +57,7 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
 
   const rejectAdd = useCallback(() => {
     setCapRejected(true);
-    setRejectTick((n) => n + 1); // forces the shake keyframes to restart on a re-click while already showing
+    setRejectTick((n) => n + 1); // OrbitAnimation restarts its icon shake burst on every increment
     if (capRejectedTimerRef.current) clearTimeout(capRejectedTimerRef.current);
     capRejectedTimerRef.current = setTimeout(() => setCapRejected(false), 1800);
   }, []);
@@ -158,10 +158,11 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         onDoneComplete={handleDoneComplete}
         mousePosRef={mousePosRef}
         clickFlashRef={clickFlashRef}
+        rejected={capRejected}
+        rejectTick={rejectTick}
       />
 
       <div
-        key={rejectTick}
         onClick={handleClick}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -175,11 +176,7 @@ const UploadSection = forwardRef<UploadSectionHandle, Props>(function UploadSect
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={cn(
-          "absolute inset-0",
-          isDragging && "ring-1 ring-subtle",
-          capRejected && "ring-2 ring-destructive animate-[shakeReject_0.4s_ease-in-out]",
-        )}
+        className={cn("absolute inset-0", isDragging && "ring-1 ring-subtle")}
         aria-label="Importer un CV"
       />
 

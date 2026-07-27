@@ -74,4 +74,5 @@ export const darkTheme: Theme = {
   "--canvas-orbit": "170, 210, 255",
   "--canvas-icon": "#383838",
   "--canvas-icon-text": "255, 255, 255",
+  "--canvas-reject": "248, 113, 113", // matches --ring-destructive
 };

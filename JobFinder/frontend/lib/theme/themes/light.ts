@@ -73,4 +73,5 @@ export const lightTheme: Theme = {
   "--canvas-orbit": "20, 80, 200",
   "--canvas-icon": "#c8c8cc",
   "--canvas-icon-text": "50, 50, 70",
+  "--canvas-reject": "220, 38, 38", // matches --ring-destructive
 };

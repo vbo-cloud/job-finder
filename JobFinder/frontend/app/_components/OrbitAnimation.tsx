@@ -11,6 +11,14 @@ interface Props {
   onDoneComplete?:   () => void;
   mousePosRef:       React.MutableRefObject<{ x: number; y: number } | null>;
   clickFlashRef:     React.MutableRefObject<number>;
+  /** True while a blocked (at-cap) upload attempt's rejection message is
+   * showing — tints the document icon's contour and "+" red for the same
+   * window. */
+  rejected?:         boolean;
+  /** Incremented on every rejected attempt (even while `rejected` is already
+   * true) so the icon's shake burst restarts on a re-click, the same way
+   * `clickFlashRef` restarts the click ripple. */
+  rejectTick?:       number;
 }
 
 interface AmbientParticle {
@@ -34,16 +42,32 @@ function easeOut(t: number): number {
   return 1 - (1 - t) * (1 - t);
 }
 
-export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, onDoneComplete, mousePosRef, clickFlashRef }: Props) {
+// Continuous stand-in for the old shakeReject CSS keyframes (which animated a
+// DOM element): a decaying oscillation over SHAKE_DURATION_MS, since canvas
+// has no discrete keyframe percentages to reuse.
+const SHAKE_DURATION_MS = 400;
+function shakeOffset(elapsedMs: number): number {
+  if (elapsedMs >= SHAKE_DURATION_MS) return 0;
+  const t = elapsedMs / SHAKE_DURATION_MS;
+  return Math.sin(t * Math.PI * 6) * 4 * (1 - t);
+}
+
+export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, onDoneComplete, mousePosRef, clickFlashRef, rejected = false, rejectTick = 0 }: Props) {
   const canvasRef          = useRef<HTMLCanvasElement>(null);
   const stateRef           = useRef(state);
   const thumbRef           = useRef<HTMLCanvasElement | null>(null);
   const onDoneCompleteRef    = useRef(onDoneComplete);
   const onThumbnailReadyRef  = useRef(onThumbnailReady);
+  const rejectedRef          = useRef(rejected);
+  const rejectShakeStartRef  = useRef<number | null>(null);
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { onDoneCompleteRef.current   = onDoneComplete; },   [onDoneComplete]);
   useEffect(() => { onThumbnailReadyRef.current = onThumbnailReady; }, [onThumbnailReady]);
+  useEffect(() => { rejectedRef.current = rejected; }, [rejected]);
+  useEffect(() => {
+    if (rejectTick > 0) rejectShakeStartRef.current = performance.now();
+  }, [rejectTick]);
 
   // Render PDF thumbnail with pdfjs-dist v3
   useEffect(() => {
@@ -122,7 +146,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
     }
 
     // ── Document icon ──────────────────────────────────────────
-    function drawDocument(isHover: boolean, textRgb: string) {
+    function drawDocument(isHover: boolean, textRgb: string, rejectRgb: string, isRejected: boolean) {
       const x = CX - 22, y = CY - 27;
       const fold = 12, r = 4;
       ctx.save();
@@ -146,6 +170,13 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
       ctx.arcTo(x, y + 54, x, y + 54 - r, r);
       ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
       ctx.closePath(); ctx.fill();
+      if (isRejected) {
+        // Reuses the still-current body path (fill() doesn't clear it) so the
+        // contour traces the exact same outline instead of a separate rect.
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = `rgb(${rejectRgb})`;
+        ctx.stroke();
+      }
 
       ctx.fillStyle = "#252525";
       ctx.beginPath();
@@ -161,7 +192,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         ctx.beginPath(); ctx.moveTo(x + 6, y + 20 + i * 7); ctx.lineTo(x + 38, y + 20 + i * 7); ctx.stroke();
       }
 
-      ctx.strokeStyle = `rgba(${textRgb},${0.5 + hoverLerp * 0.4})`;
+      ctx.strokeStyle = isRejected ? `rgb(${rejectRgb})` : `rgba(${textRgb},${0.5 + hoverLerp * 0.4})`;
       ctx.lineWidth = 1.8 + hoverLerp * 0.8; ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(CX - 9, CY); ctx.lineTo(CX + 9, CY);
@@ -256,6 +287,7 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
       const ambient_rgb  = style.getPropertyValue("--canvas-ambient").trim() || "200,210,230";
       const orbit_rgb    = style.getPropertyValue("--canvas-orbit").trim()   || "170,210,255";
       const iconTextRgb  = style.getPropertyValue("--canvas-icon-text").trim() || "255,255,255";
+      const rejectRgb    = style.getPropertyValue("--canvas-reject").trim()   || "248,113,113";
 
       ctx.fillStyle = bgColor; ctx.fillRect(0, 0, W, H);
 
@@ -302,10 +334,17 @@ export default function OrbitAnimation({ state, thumbnailUrl, onThumbnailReady, 
         ctx.restore();
       }
 
-      if (s === "idle")     { drawDocument(isHover, iconTextRgb); }
+      if (s === "idle") {
+        const shakeStart = rejectShakeStartRef.current;
+        const dx = shakeStart !== null ? shakeOffset(performance.now() - shakeStart) : 0;
+        ctx.save();
+        ctx.translate(dx, 0);
+        drawDocument(isHover, iconTextRgb, rejectRgb, rejectedRef.current);
+        ctx.restore();
+      }
       if (s === "uploaded") { drawThumbnail(0, 1); }
       if (s === "done") {
-        drawDocument(false, iconTextRgb);
+        drawDocument(false, iconTextRgb, rejectRgb, false);
         drawThumbnail(doneOffset(dp), Math.max(0, 1 - dp * 1.35));
       }
 

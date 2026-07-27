@@ -76,4 +76,5 @@ export type Theme = {
   "--canvas-orbit": string;     /* RGB channels for orbit particle rgba() */
   "--canvas-icon": string;      /* Solid color for the document icon body */
   "--canvas-icon-text": string; /* RGB channels for "CV" label and "+" cross */
+  "--canvas-reject": string;    /* RGB channels for the document icon's at-cap rejection contour/"+" */
 };
