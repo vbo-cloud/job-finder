@@ -112,5 +112,21 @@ module "webapp" {
       name  = "PORTFOLIO_CONTACT_FUNCTION_URL"
       value = var.portfolio_contact_function_url
     },
+    # ACS email — already used by job_notifications (container_apps.tf); the webapp needs
+    # the same two values to send the "more credits requested" alert (POST
+    # /credits/request-more). No new RBAC: caj already holds Communication and Email
+    # Service Owner on the ACS resource (see lz_dev/rbac.tf's caj_communication_owner).
+    {
+      name  = "ACS_EMAIL_ENDPOINT_HOSTNAME"
+      value = module.email_communication.hostname
+    },
+    {
+      name  = "ACS_EMAIL_SENDER_ADDRESS"
+      value = module.email_communication.sender_address
+    },
+    {
+      name  = "OWNER_ALERT_EMAIL"
+      value = var.alert_email
+    },
   ]
 }
