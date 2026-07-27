@@ -169,7 +169,9 @@ describe("MatchAnalysisPanel — demande de crédits supplémentaires", () => {
       screen.queryByRole("button", { name: "Je voudrais plus de crédits" }),
     ).not.toBeInTheDocument();
     expect(posthog.capture).toHaveBeenCalledWith("more_credits_requested");
-    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith("/credits/request-more"));
+    await waitFor(() =>
+      expect(apiClient.post).toHaveBeenCalledWith("/profile/credits/request-more"),
+    );
   });
 
   it("shows the CTA in the error-status branch too, alongside the credit-exhausted message", () => {
