@@ -10400,3 +10400,67 @@ différenciante multi-CV de l'app. Prompt Cowork
 - Pas d'exécution de `pytest`/`jest` depuis ce rôle — vérification par relecture du code et des
   tests ajoutés (`test_rejects_upload_at_cap`, `UploadSection.test.tsx`, bloc `describe` ajouté à
   `LibrarySection.test.tsx`) uniquement, pas par exécution.
+
+## PR #258 — feat(frontend): tracker current_cv_count comme propriété de personne PostHog
+
+**Date :** 2026-07-27
+**Branche :** `feature/cv-count-posthog-tracking` → `dev`
+
+### Contexte
+
+Suivi ponctuel du plafond de CVs introduit par la PR #257 : donner à une future analyse
+PostHog la matière pour observer la répartition réelle 1 CV / 2 CVs par utilisateur. Prompt
+Cowork (`docs/prompts/prompt-cv-count-posthog-tracking.md`, dépôt principal job-finder, pas ce
+worktree). La construction de l'insight/dashboard PostHog lui-même est explicitement hors
+scope de cette PR — différée à Claude Cowork une fois qu'il y aura de la donnée réelle à
+visualiser, même découpage que le Trend "crédits dépensés par jour" d'une PR précédente.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/LibrarySection.tsx`** : import de `posthog` depuis
+  `posthog-js` et nouveau `useEffect` qui appelle
+  `posthog.setPersonProperties({ current_cv_count: cvs.length })` à chaque changement de
+  `cvs.length`, gardé par `!isAuthenticated || loading` pour ne rien poster avant que le premier
+  fetch ait résolu ni pour un visiteur anonyme. Commentaire WHY étendu au-dessus de l'effet pour
+  couvrir explicitement les deux alternatives écartées (voir Décisions techniques) et le cas
+  limite où le garde `loading` ne suffit pas à éviter un `current_cv_count: 0`.
+- **`JobFinder/frontend/__tests__/LibrarySection.test.tsx`** : nouveau bloc
+  `describe("current_cv_count person property", ...)` — poste après résolution du fetch initial,
+  ne poste rien avant résolution, ne poste jamais pour un visiteur non authentifié, poste le
+  nouveau total (plus bas) après une suppression locale de CV, et ne reposte pas quand deux polls
+  consécutifs de 3s renvoient le même nombre de CVs.
+
+### Décisions techniques
+
+- **Propriété de personne, pas événement.** `current_cv_count` est une valeur vivante attachée à
+  l'utilisateur, pas un log d'événements — une future insight PostHog "breakdown by person
+  property" peut alors énumérer toutes les valeurs distinctes présentes (1, 2, ou 1/2/3 si le
+  plafond est un jour relevé) sans aucun changement de code ni de graphe quand ce plafond bouge ;
+  seule la logique de comptage (déjà correcte) compte. Ce zéro-changement-de-graphe vaut pour un
+  breakdown côté table `persons` ; un breakdown côté table `events` (person-on-events) refléterait
+  la valeur au moment de l'ingestion de chaque événement, pas la valeur courante — à garder en tête
+  pour qui construira l'insight.
+- **Deux alternatives considérées et écartées.** (1) Compter les événements `cv_uploaded` par
+  utilisateur (déjà trackés dans `UploadSection.tsx`) casse dès qu'une suppression a lieu : un
+  cycle upload → suppression → ré-upload se lirait comme 2 CVs pour quelqu'un qui n'en détient
+  jamais qu'1. (2) Un événement ponctuel `cv_upload_blocked_at_cap` (envisagé puis abandonné dans
+  le prompt précédent, `prompt-cv-slot-lock-portfolio.md`) ne se déclenche que pour les
+  utilisateurs déjà au plafond en train d'en ajouter — il ne dit rien de la distribution réelle
+  1 CV / 2 CVs sur l'ensemble des utilisateurs.
+- **Dépendance à `cvs.length`, pas à `cvs`.** Le poll de 3s existant (tant qu'un CV est
+  pending/processing/done) ne re-déclenche donc pas l'effet à chaque tick tant que le nombre de
+  CVs ne change pas réellement.
+- **Pas de dashboard/insight PostHog dans cette PR** — différé à Claude Cowork, comme documenté
+  ci-dessus.
+
+### Vérification
+
+- Relecture du nouveau `useEffect`, de son commentaire WHY et des cinq tests ajoutés dans
+  `LibrarySection.test.tsx` : cohérents avec le comportement décrit ci-dessus, y compris le cas où
+  le garde `loading` seul ne suffit pas (fetch en échec après retry → `current_cv_count: 0` posté
+  quand même, documenté dans le commentaire plutôt que corrigé — hors scope de cette PR).
+- Pas d'accès Bash/`gh` depuis ce rôle. Numéro de PR dérivé du plus haut `## PR #NNN` de ce
+  fichier (`## PR #257`, également la dernière entrée) + 1 ; aucune entrée `## PR #258` ni entrée
+  existante pour cette branche dans `docs/JOURNAL.md` avant cette révision.
+- Pas d'exécution de `jest` depuis ce rôle — vérification par relecture du code et des tests
+  ajoutés uniquement, pas par exécution.
