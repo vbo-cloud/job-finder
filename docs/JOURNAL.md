@@ -9842,3 +9842,87 @@ problème de déploiement.
   plus ancienne.
 - `GET /notifications/unsubscribe?token=<token valide>` sur `app-jf-dev-frc` doit renvoyer 200
   (page de confirmation), pas 404.
+
+## PR #250 — fix(notifications): corriger trois bugs de rendu mobile du récap email
+
+**Date :** 2026-07-27
+**Branche :** `fix/notifications-email-mobile-render` → `dev`
+
+### Contexte
+
+Trois bugs de rendu visuels propres aux petits viewports mobiles (~360-390px) affectaient le
+récap email quotidien (`agents/notifications/main.py`, contenu/template refondus en PR #241) :
+le titre "Job Finder" et la frise calendaire de rappel de l'en-tête se chevauchaient, la pastille
+d'un jour "sélectionné mais pas aujourd'hui" de cette même frise n'affichait qu'un mince bandeau de
+7px coloré au lieu d'un contour complet autour de la pastille, et le texte des boutons (CTA
+principal et bouton par CV) ne restait pas centré une fois passé à la ligne sur deux lignes.
+
+### Ce qui a été fait
+
+- **`agents/notifications/main.py`** :
+  - `_render_header_html` : `white-space:nowrap` ajouté sur le `<td>` du titre, et un `<td>`
+    espaceur fixe de 12px inséré entre le titre et la frise calendaire, pour empêcher leur
+    collision sur les viewports étroits.
+  - `_render_calendar_html` : la pastille d'un jour "sélectionné mais pas aujourd'hui" (deux `<td>`
+    empilés par icône — un bandeau de 7px et un corps de 16px) porte désormais
+    `border:1px solid {band}` sur les deux cellules empilées, avec `border-bottom:none` sur la
+    cellule du haut et `border-top:none` sur celle du bas pour que les deux bordures se rejoignent
+    sans doubler la ligne au milieu — commentaire WHY ajouté au-dessus de ce bloc. Seule
+    `_render_calendar_html` a changé ; la signature et les valeurs de retour de
+    `_calendar_day_style` sont restées inchangées (les tests `test_calendar_day_style_*` couvrent
+    ce tuple), mais son docstring décrivait `band_color` comme la seule couleur du bandeau du
+    haut — corrigé pour préciser qu'il sert aussi de couleur de contour à toute la pastille depuis
+    ce correctif (voir Décisions techniques).
+  - `_render_cta_html` et le bouton par CV dans `_render_cv_card_html` : ajout d'un
+    `text-align:center` inline et d'un `line-height` égal à la `font-size` du bouton — commentaire
+    WHY ajouté aux deux endroits (certains clients mail ignorent ou suppriment `<style>`/`@media`,
+    et n'honorent alors pas l'alignement une fois le texte passé sur deux lignes). Le bouton CTA n'a
+    pas la classe `.stack-btn` (seul le bouton par CV l'a) donc aucune règle `@media` ne le couvre
+    du tout — l'inline y est la seule protection, pas un doublon défensif d'une règle CSS existante
+    comme pour le bouton par CV. `align="center"` ajouté également sur le
+    `<td>` du bouton par CV, qui ne le portait pas — cette cellule (celle avec
+    `background-color:#2563eb`) n'a pas de rôle équivalent avec `align="center"` côté CTA : le
+    bouton CTA est centré horizontalement via le `<td align="center">` englobant de la ligne
+    (padding), pas sur la cellule du bouton lui-même.
+- **`agents/notifications/tests/test_notifications.py`** : cinq nouveaux tests ajoutés —
+  `test_render_calendar_html_wraps_selected_not_today_day_in_a_full_border`,
+  `test_render_header_html_separates_title_and_calendar_with_a_spacer_cell`,
+  `test_render_cta_html_centers_button_text_inline`,
+  `test_render_cv_top_match_html_does_not_touch_button_markup` (garde-fou contre une confusion
+  entre `_render_cv_top_match_html` et `_render_cv_card_html`, qui portent chacun un rendu
+  distinct), `test_render_cv_card_html_centers_button_text_inline_and_on_wrapping_td`. Assertions
+  vérifiées ligne à ligne contre le code actuel de `main.py` dans cette passe.
+
+### Décisions techniques
+
+- **Docstring de `_calendar_day_style` mise à jour, pas seulement vérifiée non-contradictoire** : sa
+  description de `band_color` restait techniquement vraie (c'est toujours la couleur du bandeau)
+  mais ne mentionnait plus son second usage introduit par ce correctif (couleur de bordure de toute
+  la pastille dans `_render_calendar_html`) — complétée d'une clause plutôt que laissée telle
+  quelle.
+- **Fichier prompt non lisible depuis ce worktree, spec reprise de la consigne de tâche plutôt que
+  du prompt lui-même** : `docs/prompts/prompt-fix-notifications-email-mobile-render.md` n'existe pas
+  dans cette copie de travail — plus largement, tout le dossier `docs/prompts/` en est absent, y
+  compris les prompts déjà cités par le docstring de module de `main.py` lui-même
+  (`prompt-email-one-click-unsubscribe.md`) et par les entrées PR #241/#245 de ce journal. C'est un
+  artefact de checkout/worktree (voir la note mémoire sur les prompts Cowork vivant sous
+  `job-finder/docs/prompts/`, un autre dépôt/emplacement que celui-ci), pas une preuve que ce prompt
+  n'a jamais existé — à ne pas confondre avec le cas `send_test_notification.py` documenté aux PR
+  #241/#245, où l'absence avait été confirmée par `git log --all --diff-filter=D` (aucun accès Bash
+  disponible depuis ce rôle pour rejouer une vérification équivalente ici).
+- **`send_test_notification.py`, mentionné dans la consigne de tâche comme référence de ce même
+  prompt** : reprise ici telle quelle, non re-vérifiée dans cette passe (pas d'accès Bash/`git log`
+  depuis ce rôle) — cohérente avec l'absence déjà confirmée aux PR #241/#245.
+
+### Vérification
+
+- Relecture fonction par fonction des quatre fonctions modifiées et de `_calendar_day_style` :
+  markup HTML actuel de `main.py` confronté aux cinq nouveaux tests listés ci-dessus (assertions sur
+  `white-space:nowrap`, le `<td>` espaceur de 12px, le compte de `border:1px solid {couleur}` à 2,
+  `text-align:center`/`line-height` sur les deux boutons, `align="center"` sur le `<td>` du bouton
+  par CV) — correspondance confirmée dans cette passe.
+- Suite complète (66 tests), rendu manuel via `_render_html_body` dans des iframes 375px/280px/640px
+  et absence de régression au rendu ~640px : repris tels que rapportés dans la consigne de tâche,
+  non rejoués dans cette passe (pas d'accès Bash depuis ce rôle).
+- Numéro de PR dérivé du dernier titre `## PR #NNN` de ce fichier (#249) + 1, faute d'accès à `gh`
+  depuis ce rôle (aucun outil Bash disponible) — non confirmé via GitHub dans cette passe.

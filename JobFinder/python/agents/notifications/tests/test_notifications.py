@@ -358,6 +358,51 @@ def test_render_calendar_text_marks_today_with_brackets() -> None:
     assert text == "Rappels programmés : Lun · Mer · Ven · [Dim] (aujourd'hui)"
 
 
+def test_render_calendar_html_wraps_selected_not_today_day_in_a_full_border() -> None:
+    # isoweekday 3 is selected but not today: band should come out to "#f2f2f4" per
+    # test_calendar_day_style_selected_and_not_today, and both stacked <td> of that
+    # pill must carry a border in that color for the outline to read as continuous.
+    html = _mod._render_calendar_html(notification_days=[3], today_isoweekday=7)
+
+    assert html.count("border:1px solid #f2f2f4;") == 2
+
+
+def test_render_header_html_separates_title_and_calendar_with_a_spacer_cell() -> None:
+    header = _mod._render_header_html(calendar_html="<td>CAL</td>")
+
+    assert "white-space:nowrap" in header
+    assert '<td style="width:12px; font-size:1px; line-height:1px;">&nbsp;</td>' in header
+
+
+# ---------------------------------------------------------------------------
+# email button rendering (inline text-align/line-height, mail clients don't
+# reliably honor <style>/@media for text alignment inside a multi-line <a>)
+# ---------------------------------------------------------------------------
+
+
+def test_render_cta_html_centers_button_text_inline() -> None:
+    html = _mod._render_cta_html(frontend_url="https://example.com")
+
+    assert "text-align:center" in html
+    assert "line-height:15px" in html
+
+
+def test_render_cv_top_match_html_does_not_touch_button_markup() -> None:
+    # The per-CV button lives in _render_cv_card_html, not here — this just guards
+    # against the two renderers being confused with each other during the fix.
+    html = _mod._render_cv_top_match_html(_make_cv_entry())
+
+    assert "stack-btn" not in html
+
+
+def test_render_cv_card_html_centers_button_text_inline_and_on_wrapping_td() -> None:
+    html = _mod._render_cv_card_html(_make_cv_entry(), frontend_url="https://example.com")
+
+    assert '<td align="center" style="border-radius:8px; background-color:#2563eb;">' in html
+    assert "text-align:center" in html
+    assert "line-height:13px" in html
+
+
 # ---------------------------------------------------------------------------
 # _load_cv_digest_entries_by_user (real SQLite, minimal schema)
 # ---------------------------------------------------------------------------
