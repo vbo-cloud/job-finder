@@ -10718,3 +10718,74 @@ l'est pour les 3.
   configurées (1000/1000/500) tiennent toutes.
 - `terraform plan` réel (backend distant + quota à l'apply) délégué à la CI et à `reviewer-infra`.
 - Suite frontend inchangée par cette PR (infra seule).
+
+## PR #260 — feat(frontend): pages mentions légales & confidentialité + liens légaux globaux
+
+**Date :** 2026-07-28
+**Branche :** `feature/legal-pages` → `dev`
+
+### Contexte
+
+Avant l'ouverture de Job Finder au cercle proche de Vincent puis à un public plus large, l'app
+doit publier ses mentions légales et sa politique de confidentialité RGPD — obligatoires dès que
+des données personnelles réelles (CV, profil) sont collectées, même pour un portfolio non
+commercial. Décisions cadrées avec Claude Cowork (cf.
+`docs/prompts/prompt-mentions-legales-confidentialite.md`) : éditeur = Vincent Boutin, particulier
+sans structure (pas de SIRET, "vbo-cloud" est un nom de projet, pas une entité) ; contact via
+l'alias `legal@vincentboutin.dev` (pas l'adresse pro/perso) ; hébergeur = Microsoft France (SIREN
+327 733 184, vérifié sur facture Azure réelle) ; pas de CGU ni de gate de consentement dans ce
+lot ; textes à portée légale à reprendre **verbatim**, sans reformulation.
+
+### Ce qui a été fait
+
+- **`app/_components/LegalDocument.tsx`** (nouveau, Server Component) : coquille de lecture statique
+  partagée par les deux pages légales, réutilisant la surface visuelle profile/feedback
+  (`bg-profile-page`, barre de retour desktop, `<main>` centré `max-w-2xl`). Rend un modèle de
+  blocs typés `LegalBlock` (`h2` / `p` / `ul` / `lines`). Les textes vivent dans des **chaînes JS**
+  (pas des nœuds texte JSX) pour préserver le contenu au caractère près sans que
+  `react/no-unescaped-entities` n'échappe apostrophes/guillemets.
+- **`app/mentions-legales/page.tsx`** et **`app/confidentialite/page.tsx`** (nouveaux, Server
+  Components) : contenu verbatim + `metadata.title`. Aucune garde `isAuthenticated` (contrairement
+  à profile/feedback) : les mentions légales doivent rester atteignables **déconnecté**. La page
+  confidentialité ne liste **pas** de destinataire « OpenAI » distinct — la ligne « Microsoft
+  Azure » couvre déjà le service Azure OpenAI (Microsoft, jamais OpenAI Inc.) ; un commentaire WHY
+  le documente dans le fichier. La section « Transferts hors UE » a été alignée sur la migration
+  `DataZoneStandard` (PR #263, appliquée) après vérification sur la doc Microsoft (EU Data
+  Boundary) : stockage au repos en France Centre, mais traitement IA dans la **zone de données UE**
+  de Microsoft (UE + EEE + Suisse, pays adéquat) et rétention anti-abus Microsoft jusqu'à 30 j dans
+  cette zone. L'affirmation absolue initiale « aucun transfert hors UE » — inexacte, l'AELE incluant
+  Norvège/Suisse hors UE — a donc été remplacée par une formulation exacte. Dans les mentions
+  légales, la section « Hébergement » précise « France Centre pour l'hébergement de l'application et
+  le stockage des données » (au lieu de l'ancien « pour le calcul et les données », ambigu depuis
+  #263 : le calcul IA relève de la zone UE, cf. confidentialité).
+- **`app/_components/LegalLinks.tsx`** (nouveau, Server Component) : deux liens discrets
+  (`Mentions légales · Confidentialité`) épinglés en bas à gauche en `fixed`, `z-30` (sous le
+  header `z-50`, le rail `z-40` et les modales `z-50`, donc jamais par-dessus un dialogue). Le
+  choix du `fixed` plutôt qu'un footer en flux vient de la home : c'est un conteneur plein écran
+  en snap-scroll (`h-dvh overflow-hidden`) où un `<footer>` après `{children}` serait invisible.
+- **`app/layout.tsx`** : rend `<LegalLinks />` globalement, après `{children}`, à l'intérieur des
+  providers — présent sur toutes les routes.
+- **`app/profile/page.tsx`** : notice RGPD courte (simple `<p>` + lien « En savoir plus » vers
+  `/confidentialite`) insérée juste au-dessus de `DeleteAccountSection` dans la zone de suppression
+  (son texte dit « ci-dessous »). Texte court validé par Vincent : « analysé par une IA et stocké
+  sur l'infrastructure du projet. Rien ne sort de l'UE / AELE… » (« UE / AELE » = l'EU Data Boundary
+  de Microsoft, cohérent avec la page confidentialité). `<p>` en `w-full` pour aligner sa largeur sur
+  les cartes de section au-dessus. Aucun gate de consentement, aucune modale ; `DeleteAccountSection`
+  n'est pas modifié.
+
+### Vérification
+
+- `npx tsc --noEmit` et `npx eslint` sur tous les fichiers nouveaux/modifiés : propres.
+- `npx jest` : suite complète **209/209** (25 suites). Nouveaux tests :
+  `__tests__/LegalPages.test.tsx` (les deux routes rendent titres + contenu attendu ; assertion
+  qu'aucun destinataire « OpenAI » distinct n'apparaît), `__tests__/LegalLinks.test.tsx` (les deux
+  liens pointent vers `/mentions-legales` et `/confidentialite`), et un bloc ajouté à
+  `__tests__/ProfilePage.test.tsx` (la notice + le lien « En savoir plus » s'affichent, le bouton
+  « Supprimer mon compte » reste intact).
+- **En attente de relecture visuelle par Vincent (dev server) :** les liens `fixed` étant globaux,
+  ils s'affichent aussi par-dessus la home animée (section d'upload de CV, volontairement gardée
+  sans texte jusqu'ici) et en coin bas-gauche de la section offres (`CVDetailSection`). Aucun
+  ajustement de `CVDetailSection` n'a été fait : l'analyse de la géométrie montre que le
+  chevauchement n'existe qu'en desktop large et reste marginal (le contenu de la section démarre à
+  `md:ml-24`, hors de la gouttière où se placent les liens). À confirmer/arbitrer visuellement
+  plutôt que de rétrécir la vignette CV à l'aveugle.
