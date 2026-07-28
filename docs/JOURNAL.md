@@ -10659,3 +10659,62 @@ cette PR.
   #261 est la PR de correctif d'affichage MSAL (`feature/fix-auth-account-display-mismatch`, celle
   qui a signalé ce code mort), #260 est `feature/legal-pages` (worktree `agent1`, sans rapport avec
   `LoginButton`) — cette PR prend donc le numéro #262.
+
+## PR #263 — feat(infra): Azure OpenAI en DataZoneStandard (résidence UE)
+
+**Date :** 2026-07-28
+**Branche :** `feature/openai-datazone-eu` → `dev`
+
+### Contexte
+
+Les 3 déploiements Azure OpenAI (`gpt-4o-mini`, `gpt-5-mini`, `text-embedding-3-small`) tournaient
+en SKU `GlobalStandard` → l'inférence pouvait être routée hors UE, ce qui contredisait
+l'engagement RGPD (données CV/utilisateur en UE, ADR-006) et rendrait inexacte la page
+confidentialité de la PR #260 (« aucun transfert hors UE »). Vérifié en lecture seule via
+`az cognitiveservices model list --location francecentral` : le SKU régional `Standard` (France
+seule) n'est disponible pour **aucun** des 3 modèles à francecentral — d'où le choix initial de
+`GlobalStandard`. En revanche `DataZoneStandard` (traitement garanti dans la zone de données UE)
+l'est pour les 3.
+
+### Ce qui a été fait
+
+- **`envs/dev/openai.tf`** : les 3 déploiements passent de `GlobalStandard` à `DataZoneStandard`.
+  Commentaires WHY mis à jour (résidence UE, historique du choix Global).
+- **`envs/dev/variables.tf`** : nouvelle variable `openai_capacity_tpm_gpt5_mini` (défaut 500 =
+  0,5M TPM). Raison : le quota `DataZoneStandard` de `gpt-5-mini` à francecentral n'est que de 670
+  (en milliers), sous le défaut partagé de 1000 (1M TPM) — un apply à 1000 échouerait. Vérifié via
+  `az cognitiveservices usage list`. `gpt-4o-mini` (quota 3000) et `text-embedding-3-small` (quota
+  2000) gardent la variable partagée à 1000.
+- **`modules/openai/variables.tf`** : la validation du `sku_name` des déploiements, qui
+  n'autorisait que `Standard`/`GlobalStandard`, accepte désormais aussi `DataZoneStandard`.
+  Changement de module minimal, indissociable du changement d'env (pure infra, aucun impact app).
+
+### Décisions techniques
+
+- **DataZone UE plutôt que France stricte** : le mode régional France n'existe pas pour ces
+  modèles ; DataZone garantit l'UE (RGPD identique), sans changer de modèle ni de code, à prix
+  quasi égal — voire moindre pour l'embedding (DataZone 0,000020 € vs Global 0,000022 €, chiffres
+  Vincent).
+- **Baisse de capacité `gpt-5-mini` (1M → 0,5M TPM)** assumée : usage réel proche de 0, 0,5M TPM
+  reste très au-dessus du besoin ; monter au-delà de ~670 nécessiterait une demande d'augmentation
+  de quota Azure.
+- **Recréation des déploiements attendue** : changer le SKU d'un `azurerm_cognitive_deployment`
+  force un remplacement (destroy+create, même nom). Sans conséquence — ressources sans état, aucun
+  `prevent_destroy` sur les déploiements (seul le compte `azurerm_cognitive_account` est protégé).
+  Brève indispo par déploiement pendant l'apply, acceptable en dev.
+- **Module + env dans la même PR** : la règle « changement de module en PR dédiée » vise les
+  features applicatives ; ici tout est infra et l'extension d'une valeur d'allow-list n'a aucun
+  sens séparée du changement d'env qui la motive.
+- **Swap de modèle `gpt-4o-mini` → `gpt-5-nano` (Agent 3) volontairement hors périmètre** : il
+  touche aussi le code Python et demande de re-tester prompts/parsing → PR séparée ultérieure. Ici
+  on ne fait que la bascule de résidence, à modèles constants, pour un merge sûr.
+
+### Vérification
+
+- `terraform fmt -check` et `terraform validate` : OK sur les fichiers touchés (le seul diff `fmt`
+  résiduel du dépôt est dans `modules/container_app_environment`, préexistant et hors périmètre).
+- Quotas `DataZoneStandard` francecentral confirmés en lecture seule (`az cognitiveservices usage
+  list`) : `gpt-4o-mini` 3000, `text-embedding-3-small` 2000, `gpt-5-mini` 670 — les capacités
+  configurées (1000/1000/500) tiennent toutes.
+- `terraform plan` réel (backend distant + quota à l'apply) délégué à la CI et à `reviewer-infra`.
+- Suite frontend inchangée par cette PR (infra seule).
