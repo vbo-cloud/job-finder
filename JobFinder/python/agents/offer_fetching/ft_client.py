@@ -22,6 +22,12 @@ PAGINATION_SAFE_THRESHOLD = 2500
 # rétrécie de moitié tant que la tranche dépasse le seuil, jusqu'au plancher MIN_WINDOW_DAYS.
 DEFAULT_WINDOW_DAYS = 30
 MIN_WINDOW_DAYS = 1
+# Borne basse par défaut de minCreationDate quand on ne veut en réalité *aucune* borne basse.
+# France Travail rejette (400) maxCreationDate envoyé seul : les deux bornes de date de création
+# sont dépendantes et doivent toujours être fournies ensemble. "Pas de borne basse" s'exprime donc
+# via une date fixe largement antérieure à toute offre réelle plutôt qu'en omettant minCreationDate.
+# Pas une valeur documentée par l'API — juste une marge de sécurité (même esprit que le seuil).
+CREATION_DATE_FLOOR = datetime(2015, 1, 1, tzinfo=timezone.utc)
 # Longueur max du corps de réponse repris dans les logs d'erreur — France Travail place le vrai
 # message d'erreur (param mal formé, etc.) dans le body, que `exc_info=True` ne capture pas (la
 # trace Python ne contient que le message générique "400 Client Error"). Tronqué pour borner le log.
@@ -404,7 +410,7 @@ def _fetch_and_merge_window(
     rome_code: str,
     min_date: str | None,
     cursor_end: datetime,
-    window_start: datetime | None,
+    window_start: datetime,
     offers: list[dict],
     seen_ids: set[str],
 ) -> None:
@@ -415,12 +421,13 @@ def _fetch_and_merge_window(
         rome_code: ROME occupation code being fetched.
         min_date: Fixed minDateActualisation business filter (YYYY-MM-DD) or None.
         cursor_end: Upper creation-date bound (maxCreationDate) of the window.
-        window_start: Lower creation-date bound (minCreationDate), or None to fetch the whole
-            tail — everything created at or before cursor_end — once it fits under the threshold.
+        window_start: Lower creation-date bound (minCreationDate). Always required — France
+            Travail rejects maxCreationDate sent without minCreationDate, so "the whole tail"
+            is expressed by passing CREATION_DATE_FLOOR, never by omitting the lower bound.
         offers: Accumulator list, mutated in place via _extend_unique.
         seen_ids: Set of ft ids already added, mutated in place via _extend_unique.
     """
-    min_creation_date = _iso(window_start) if window_start is not None else None
+    min_creation_date = _iso(window_start)
     window_offers = fetch_offers(
         token,
         rome_code,
@@ -445,9 +452,11 @@ def fetch_all_offers(token: str, rome_code: str, min_date: str | None = None) ->
     reach past ~3050 results, so a high-volume ROME code (e.g. M1507) would otherwise lose
     every offer beyond the ceiling. minDateActualisation (min_date) stays the fixed business
     filter; minCreationDate/maxCreationDate are used only mechanically to slice the total into
-    sub-threshold windows, ANDed with min_date. The walk probes cheaply (range=0-0) before
-    each fetch and adapts the window width to the real offer density — wide windows when
-    offers are sparse, narrow ones when dense. Windows are merged deduplicated by ft id.
+    sub-threshold windows, ANDed with min_date. Both creation-date bounds are always sent
+    together — France Travail rejects one without the other — so an "open" lower bound is
+    expressed as CREATION_DATE_FLOOR, never by omitting minCreationDate. The walk probes cheaply
+    (range=0-0) before each fetch and adapts the window width to the real offer density — wide
+    windows when offers are sparse, narrow ones when dense. Windows are merged deduplicated by ft id.
 
     Args:
         token: A valid OAuth2 access token.
@@ -470,14 +479,23 @@ def fetch_all_offers(token: str, rome_code: str, min_date: str | None = None) ->
     next_width = DEFAULT_WINDOW_DAYS
 
     while True:
-        # Everything created at or before cursor_end (min_date still applied). Shrinks as the
-        # cursor walks back in time; reaching 0 means nothing older is left — stop.
-        total_below = _probe_total(token, rome_code, min_date=min_date, max_creation_date=_iso(cursor_end))
+        # Everything between CREATION_DATE_FLOOR and cursor_end (min_date still applied). Shrinks
+        # as the cursor walks back in time; reaching 0 means nothing older is left — stop.
+        # minCreationDate is pinned to the floor rather than omitted: France Travail rejects
+        # maxCreationDate sent without minCreationDate (the two bounds are dependent).
+        total_below = _probe_total(
+            token,
+            rome_code,
+            min_date=min_date,
+            min_creation_date=_iso(CREATION_DATE_FLOOR),
+            max_creation_date=_iso(cursor_end),
+        )
         if total_below == 0:
             break
         if total_below < PAGINATION_SAFE_THRESHOLD:
-            # The whole remaining tail fits in one paginated fetch — no windowing needed.
-            _fetch_and_merge_window(token, rome_code, min_date, cursor_end, None, offers, seen_ids)
+            # The whole remaining tail fits in one paginated fetch — no windowing needed. The tail
+            # lower bound is CREATION_DATE_FLOOR (not None): maxCreationDate can't be sent alone.
+            _fetch_and_merge_window(token, rome_code, min_date, cursor_end, CREATION_DATE_FLOOR, offers, seen_ids)
             break
 
         window_start, total_window = _shrink_window(token, rome_code, min_date, cursor_end, next_width)
