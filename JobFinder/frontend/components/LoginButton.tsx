@@ -9,6 +9,9 @@ import { loginRequest } from "@/lib/auth/msalConfig";
  *
  * Triggers an MSAL redirect login and reflects the current authentication
  * state. This is the only interactive element of the walking skeleton.
+ *
+ * Note: no longer wired into the app — kept from the walking-skeleton phase,
+ * `AuthButton.tsx` is the production sign-in control.
  */
 export function LoginButton() {
   const { instance, accounts } = useMsal();
@@ -23,7 +26,11 @@ export function LoginButton() {
   };
 
   if (isAuthenticated) {
-    const claims = accounts[0]?.idTokenClaims as Record<string, unknown> | undefined;
+    // Active account, not accounts[0] — the MSAL cache can hold two entries
+    // after the Entra External ID account-picker glitch (AADSTS165000, cf.
+    // msalConfig.ts) and array order isn't guaranteed.
+    const activeAccount = instance.getActiveAccount() ?? accounts[0];
+    const claims = activeAccount?.idTokenClaims as Record<string, unknown> | undefined;
     const preferredUsername = claims?.preferred_username as string | undefined;
     const displayName = claims?.name as string | undefined;
     const name =

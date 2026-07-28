@@ -8,10 +8,16 @@ jest.mock("@/lib/api/client", () => ({
 
 jest.mock("@azure/msal-react", () => ({
   useIsAuthenticated: () => true,
-  useMsal: () => ({
-    instance: { loginRedirect: jest.fn(), logoutRedirect: jest.fn() },
+  // getActiveAccount is required here — ProfilePage now reads it (falling
+  // back to accounts[0]) instead of accounts[0] directly.
+  useMsal: jest.fn(() => ({
+    instance: {
+      loginRedirect: jest.fn(),
+      logoutRedirect: jest.fn(),
+      getActiveAccount: jest.fn().mockReturnValue({ name: "Test User" }),
+    },
     accounts: [{ name: "Test User" }],
-  }),
+  })),
 }));
 
 jest.mock("next/navigation", () => ({
@@ -35,6 +41,8 @@ const unsavedChanges = {
 jest.mock("@/lib/navigation/UnsavedChangesContext", () => ({
   useUnsavedChanges: () => unsavedChanges,
 }));
+
+import { useMsal } from "@azure/msal-react";
 
 import ProfilePage from "@/app/profile/page";
 import apiClient from "@/lib/api/client";
@@ -122,5 +130,44 @@ describe("ProfilePage — notification_days autosave", () => {
     fireEvent.click(screen.getByRole("button", { name: "Lun" }));
 
     expect(unsavedChanges.setHasUnsavedChanges).not.toHaveBeenCalledWith(true);
+  });
+});
+
+describe("ProfilePage — displayed account with multiple MSAL cache entries", () => {
+  const defaultUseMsal = (useMsal as jest.Mock).getMockImplementation();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (apiClient.get as jest.Mock).mockResolvedValue({
+      data: {
+        experience_level: null,
+        notification_days: [],
+        candidate_description: "",
+        analysis_credits_remaining: 5,
+        is_admin: false,
+      },
+    });
+  });
+
+  // Restore the module's default useMsal mock so this override never leaks
+  // into a test in another describe block that runs after this one.
+  afterEach(() => {
+    (useMsal as jest.Mock).mockImplementation(defaultUseMsal);
+  });
+
+  it("shows the active account's name, not accounts[0], when two accounts are cached", async () => {
+    (useMsal as jest.Mock).mockReturnValue({
+      instance: {
+        loginRedirect: jest.fn(),
+        logoutRedirect: jest.fn(),
+        getActiveAccount: jest.fn().mockReturnValue({ name: "Second User" }),
+      },
+      accounts: [{ name: "First User" }, { name: "Second User" }],
+    });
+
+    await renderLoaded();
+
+    expect(screen.getByRole("heading", { name: "Second User" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "First User" })).not.toBeInTheDocument();
   });
 });

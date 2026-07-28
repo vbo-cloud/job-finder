@@ -26,7 +26,10 @@ export default function AuthButton() {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [open]);
 
-  const account  = accounts[0];
+  // Active account, not accounts[0] — the MSAL cache can hold two entries
+  // after the Entra External ID account-picker glitch (AADSTS165000, cf.
+  // msalConfig.ts) and array order isn't guaranteed.
+  const account  = instance.getActiveAccount() ?? accounts[0];
   const initials = account?.name
     ?.split(" ")
     .map((n) => n[0])
