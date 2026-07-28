@@ -10558,7 +10558,7 @@ approche différente.
   façon pas le dessin canvas, cohérent avec la vérification manuelle en dev server décrite par le
   prompt parent.
 
-## PR #260 — fix(frontend): show MSAL active account instead of accounts[0]
+## PR #261 — fix(frontend): show MSAL active account instead of accounts[0]
 
 **Date :** 2026-07-28
 **Branche :** `feature/fix-auth-account-display-mismatch` → `dev`
@@ -10621,5 +10621,7 @@ le nom/les initiales affichés en en-tête pouvaient être ceux de l'autre compt
 - Pas d'accès Bash/`npm test`/`tsc`/`gh`/`git diff` depuis ce rôle — vérification par relecture des
   trois fichiers modifiés, du test ajouté, et du grep ci-dessus, pas par exécution de la suite de
   tests.
-- Numéro de PR dérivé du dernier titre `## PR #259` de ce fichier (+1 = #260) — non confirmé via
-  GitHub dans cette passe, `gh` n'étant pas accessible depuis ce rôle.
+- Numéro de PR confirmé via `gh pr list --state all --limit 5 --json number,title,headRefName` :
+  #261 (le titre initialement dérivé du dernier titre `## PR #259` +1 avait donné #260, déjà pris
+  par `feature/legal-pages` ouverte en parallèle sur un autre worktree — corrigé après vérification
+  GitHub).
