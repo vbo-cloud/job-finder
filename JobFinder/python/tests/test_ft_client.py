@@ -28,12 +28,14 @@ def _make_http_response(
     status_code: int = 200,
     json_data: dict | None = None,
     headers: dict | None = None,
+    text: str = "",
 ) -> MagicMock:
     """Build a minimal mock of a requests.Response."""
     mock = MagicMock()
     mock.status_code = status_code
     mock.json.return_value = json_data or {}
     mock.headers = headers or {}
+    mock.text = text
     if status_code >= 400:
         mock.raise_for_status.side_effect = requests.HTTPError(response=mock)
     else:
@@ -68,6 +70,16 @@ class TestGetAccessToken:
 
         with pytest.raises(requests.HTTPError):
             ft_client.get_access_token()
+
+    def test_logs_response_body_on_http_error(self, mocker):
+        mock_resp = _make_http_response(401, text='{"error":"invalid_client"}')
+        mocker.patch("ft_client.requests.post", return_value=mock_resp)
+        spy_error = mocker.spy(ft_client.logger, "error")
+
+        with pytest.raises(requests.HTTPError):
+            ft_client.get_access_token()
+
+        assert spy_error.call_args.kwargs["response_body"] == '{"error":"invalid_client"}'
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +163,22 @@ class TestFetchOffers:
 
         with pytest.raises(requests.HTTPError):
             ft_client.fetch_offers("token", "M1805")
+
+    def test_logs_response_body_on_non_429_error(self, mocker):
+        resp_500 = _make_http_response(500, text="Internal Server Error detail")
+        mocker.patch(
+            "ft_client.requests.Session",
+            return_value=_make_session_mock([resp_500]),
+        )
+        spy_error = mocker.spy(ft_client.logger, "error")
+
+        with pytest.raises(requests.HTTPError):
+            ft_client.fetch_offers("token", "M1805")
+
+        page_failed = next(
+            c for c in spy_error.call_args_list if c.args and c.args[0] == "ft_fetch_offers_page_failed"
+        )
+        assert page_failed.kwargs["response_body"] == "Internal Server Error detail"
 
     def test_includes_min_date_param_when_provided(self, mocker):
         resp = _make_http_response(
@@ -275,6 +303,19 @@ class TestProbeTotal:
         mocker.patch("ft_client.requests.Session", return_value=_make_session_mock([resp]))
 
         assert ft_client._probe_total("token", "M1805") == 0
+
+    def test_logs_response_body_on_http_error(self, mocker):
+        resp_400 = _make_http_response(400, text='{"message":"maxCreationDate requires minCreationDate"}')
+        mocker.patch("ft_client.requests.Session", return_value=_make_session_mock([resp_400]))
+        spy_error = mocker.spy(ft_client.logger, "error")
+
+        with pytest.raises(requests.HTTPError):
+            ft_client._probe_total("token", "M1805")
+
+        probe_failed = next(
+            c for c in spy_error.call_args_list if c.args and c.args[0] == "ft_probe_total_failed"
+        )
+        assert probe_failed.kwargs["response_body"] == '{"message":"maxCreationDate requires minCreationDate"}'
 
 
 # ---------------------------------------------------------------------------
