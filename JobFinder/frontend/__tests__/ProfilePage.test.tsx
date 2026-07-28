@@ -8,6 +8,8 @@ jest.mock("@/lib/api/client", () => ({
 
 jest.mock("@azure/msal-react", () => ({
   useIsAuthenticated: () => true,
+  // getActiveAccount is required here — ProfilePage now reads it (falling
+  // back to accounts[0]) instead of accounts[0] directly.
   useMsal: jest.fn(() => ({
     instance: {
       loginRedirect: jest.fn(),
