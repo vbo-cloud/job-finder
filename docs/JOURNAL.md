@@ -10625,3 +10625,37 @@ le nom/les initiales affichés en en-tête pouvaient être ceux de l'autre compt
   #261 (le titre initialement dérivé du dernier titre `## PR #259` +1 avait donné #260, déjà pris
   par `feature/legal-pages` ouverte en parallèle sur un autre worktree — corrigé après vérification
   GitHub).
+
+## PR #262 — chore(frontend): remove unused LoginButton component
+
+**Date :** 2026-07-28
+**Branche :** `chore/remove-dead-loginbutton` → `dev`
+
+### Contexte
+
+`components/LoginButton.tsx` n'était importé nulle part dans l'application — confirmé par grep sur
+tout `JobFinder/frontend` : aucune référence dans le code source, les tests, ou un éventuel barrel
+export. `AuthButton.tsx` (`app/_components/AuthButton.tsx`) est le vrai contrôle de connexion en
+production depuis la phase walking-skeleton (PR #96) : bouton « Se connecter » côté non
+authentifié, pill prénom + initiales avec dropdown profil/déconnexion côté authentifié.
+`LoginButton.tsx` était un résidu antérieur, jamais retiré. Sa suppression a été signalée à Vincent
+pour confirmation avant d'être appliquée dans la PR #261 (`instance.getActiveAccount() ?? accounts[0]`
+sur `AuthButton`/`LoginButton`/`ProfilePage`) ; il a confirmé, et la suppression est réalisée dans
+cette PR.
+
+### Ce qui a été fait
+
+- Suppression de `JobFinder/frontend/components/LoginButton.tsx` — aucun autre fichier modifié.
+
+### Vérification
+
+- Grep sur `LoginButton` dans tout le repo : plus aucune référence de code (imports, barrel
+  exports, tests, Storybook) hors deux mentions de prose sans impact — `docs/JOURNAL.md` (entrées
+  passées relatant l'historique du fichier, contexte figé, non modifiées par cette revue) et
+  `.claude/skills/conventions-frontend/SKILL.md` (utilisé comme exemple de nom de fichier pour la
+  convention `PascalCase.tsx`, pas une dépendance réelle au composant) — aucune des deux ne
+  nécessite de changement pour que cette suppression soit sûre.
+- Numéro de PR confirmé via `gh pr list --state all --limit 5 --json number,title,headRefName` :
+  #261 est la PR de correctif d'affichage MSAL (`feature/fix-auth-account-display-mismatch`, celle
+  qui a signalé ce code mort), #260 est `feature/legal-pages` (worktree `agent1`, sans rapport avec
+  `LoginButton`) — cette PR prend donc le numéro #262.
