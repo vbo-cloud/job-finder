@@ -10789,3 +10789,66 @@ lot ; textes à portée légale à reprendre **verbatim**, sans reformulation.
   chevauchement n'existe qu'en desktop large et reste marginal (le contenu de la section démarre à
   `md:ml-24`, hors de la gouttière où se placent les liens). À confirmer/arbitrer visuellement
   plutôt que de rétrécir la vignette CV à l'aveugle.
+
+## PR #264 — feat(frontend): bannière de consentement cookies (PostHog)
+
+**Date :** 2026-07-28
+**Branche :** `feature/cookie-consent` → `dev`
+
+### Contexte
+
+PostHog était initialisé au chargement en mode par défaut (cookies + capture immédiate), **sans
+consentement** → non conforme ePrivacy/CNIL : les cookies de mesure d'audience exigent un opt-in
+préalable, hors exemption que PostHog par défaut ne remplit pas. Les cookies d'auth (MSAL) sont,
+eux, strictement nécessaires (exemptés). Décision (avec Vincent) : bannière opt-in **pleine
+largeur** (proéminente, pour forcer un choix rapide), choix mémorisé et révocable.
+
+### Ce qui a été fait
+
+- **`lib/consent/ConsentContext.tsx`** (nouveau) : contexte client du choix
+  (`accepted`/`declined`/`null`), persisté en `localStorage` (`jf-cookie-consent`). Stocker le
+  choix lui-même est exempté (nécessaire pour l'honorer). Flag `hydrated` pour éviter le flash de
+  la bannière avant lecture du choix stocké.
+- **`app/Providers.tsx`** : `posthog.init()` **uniquement** si `consent === "accepted"` → aucun
+  cookie ni capture avant opt-in. Les `posthog.capture(...)` disséminés dans l'app sont des no-op
+  tant qu'`init()` n'a pas tourné, donc aucune garde ajoutée sur chaque appel. Branche explicite
+  sur les 3 états.
+- **`app/_components/CookieConsent.tsx`** (nouveau) : barre pleine largeur en bas (`z-40`, au-dessus
+  des liens légaux `z-30`). « Refuser » et « Accepter » équivalents (CNIL, pas de dark pattern),
+  lien « En savoir plus » → `/confidentialite`. `<section aria-label>` (bandeau non modal), affiché
+  seulement si aucun choix fait.
+- **`app/_components/ManageCookiesButton.tsx`** (nouveau) + **`LegalLinks.tsx`** : lien « Gérer les
+  cookies » à côté des liens légaux → rouvre la bannière (retrait aussi simple que le consentement,
+  exigence CNIL).
+- **`app/layout.tsx`** : `<ConsentProvider>` au-dessus de `<PostHogProvider>` ; rend
+  `<CookieConsent />`.
+- **`app/confidentialite/page.tsx`** : nouvelle section « Cookies » (nécessaires vs mesure
+  d'audience, retrait via « Gérer les cookies »).
+- **`docs/BACKLOG.md`** (maintenance, hors périmètre de la feature, à la demande de Vincent) :
+  archivage des Milestones 4 & 5 (frontend + monitoring/tests, faits) et de l'item smoke-test
+  webapp (fait — vérifié dans `buildAgents.yml` + lockfile) ; ajout d'une section « durcissement des
+  endpoints publics » suite à l'audit upload du 2026-07-28 (rate limiting, garde de parsing PDF,
+  borne `raw_text` avant embedding).
+
+### Décisions techniques
+
+- **Init gaté plutôt qu'init + opt-out par défaut** : ne pas appeler `init()` du tout garantit zéro
+  cookie PostHog avant le oui (un `init` en opt-out poserait quand même un cookie d'état).
+- **Bug corrigé avant merge (signalé en revue)** : ré-accepter après un refus laissait l'analytics
+  éteint — l'effet sortait tôt sur `initialized.current` sans rappeler `opt_in_capturing()` (seul à
+  réactiver la capture après `opt_out_capturing()`). Corrigé : sur `accepted`, init si pas encore
+  initialisé, sinon `opt_in_capturing()`. Un test de transition (accept→decline→re-accept) couvre
+  désormais ce chemin, qu'un test à consentement statique ne pouvait pas atteindre.
+- **Fenêtre de re-décision (`null`)** : après « Gérer les cookies », PostHog garde son état courant
+  jusqu'au nouveau choix — branche volontairement no-op.
+- **Texte bannière** validé avec Vincent, sans « anonyme » : PostHog garde un identifiant, ce serait
+  inexact **et** auto-contradictoire avec « données personnelles » (une donnée anonyme n'exigerait
+  d'ailleurs pas de consentement).
+
+### Vérification
+
+- `tsc` + `eslint` propres. `jest` : **221/221** (27 suites). Nouveaux/mis à jour :
+  `ConsentContext.test.tsx` (persistance / relecture au montage / retrait), `CookieConsent.test.tsx`
+  (affichage conditionnel + boutons), `Providers.test.tsx` réécrit (init gaté + transition
+  accept→decline→re-accept), `LegalLinks.test.tsx` (+ bouton « Gérer les cookies »), assertion
+  section « Cookies » dans `LegalPages.test.tsx`.

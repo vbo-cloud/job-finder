@@ -53,6 +53,19 @@ const blocks: LegalBlock[] = [
     ],
   },
   { kind: "p", text: "Aucune donnée n'est vendue ni partagée à des fins publicitaires." },
+  { kind: "h2", text: "Cookies" },
+  { kind: "p", text: "Deux types de cookies peuvent être utilisés :" },
+  {
+    kind: "ul",
+    items: [
+      "Cookies strictement nécessaires : indispensables à la connexion et au fonctionnement du service (authentification). Ils ne requièrent pas de consentement.",
+      "Cookies de mesure d'audience (PostHog, hébergé dans l'Union européenne) : déposés uniquement si vous les acceptez, pour comprendre l'usage du produit et l'améliorer.",
+    ],
+  },
+  {
+    kind: "p",
+    text: "Vous pouvez accepter ou refuser les cookies de mesure d'audience à tout moment via le lien « Gérer les cookies » en bas de page. Un refus n'affecte en rien l'utilisation de l'application.",
+  },
   { kind: "h2", text: "Transferts hors Union européenne" },
   {
     kind: "p",

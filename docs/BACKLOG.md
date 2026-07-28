@@ -6,6 +6,11 @@ Améliorations et dettes techniques identifiées au fil du projet.
 
 ## Milestone 4 — Frontend Next.js
 
+> ✅ **Milestone terminé** — le frontend Next.js est construit et en production (upload + animation,
+> bibliothèque, détail CV, profil, auth Entra External ID, déploiement Container App). L'agent
+> `cv-review` a été remplacé par l'analyse par paire CV↔offre (`match_analyses`, cf. ADR-018). Détail
+> ci-dessous conservé pour mémoire.
+
 
 
 ### [M4 — PR 1] Agent cv-analysis — extraction ROME codes depuis texte CV
@@ -191,6 +196,10 @@ Remplacer les placeholders de l'onglet "CV Review" par les vraies données.
 ---
 
 ### Milestone 5 : Monitoring et tests
+
+> ✅ **Milestone terminé** — suite de tests Python (`python/tests/`, exécutée en CI par
+> `unitTests.yml`), alertes monitoring (`monitoring.tf`), et instrumentation
+> `azure-monitor-opentelemetry` (`shared/telemetry.py`). Détail ci-dessous conservé pour mémoire.
 
 ### [M5 — PR 1] ADR-017 : Terraform — action group + 6 alertes + injection APPLICATIONINSIGHTS_CONNECTION_STRING
 
@@ -390,6 +399,32 @@ par service (`envs/dev/container_apps.tf` et jobs associés).
 
 ---
 
+### [hardening, avant public LinkedIn] Durcissement des endpoints publics — audit upload (2026-07-28)
+
+Audit de `POST /cv/upload` (session Claude Code, 2026-07-28). L'endpoint est **déjà bien durci** :
+auth JWT obligatoire, plafond de CVs par user, double validation du type (`content_type` +
+magic bytes `%PDF`), limite 10 Mo, chemin blob `{user_id}/{uuid}.pdf` (jamais le nom de fichier
+utilisateur → pas de path traversal). Points à durcir avant l'ouverture à un **public large** :
+
+- **[medium] Rate limiting / anti-abus** : aucun throttle sur les endpoints webapp. Le plafond
+  limite le *nombre* de CVs, mais pas les cycles upload→delete→upload, chacun déclenchant un
+  embedding (coût Azure OpenAI) + la file `cv-analysis`. Ajouter un rate limiting par utilisateur
+  (ex. `slowapi`) sur `/upload` et les endpoints coûteux. **Fichiers :** `agents/webapp/main.py`
+  (+ routers).
+- **[low→medium] Garde de parsing PDF** : `pdfplumber` parse le PDF sans cap de pages ni timeout
+  → un PDF hostile (décompression bomb / structure pathologique) peut faire exploser CPU/mémoire.
+  Rejeter au-delà de N pages + prévoir un timeout de parsing. **Fichier :**
+  `agents/webapp/routers/cv.py`.
+- **[low] Borne de `raw_text` avant embedding** : le texte extrait est passé à `embed()` sans
+  limite de longueur ; un PDF très dense peut dépasser la limite de tokens du modèle (8191 pour
+  `text-embedding-3-small`). Tronquer avant l'appel. **Fichier :** `agents/webapp/routers/cv.py`.
+
+Note : le point « fichier entièrement bufferisé avant la vérification de taille » (`await
+file.read()` avant le check 10 Mo) est déjà tracké plus bas (section PR #159) — même audit, ne pas
+dupliquer.
+
+---
+
 
 ## Azure OpenAI
 
@@ -453,7 +488,10 @@ En entreprise, une branche release déclenche un environnement staging — copie
 
 ## FastAPI — Dette technique
 
-### [urgent] Pincer les dépendances et ajouter un smoke-test de démarrage webapp
+### [✅ FAIT] Pincer les dépendances et ajouter un smoke-test de démarrage webapp
+
+> Fait : `buildAgents.yml` exécute un step « Smoke-test webapp image » (`python -c "import main"`)
+> avant le push ACR, et `requirements.txt` est un lockfile épinglé. Entrée conservée pour mémoire.
 
 Trois manques successifs dans le Dockerfile/requirements webapp ont causé trois crash-loops en prod sans être détectés en CI :
 - PR #88 : `alembic` absent de `requirements.txt`
