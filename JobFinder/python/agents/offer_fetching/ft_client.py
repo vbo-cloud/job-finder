@@ -22,6 +22,10 @@ PAGINATION_SAFE_THRESHOLD = 2500
 # rétrécie de moitié tant que la tranche dépasse le seuil, jusqu'au plancher MIN_WINDOW_DAYS.
 DEFAULT_WINDOW_DAYS = 30
 MIN_WINDOW_DAYS = 1
+# Longueur max du corps de réponse repris dans les logs d'erreur — France Travail place le vrai
+# message d'erreur (param mal formé, etc.) dans le body, que `exc_info=True` ne capture pas (la
+# trace Python ne contient que le message générique "400 Client Error"). Tronqué pour borner le log.
+RESPONSE_BODY_LOG_MAX_CHARS = 500
 
 logger = structlog.get_logger()
 
@@ -32,6 +36,27 @@ if not _ft_client_id:
 _ft_client_secret = os.environ.get("FT_CLIENT_SECRET")
 if not _ft_client_secret:
     raise ValueError("FT_CLIENT_SECRET environment variable is not set")
+
+
+def _truncate_response_body(response: requests.Response) -> str | None:
+    """Return the response body truncated for logging, or None when it is empty.
+
+    France Travail's error responses carry the actual diagnostic message in the body
+    (which parameter is malformed, etc.), which `exc_info=True` alone doesn't surface —
+    the Python traceback only holds the generic "400 Client Error" string. Truncated to
+    RESPONSE_BODY_LOG_MAX_CHARS to keep log entries bounded.
+
+    Args:
+        response: The HTTP response whose body to extract.
+
+    Returns:
+        The first RESPONSE_BODY_LOG_MAX_CHARS characters of response.text, or None when
+        the body is empty (e.g. a 204 No Content) so nothing misleading is logged.
+    """
+    body = response.text
+    if not body:
+        return None
+    return body[:RESPONSE_BODY_LOG_MAX_CHARS]
 
 
 def get_access_token() -> str:
@@ -57,7 +82,7 @@ def get_access_token() -> str:
         )
         response.raise_for_status()
     except requests.RequestException:
-        logger.error("ft_token_request_failed", exc_info=True)
+        logger.error("ft_token_request_failed", response_body=_truncate_response_body(response), exc_info=True)
         raise
     token: str = response.json()["access_token"]
     logger.info("ft_token_request_succeeded")
@@ -238,7 +263,13 @@ def fetch_offers(
                         collected=len(offers),
                     )
                     break
-                logger.error("ft_fetch_offers_page_failed", rome_code=rome_code, range=range_str, exc_info=True)
+                logger.error(
+                    "ft_fetch_offers_page_failed",
+                    rome_code=rome_code,
+                    range=range_str,
+                    response_body=_truncate_response_body(response),
+                    exc_info=True,
+                )
                 raise
 
             page, total = _parse_page(response)
@@ -293,7 +324,12 @@ def _probe_total(
         try:
             response.raise_for_status()
         except requests.RequestException:
-            logger.error("ft_probe_total_failed", rome_code=rome_code, exc_info=True)
+            logger.error(
+                "ft_probe_total_failed",
+                rome_code=rome_code,
+                response_body=_truncate_response_body(response),
+                exc_info=True,
+            )
             raise
 
     content_range = response.headers.get("Content-Range", "")

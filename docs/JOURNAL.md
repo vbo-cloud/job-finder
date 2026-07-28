@@ -10921,3 +10921,29 @@ ce message aurait fini en dead-letter (à 10 tentatives) → perte silencieuse d
 - Vérification en conditions réelles (comparer le nombre d'offres M1507 récupérées au total annoncé
   par l'API) reportée après déploiement : pas de credentials FT en local (`.env` absent), tous les
   tests mockent `requests.Session`.
+
+### Suivi — observabilité des erreurs HTTP (même branche, commit dédié)
+
+**Contexte :** un nouveau **400** est apparu en prod sur `_probe_total` pour **M1861**, dès le tout
+premier appel (`range=0-0`, sans `minCreationDate`) — donc **pas** le plafond de pagination, autre
+chose dans la requête. Impossible de diagnostiquer : les logs d'erreur de `ft_client.py`
+n'incluaient que `exc_info=True`, qui ne contient que la trace Python et le message générique
+(`"400 Client Error: Bad Request for url: ..."`), jamais le **corps de la réponse** renvoyé par
+France Travail (où se trouve le vrai message d'erreur).
+
+**Ce qui a été fait :** helper `_truncate_response_body` (tronque `response.text` à
+`RESPONSE_BODY_LOG_MAX_CHARS = 500`, renvoie `None` si le corps est vide pour ne rien logger de
+trompeur), branché sur les **3** sites qui catchent une `requests.RequestException` avec un objet
+`response` en portée : `get_access_token` (`ft_token_request_failed`), `fetch_offers` (branche
+non-plafond de `ft_fetch_offers_page_failed`) et `_probe_total` (`ft_probe_total_failed`).
+`exc_info=True` est conservé partout. Le `ft_fetch_offers_page_failed` de `_get_page` (échec
+réseau du `http.get()` lui-même) n'a pas d'objet `response` et reste inchangé.
+
+**Ce que ce n'est pas :** ce n'est **pas** un correctif du bug M1861 — uniquement de
+l'observabilité. La prochaine occurrence de `ft_probe_total_failed` en prod affichera le vrai
+message de France Travail (probablement un format de date, ou `maxCreationDate` exigeant
+`minCreationDate`), à corriger dans un prompt de suite.
+
+**Vérification :** `pytest tests/test_ft_client.py` → **23/23** (helper `_make_http_response` étendu
+avec un param `text` ; un test par site vérifiant que `response_body` est présent dans les kwargs du
+log d'erreur via `mocker.spy(ft_client.logger, "error")`).
