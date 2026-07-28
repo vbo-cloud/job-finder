@@ -340,7 +340,7 @@ def _shrink_window(
             min_creation_date=_iso(window_start),
             max_creation_date=_iso(cursor_end),
         )
-        logger.info("ft_bisection_window_probed", rome_code=rome_code, width_days=width, total=total)
+        logger.info("ft_window_probed", rome_code=rome_code, width_days=width, total=total)
         if total < PAGINATION_SAFE_THRESHOLD or width <= MIN_WINDOW_DAYS:
             return window_start, total
         width = max(width // 2, MIN_WINDOW_DAYS)
@@ -393,7 +393,7 @@ def _fetch_and_merge_window(
         max_creation_date=_iso(cursor_end),
     )
     logger.info(
-        "ft_bisection_window_fetched",
+        "ft_window_fetched",
         rome_code=rome_code,
         window_start=min_creation_date,
         window_end=_iso(cursor_end),
@@ -453,7 +453,7 @@ def fetch_all_offers(token: str, rome_code: str, min_date: str | None = None) ->
             continue
         if total_window >= PAGINATION_SAFE_THRESHOLD:
             logger.warning(
-                "ft_bisection_leaf_still_over_threshold",
+                "ft_window_leaf_over_threshold",
                 rome_code=rome_code,
                 window_start=_iso(window_start),
                 window_end=_iso(cursor_end),

@@ -298,8 +298,11 @@ class TestFetchAllOffers:
         mock_probe.assert_called_once()
 
     def test_shrinks_window_then_merges_and_dedups(self, mocker):
-        # Probe sequence: top probe above threshold, shrink 30d (above) -> 15d (below),
-        # window fetched; next top probe below threshold -> one tail fetch, then stop.
+        # Probe call sequence (side_effect maps 1:1 to _probe_total calls):
+        #   5000 = outer top probe (>= threshold) -> enter shrink
+        #   3000 = _shrink_window @30d (>= threshold) -> halve
+        #   1000 = _shrink_window @15d (< threshold) -> window retained + fetched
+        #    500 = next outer top probe (< threshold, > 0) -> one tail fetch, then stop
         mocker.patch.object(ft_client, "_probe_total", side_effect=[5000, 3000, 1000, 500])
         mocker.patch.object(
             ft_client,
@@ -329,7 +332,7 @@ class TestFetchAllOffers:
         assert result == [{"id": "1"}]
         mock_fetch.assert_called_once()
         assert any(
-            call.args and call.args[0] == "ft_bisection_leaf_still_over_threshold"
+            call.args and call.args[0] == "ft_window_leaf_over_threshold"
             for call in mock_logger.warning.call_args_list
         )
 
