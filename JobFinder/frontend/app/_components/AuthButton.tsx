@@ -26,7 +26,7 @@ export default function AuthButton() {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [open]);
 
-  const account  = accounts[0];
+  const account  = instance.getActiveAccount() ?? accounts[0];
   const initials = account?.name
     ?.split(" ")
     .map((n) => n[0])

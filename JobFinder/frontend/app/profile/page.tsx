@@ -29,7 +29,7 @@ export default function ProfilePage() {
   const { instance, accounts } = useMsal();
   const router = useRouter();
   const { setHasUnsavedChanges, registerSaveHandler, confirmNavigation } = useUnsavedChanges();
-  const account = accounts[0];
+  const account = instance.getActiveAccount() ?? accounts[0];
   const initials =
     account?.name
       ?.split(" ")

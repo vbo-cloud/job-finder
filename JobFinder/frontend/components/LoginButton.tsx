@@ -23,7 +23,8 @@ export function LoginButton() {
   };
 
   if (isAuthenticated) {
-    const claims = accounts[0]?.idTokenClaims as Record<string, unknown> | undefined;
+    const activeAccount = instance.getActiveAccount() ?? accounts[0];
+    const claims = activeAccount?.idTokenClaims as Record<string, unknown> | undefined;
     const preferredUsername = claims?.preferred_username as string | undefined;
     const displayName = claims?.name as string | undefined;
     const name =
