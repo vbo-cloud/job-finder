@@ -302,7 +302,19 @@ export default function ProfilePage() {
 
         <div className="mt-6 border-t border-profile pt-6">
           <div className={cn(microLabel, "text-destructive opacity-70")}>Zone de suppression</div>
-          <div className="mt-2.5 flex flex-col items-start gap-2">
+          <div className="mt-2.5 flex flex-col items-start gap-3">
+            {/* Notice RGPD discrète — volontairement à côté de la suppression de
+                compte, pas sur la page d'upload (cf. prompt). Simple texte, aucun
+                gate de consentement. */}
+            <p className="w-full text-sm leading-relaxed text-body">
+              {"Ton CV est analysé par une IA et stocké sur l'infrastructure du projet. Rien ne sort de l'UE / AELE. Ces données servent uniquement à faire fonctionner l'app. Rien n'est vendu ni exploité à des fins publicitaires. Tu peux supprimer ton compte et toutes tes données à tout moment ci-dessous."}{" "}
+              <Link
+                href="/confidentialite"
+                className="rounded-sm text-accent underline underline-offset-2 transition-colors hover:text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default"
+              >
+                En savoir plus
+              </Link>
+            </p>
             <DeleteAccountSection />
           </div>
         </div>

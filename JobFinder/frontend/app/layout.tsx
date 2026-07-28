@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 
 import AuthButton from "@/app/_components/AuthButton";
 import CreditsBadge from "@/app/_components/CreditsBadge";
+import LegalLinks from "@/app/_components/LegalLinks";
 import MobileNavMenu from "@/app/_components/MobileNavMenu";
 import { AuthProvider } from "@/lib/auth/AuthProvider";
 import { UnsavedChangesProvider } from "@/lib/navigation/UnsavedChangesContext";
@@ -46,6 +47,7 @@ export default function RootLayout({
                 </div>
               </header>
               {children}
+              <LegalLinks />
             </UnsavedChangesProvider>
           </AuthProvider>
         </PostHogProvider>

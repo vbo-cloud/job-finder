@@ -171,3 +171,37 @@ describe("ProfilePage — displayed account with multiple MSAL cache entries", (
     expect(screen.queryByRole("heading", { name: "First User" })).not.toBeInTheDocument();
   });
 });
+
+describe("ProfilePage — notice RGPD près de la suppression de compte", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (apiClient.get as jest.Mock).mockResolvedValue({
+      data: {
+        experience_level: null,
+        notification_days: [],
+        candidate_description: "",
+        analysis_credits_remaining: 5,
+        is_admin: false,
+      },
+    });
+  });
+
+  it("affiche la notice avec le lien « En savoir plus » vers /confidentialite", async () => {
+    await renderLoaded();
+
+    expect(screen.getByText(/Rien ne sort de l'UE/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "En savoir plus" })).toHaveAttribute(
+      "href",
+      "/confidentialite",
+    );
+  });
+
+  it("laisse intact le bouton de suppression de compte", async () => {
+    await renderLoaded();
+
+    // La notice ne doit pas régresser le comportement de DeleteAccountSection.
+    expect(
+      screen.getByRole("button", { name: "Supprimer mon compte" }),
+    ).toBeInTheDocument();
+  });
+});
