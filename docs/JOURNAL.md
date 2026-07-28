@@ -10852,3 +10852,72 @@ largeur** (proéminente, pour forcer un choix rapide), choix mémorisé et révo
   (affichage conditionnel + boutons), `Providers.test.tsx` réécrit (init gaté + transition
   accept→decline→re-accept), `LegalLinks.test.tsx` (+ bouton « Gérer les cookies »), assertion
   section « Cookies » dans `LegalPages.test.tsx`.
+
+## PR #265 — fix(offer-fetching): récupérer les offres au-delà du plafond de pagination France Travail
+
+**Date :** 2026-07-28
+**Branche :** `fix/offer-fetching-pagination-ceiling` → `dev`
+
+### Contexte
+
+`_fetch_and_upsert_new_offers` plantait en prod sur le code ROME **M1507** (fort volume) : l'API
+France Travail renvoie un **400** dès que la pagination dépasse `range=3050`, alors que toutes les
+pages précédentes réussissent. Ce n'est **pas du rate-limiting** (jamais de 429, même `range` exact
+sur 3 exécutions réelles) mais un **plafond structurel de profondeur de pagination** (comparable au
+`max_result_window` d'Elasticsearch). `raise_for_status()` transformait ce 400 en exception non
+catchée qui remontait jusqu'à faire abandonner tout le message Service Bus. Sans isolation par code,
+ce message aurait fini en dead-letter (à 10 tentatives) → perte silencieuse du refresh du jour pour
+**tous** les codes ROME actifs, pas seulement M1507.
+
+### Ce qui a été fait
+
+- **Tâche 1 — `ft_client.fetch_offers`** : un 400 sur une page au-delà de la première (`start > 0`)
+  est traité comme le plafond de pagination — warning `ft_pagination_ceiling_reached` et retour des
+  offres déjà collectées au lieu de laisser l'exception remonter. Un 400 sur la 1re page
+  (`start == 0`) reste une requête réellement invalide → re-raise inchangé.
+- **Tâche 2 — `ft_client.fetch_all_offers`** (nouveau, appelé par `main.py` à la place de
+  `fetch_offers`) : recherche par **fenêtre glissante sur la date de création** pour récupérer tout
+  le volume malgré le plafond. Sonde légère (`_probe_total`, `range=0-0` lit `Content-Range`) avant
+  chaque fetch ; largeur de fenêtre adaptée à la densité réelle (30 j au départ, divisée par 2 tant
+  que la tranche dépasse le seuil, plancher 1 j) ; fusion dédupliquée par `ft_id`.
+- **Tâche 3 — `main._fetch_and_upsert_new_offers`** : chaque code ROME isolé dans un
+  `try/except (requests.RequestException, SQLAlchemyError)` — une panne sur un code (réseau, timeout,
+  code invalide → 400 dès la 1re page, erreur DB) logge `offer_fetch_rome_code_failed` et continue au
+  lieu d'abandonner le message. `get_access_token` reste hors boucle (un mauvais token fait
+  légitimement échouer tout le run). `total_new` ne compte que les codes traités avec succès.
+
+### Décisions techniques
+
+- **Tâche 0 abandonnée — pas de `maxDateActualisation`** : la borne haute symétrique supposée au
+  départ n'existe pas. Deux sources de code réel indépendantes (wrapper
+  `etiennekintzler/api-offres-emploi` + un space Hugging Face public) confirment que la vraie paire
+  min/max de l'API est `minCreationDate`/`maxCreationDate` (date de **création**). On ne remplace
+  **pas** `minDateActualisation` par ces params : `dateActualisation` (dernière mise à jour) ≠
+  `dateCreation` — une offre créée il y a 8 mois mais republiée hier serait perdue en filtrant sur la
+  création. `minDateActualisation` reste donc le filtre **métier** fixe (calculé via
+  `OFFER_MAX_AGE_DAYS`) ; `minCreationDate`/`maxCreationDate` ne servent que d'**outil mécanique** de
+  découpage, combinés en ET avec lui.
+- **Fenêtre glissante plutôt que bisection récursive** (révision de l'algo initial) : plus simple à
+  tester, pas de fusion d'arbre, s'adapte naturellement à la densité (grandes fenêtres si peu
+  d'offres, petites si beaucoup).
+- **`PAGINATION_SAFE_THRESHOLD = 2500`** : marge de sécurité **sous** le plafond observé
+  empiriquement (~3050 sur un cas réel) — pas une valeur documentée par France Travail, à ajuster si
+  le comportement réel diverge. Le 400 réactif de la Tâche 1 reste le filet de dernier recours si
+  même une fenêtre de 1 jour dépasse le seuil (warning `ft_bisection_leaf_still_over_threshold`).
+- **Pas de `_mark_rome_codes_pending` sur échec d'un code** : ce mécanisme est drainé et rejoué dans
+  la même exécution (`_handle_fetch_request`) → boucle infinie sur un échec déterministe. Le code
+  reste actif et sera retenté au prochain refresh planifié (18 h).
+
+### Vérification
+
+- `pytest tests/test_ft_client.py tests/test_offer_fetching.py` : **52/52**. Nouveaux tests : plafond
+  400 (1re page vs page suivante), garde 204 No Content dans `fetch_offers` (corps vide → retour `[]`
+  sans planter), `_probe_total` (lecture `Content-Range` / 0 si absent), `fetch_all_offers` (sonde
+  sous seuil → 1 seul fetch ; rétrécissement + fusion/dédup ; plancher 1 j toujours > seuil → partiel
+  accepté + warning ; saut d'une fenêtre de création vide `total_window == 0` → pas de fetch, on
+  continue le parcours ; sonde à 0 → arrêt), isolation par code ROME (erreur fetch/DB isolée, échec
+  `get_access_token` propagé).
+- Aucun test existant régressé (429, `min_date`, pagination multi-pages).
+- Vérification en conditions réelles (comparer le nombre d'offres M1507 récupérées au total annoncé
+  par l'API) reportée après déploiement : pas de credentials FT en local (`.env` absent), tous les
+  tests mockent `requests.Session`.
