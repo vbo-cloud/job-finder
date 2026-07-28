@@ -10824,6 +10824,11 @@ largeur** (proéminente, pour forcer un choix rapide), choix mémorisé et révo
   `<CookieConsent />`.
 - **`app/confidentialite/page.tsx`** : nouvelle section « Cookies » (nécessaires vs mesure
   d'audience, retrait via « Gérer les cookies »).
+- **`docs/BACKLOG.md`** (maintenance, hors périmètre de la feature, à la demande de Vincent) :
+  archivage des Milestones 4 & 5 (frontend + monitoring/tests, faits) et de l'item smoke-test
+  webapp (fait — vérifié dans `buildAgents.yml` + lockfile) ; ajout d'une section « durcissement des
+  endpoints publics » suite à l'audit upload du 2026-07-28 (rate limiting, garde de parsing PDF,
+  borne `raw_text` avant embedding).
 
 ### Décisions techniques
 
