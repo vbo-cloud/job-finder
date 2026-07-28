@@ -134,6 +134,8 @@ describe("ProfilePage — notification_days autosave", () => {
 });
 
 describe("ProfilePage — displayed account with multiple MSAL cache entries", () => {
+  const defaultUseMsal = (useMsal as jest.Mock).getMockImplementation();
+
   beforeEach(() => {
     jest.clearAllMocks();
     (apiClient.get as jest.Mock).mockResolvedValue({
@@ -145,6 +147,12 @@ describe("ProfilePage — displayed account with multiple MSAL cache entries", (
         is_admin: false,
       },
     });
+  });
+
+  // Restore the module's default useMsal mock so this override never leaks
+  // into a test in another describe block that runs after this one.
+  afterEach(() => {
+    (useMsal as jest.Mock).mockImplementation(defaultUseMsal);
   });
 
   it("shows the active account's name, not accounts[0], when two accounts are cached", async () => {
