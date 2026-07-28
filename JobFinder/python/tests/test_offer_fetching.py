@@ -39,6 +39,7 @@ _parse_experience_min_years = _mod._parse_experience_min_years
 _upsert_offers = _mod._upsert_offers
 _embed_pending_offers = _mod._embed_pending_offers
 _dispatch_start_matching = _mod._dispatch_start_matching
+_fetch_and_upsert_new_offers = _mod._fetch_and_upsert_new_offers
 _mark_full_refresh_pending = _mod._mark_full_refresh_pending
 _mark_rome_codes_pending = _mod._mark_rome_codes_pending
 _drain_pending_signal = _mod._drain_pending_signal
@@ -337,6 +338,58 @@ class TestDrainPendingSignal:
             _drain_pending_signal()
 
         mock_session.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _fetch_and_upsert_new_offers — per-ROME-code isolation (Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchAndUpsertNewOffers:
+    def test_isolates_failing_rome_code_and_counts_only_successes(self, mocker):
+        mocker.patch.object(_mod, "get_access_token", return_value="token")
+
+        def fake_fetch(token, rome_code, min_date):
+            if rome_code == "BAD":
+                raise _mod.requests.RequestException("boom")
+            return [{"id": f"{rome_code}-1"}]
+
+        mocker.patch.object(_mod, "fetch_all_offers", side_effect=fake_fetch)
+        mock_upsert = mocker.patch.object(_mod, "_upsert_offers", return_value=2)
+
+        total = _fetch_and_upsert_new_offers(["M1805", "BAD", "M1502"])
+
+        # BAD raised before upsert; the two healthy codes contribute 2 each.
+        assert total == 4
+        assert mock_upsert.call_count == 2
+
+    def test_isolates_db_error_on_one_code(self, mocker):
+        mocker.patch.object(_mod, "get_access_token", return_value="token")
+        mocker.patch.object(_mod, "fetch_all_offers", return_value=[{"id": "x"}])
+
+        def fake_upsert(offers, rome_code):
+            if rome_code == "BAD":
+                raise _mod.SQLAlchemyError("db down")
+            return 1
+
+        mocker.patch.object(_mod, "_upsert_offers", side_effect=fake_upsert)
+
+        total = _fetch_and_upsert_new_offers(["M1805", "BAD"])
+
+        assert total == 1
+
+    def test_token_failure_fails_the_whole_run(self, mocker):
+        # get_access_token is outside the per-code loop — a bad token legitimately fails
+        # the entire run rather than being swallowed as a per-code fault.
+        mocker.patch.object(
+            _mod, "get_access_token", side_effect=_mod.requests.RequestException("no token")
+        )
+        mock_fetch = mocker.patch.object(_mod, "fetch_all_offers")
+
+        with pytest.raises(_mod.requests.RequestException):
+            _fetch_and_upsert_new_offers(["M1805"])
+
+        mock_fetch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import requests
 import structlog
 from alembic.util.exc import CommandError
 from azure.servicebus.exceptions import ServiceBusError
@@ -37,7 +38,7 @@ from sqlalchemy import case, delete, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import Insert, insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
-from ft_client import fetch_offers, get_access_token
+from ft_client import fetch_all_offers, get_access_token
 from shared.bus import receive_message, send_message
 from shared.config import OFFER_MAX_AGE_DAYS
 from shared.db import get_engine, get_session, run_migrations
@@ -348,11 +349,22 @@ def _dispatch_start_matching(run_date: str, rome_codes: list[str], new_offers_co
 def _fetch_and_upsert_new_offers(rome_codes: list[str]) -> int:
     """Fetch offers from France Travail for each active ROME code and upsert them.
 
+    Each ROME code is isolated: an unpredictable per-code failure (network, timeout, an
+    invalid ROME code → 400 on the first page, a DB error) is logged and skipped rather than
+    aborting the whole Service Bus message, which would silently drop the refresh for every
+    other code too. The pagination ceiling itself no longer raises — fetch_all_offers absorbs
+    it (see ft_client). get_access_token stays outside the loop: a bad token legitimately
+    fails the entire run, it is not a per-code fault.
+
     Args:
         rome_codes: ROME codes to fetch, one France Travail API call per code.
 
     Returns:
-        Total number of new offers upserted across all codes.
+        Total number of new offers upserted across the codes that succeeded — failed codes
+        contribute nothing.
+
+    Raises:
+        requests.RequestException: If obtaining the access token fails (whole-run failure).
     """
     token = get_access_token()
 
@@ -361,8 +373,14 @@ def _fetch_and_upsert_new_offers(rome_codes: list[str]) -> int:
 
     total_new = 0
     for rome_code in rome_codes:
-        raw_offers = fetch_offers(token, rome_code, min_date=min_date)
-        total_new += _upsert_offers(raw_offers, rome_code)
+        # Not _mark_rome_codes_pending here: that queue is drained and replayed within the same
+        # execution (see _handle_fetch_request), which would loop forever on a deterministic
+        # failure. The code stays active and is retried naturally on the next scheduled refresh.
+        try:
+            raw_offers = fetch_all_offers(token, rome_code, min_date=min_date)
+            total_new += _upsert_offers(raw_offers, rome_code)
+        except (requests.RequestException, SQLAlchemyError):
+            logger.error("offer_fetch_rome_code_failed", rome_code=rome_code, exc_info=True)
     return total_new
 
 

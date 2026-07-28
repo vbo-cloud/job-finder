@@ -1001,3 +1001,27 @@ testable indépendamment (ex. `useMatchAnalysisRequest(cvId, onCreditChange)`), 
 du hook de réconciliation `seenIds` déjà identifié comme candidat pour ce même fichier.
 
 **Fichiers :** `JobFinder/frontend/app/_components/CorrespondancesPanel.tsx`.
+
+---
+
+## Plafond de pagination France Travail — fenêtre glissante (fix/offer-fetching-pagination-ceiling, PR #265) — suites identifiées en review
+
+### [optional] `_probe_total` ouvre une `requests.Session` par appel
+`fetch_all_offers` enchaîne plusieurs sondes (`_probe_total`, `range=0-0`) puis des fetchs pour un
+code ROME à fort volume — chaque appel ouvre et referme sa propre `requests.Session`, donc son propre
+handshake TLS. Simplicité assumée dans la PR (le prompt différait explicitement l'optimisation), et
+l'overhead reste marginal face au temps de fetch dominé par `INTER_PAGE_SLEEP`. Si le setup de
+connexion devenait un goulot, passer une `requests.Session` optionnelle en argument à
+`_probe_total`/`fetch_offers` (comme `_get_page` en reçoit déjà une) laisserait `fetch_all_offers`
+l'amortir sur tout le parcours.
+
+**Fichiers :** `JobFinder/python/agents/offer_fetching/ft_client.py`.
+
+### [recommandé] Valider en prod le volume récupéré pour M1507
+Une fois déployé (credentials FT disponibles côté Key Vault), confirmer que `fetch_all_offers`
+récupère bien le total annoncé par l'API pour M1507 : comparer le nombre d'offres fusionnées au
+`total` de `Content-Range` (sonde sans borne de création). C'est la seule vérification qui prouve que
+le découpage par fenêtre ne perd aucune offre. Non faisable en local — pas de credentials, tous les
+tests mockent le réseau.
+
+**Fichiers :** `JobFinder/python/agents/offer_fetching/ft_client.py`.
