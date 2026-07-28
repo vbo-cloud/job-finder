@@ -10903,7 +10903,7 @@ ce message aurait fini en dead-letter (à 10 tentatives) → perte silencieuse d
 - **`PAGINATION_SAFE_THRESHOLD = 2500`** : marge de sécurité **sous** le plafond observé
   empiriquement (~3050 sur un cas réel) — pas une valeur documentée par France Travail, à ajuster si
   le comportement réel diverge. Le 400 réactif de la Tâche 1 reste le filet de dernier recours si
-  même une fenêtre de 1 jour dépasse le seuil (warning `ft_bisection_leaf_still_over_threshold`).
+  même une fenêtre de 1 jour dépasse le seuil (warning `ft_window_leaf_over_threshold`).
 - **Pas de `_mark_rome_codes_pending` sur échec d'un code** : ce mécanisme est drainé et rejoué dans
   la même exécution (`_handle_fetch_request`) → boucle infinie sur un échec déterministe. Le code
   reste actif et sera retenté au prochain refresh planifié (18 h).
