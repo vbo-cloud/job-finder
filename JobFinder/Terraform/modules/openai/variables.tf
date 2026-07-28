@@ -51,7 +51,7 @@ variable "deployments" {
     model_name    = string
     model_version = string
     capacity_tpm  = number # Tokens per minute in thousands (e.g. 10 = 10K TPM)
-    sku_name      = string # Deployment SKU: "Standard" or "GlobalStandard"
+    sku_name      = string # Deployment SKU: "Standard" (regional), "DataZoneStandard" (EU) or "GlobalStandard" (worldwide)
   }))
 
   validation {
@@ -60,7 +60,7 @@ variable "deployments" {
   }
 
   validation {
-    condition     = alltrue([for d in var.deployments : contains(["Standard", "GlobalStandard"], d.sku_name)])
-    error_message = "All deployment sku_name values must be 'Standard' or 'GlobalStandard'."
+    condition     = alltrue([for d in var.deployments : contains(["Standard", "DataZoneStandard", "GlobalStandard"], d.sku_name)])
+    error_message = "All deployment sku_name values must be 'Standard', 'DataZoneStandard' or 'GlobalStandard'."
   }
 }
