@@ -10947,3 +10947,45 @@ message de France Travail (probablement un format de date, ou `maxCreationDate` 
 **Vérification :** `pytest tests/test_ft_client.py` → **23/23** (helper `_make_http_response` étendu
 avec un param `text` ; un test par site vérifiant que `response_body` est présent dans les kwargs du
 log d'erreur via `mocker.spy(ft_client.logger, "error")`).
+
+*(Suivi observabilité ci-dessus : PR #266, branche `fix/offer-fetching-log-response-body` — c'est
+le corps de réponse ainsi loggé qui a révélé la cause du correctif ci-dessous.)*
+
+### Suivi — apparier toujours minCreationDate/maxCreationDate (régression totale de la collecte)
+
+*(PR #267, branche `fix/offer-fetching-paired-creation-dates`.)*
+
+
+**Gravité : haute.** Le corps de réponse loggé ci-dessus a confirmé la cause réelle du 400
+(`M1827`, 2026-07-28) :
+
+```json
+{"codeHttp":400,"codeErreur":"1785260507507","message":"Les paramètres « minCreationDate » et « maxCreationDate » sont dépendants et doivent être renseignés ensemble."}
+```
+
+Ce n'était pas un cas limite volume : la collecte de nouvelles offres était cassée pour **tous** les
+codes ROME (`new_offers_count=0` en prod), car `fetch_all_offers` envoyait `maxCreationDate` **seul**
+dès la première sonde de chaque code — France Travail rejette une borne de date de création envoyée
+sans l'autre.
+
+**Ce qui a été fait :**
+- Constante `CREATION_DATE_FLOOR = datetime(2015, 1, 1, tzinfo=timezone.utc)` : borne basse par
+  défaut quand on ne veut *aucune* borne basse. Puisqu'omettre `minCreationDate` n'est plus permis,
+  « pas de borne » s'exprime par une date fixe largement antérieure à toute offre réelle (pas une
+  valeur documentée par l'API, même esprit que `PAGINATION_SAFE_THRESHOLD`).
+- Deux sites de `fetch_all_offers` qui envoyaient `maxCreationDate` seul corrigés : la sonde
+  `total_below` (à chaque itération, pour tout code), qui passe désormais
+  `min_creation_date=_iso(CREATION_DATE_FLOOR)`, et la branche « tout tient sous le seuil » qui
+  appelle `_fetch_and_merge_window` en lui passant `CREATION_DATE_FLOOR` comme `window_start`
+  (converti en `minCreationDate` par la fonction). Aucun des deux n'envoie plus une borne seule.
+- `_fetch_and_merge_window` : `window_start` devient un `datetime` obligatoire (plus de `| None`),
+  toujours converti en `minCreationDate`. `_shrink_window` fournissait déjà les deux bornes — inchangé.
+- Docstrings de `fetch_all_offers` et `_fetch_and_merge_window` mises à jour.
+
+**Vérification :** `pytest tests/test_ft_client.py` → **24/24**. Test de régression fort couvrant
+toute la classe de bug : sur un run complet de `fetch_all_offers` mocké au niveau HTTP (sonde haute
+> seuil → shrink → fetch fenêtre → sonde suivante = 0 → arrêt), on itère sur **tous** les appels
+`session.get` émis et on affirme que chacun porte les **deux** bornes de création ou **aucune** —
+jamais une seule. Test `test_single_fetch...` mis à jour (le tail pin désormais `CREATION_DATE_FLOOR`
+au lieu de `None`). Preuve terrain reportée après déploiement : un code ROME auparavant en échec
+(M1827/M1861/M1507) doit revenir avec `new_offers_count > 0`.

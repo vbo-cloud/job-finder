@@ -334,8 +334,9 @@ class TestFetchAllOffers:
 
         assert result == fake_offers
         mock_fetch.assert_called_once()
-        # Single-fetch tail path never sets a minCreationDate lower bound.
-        assert mock_fetch.call_args.kwargs.get("min_creation_date") is None
+        # Single-fetch tail path pins the lower bound to CREATION_DATE_FLOOR, never None:
+        # France Travail rejects maxCreationDate sent without minCreationDate.
+        assert mock_fetch.call_args.kwargs.get("min_creation_date") == ft_client._iso(ft_client.CREATION_DATE_FLOOR)
         mock_probe.assert_called_once()
 
     def test_shrinks_window_then_merges_and_dedups(self, mocker):
@@ -398,3 +399,32 @@ class TestFetchAllOffers:
         assert result == []
         mock_fetch.assert_not_called()
         mock_probe.assert_called_once()
+
+    def test_never_sends_one_creation_date_bound_without_the_other(self, mocker):
+        # Regression (total collection outage): France Travail rejects (400) minCreationDate or
+        # maxCreationDate sent alone — the two bounds are dependent and must always travel
+        # together. Drive a full fetch_all_offers run at the HTTP layer (top probe over threshold
+        # -> shrink -> window fetch -> next top probe = 0 -> stop) and assert every emitted request
+        # carries both creation-date bounds or neither. Covers the whole bug class, not one call.
+        probe_over = _make_http_response(200, headers={"Content-Range": "offres 0-0/5000"})
+        shrink_under = _make_http_response(200, headers={"Content-Range": "offres 0-0/1000"})
+        window_page = _make_http_response(
+            200,
+            json_data={"resultats": [{"id": "1"}, {"id": "2"}, {"id": "3"}]},
+            headers={"Content-Range": "offres 0-2/3"},
+        )
+        probe_zero = _make_http_response(204, headers={})
+        mock_session = _make_session_mock([probe_over, shrink_under, window_page, probe_zero])
+        mocker.patch("ft_client.requests.Session", return_value=mock_session)
+        mocker.patch("ft_client.time.sleep")
+
+        ft_client.fetch_all_offers("token", "M1805", min_date="2026-01-01")
+
+        assert mock_session.get.call_count == 4
+        for call in mock_session.get.call_args_list:
+            params = call.kwargs["params"]
+            assert ("minCreationDate" in params) == ("maxCreationDate" in params), (
+                f"unpaired creation-date bounds: {params}"
+            )
+        # Not a vacuous pass: this run genuinely emitted requests carrying the bounds.
+        assert any("maxCreationDate" in c.kwargs["params"] for c in mock_session.get.call_args_list)
