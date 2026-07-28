@@ -10557,3 +10557,69 @@ approche différente.
   tests jsdom existante (`UploadSection.test.tsx`, `LibrarySection.test.tsx`) n'exerce de toute
   façon pas le dessin canvas, cohérent avec la vérification manuelle en dev server décrite par le
   prompt parent.
+
+## PR #260 — fix(frontend): show MSAL active account instead of accounts[0]
+
+**Date :** 2026-07-28
+**Branche :** `feature/fix-auth-account-display-mismatch` → `dev`
+
+### Contexte
+
+Effet secondaire non corrigé du bug Entra External ID déjà documenté par la PR #248
+(AADSTS165000, double sélecteur de compte) : `sessionStorage` peut se retrouver avec deux comptes
+dans le cache MSAL, et l'ordre du tableau retourné par `accounts` n'est pas garanti. Trois
+composants lisaient `accounts[0]` pour afficher le nom/les initiales de l'utilisateur connecté —
+avec deux comptes en cache, le mauvais nom pouvait s'afficher. `lib/api/client.ts` résolvait déjà
+correctement le compte pour le Bearer token via `instance.getActiveAccount() ?? getAllAccounts()[0]`
+— déjà en place avant cette PR, origine non retrouvée dans ce fichier (ni #248 ni #224 ne
+l'introduisent d'après leurs propres entrées) : le bug était donc purement un défaut d'affichage, jamais un défaut
+d'autorisation — les données backend affichées correspondaient toujours au bon utilisateur, seul
+le nom/les initiales affichés en en-tête pouvaient être ceux de l'autre compte en cache.
+
+### Ce qui a été fait
+
+- **`JobFinder/frontend/app/_components/AuthButton.tsx`**, **`JobFinder/frontend/app/profile/page.tsx`**,
+  **`JobFinder/frontend/components/LoginButton.tsx`** : les trois lectures de `accounts[0]` (nom
+  affiché dans le menu de compte, initiales, en-tête de `/profile`, texte "Connecté en tant que")
+  remplacées par `instance.getActiveAccount() ?? accounts[0]`, alignées sur le pattern déjà en
+  place dans `lib/api/client.ts`.
+- **Commentaires WHY ajoutés** sur les trois sites : précisent que le choix de l'active account
+  plutôt que `accounts[0]` n'est pas cosmétique — sans ce commentaire, une relecture future pourrait
+  juger `accounts[0]` équivalent et plus simple, et réintroduire le bug.
+- **`JobFinder/frontend/__tests__/ProfilePage.test.tsx`** : le mock `useMsal` expose désormais
+  `instance.getActiveAccount()` (le mock par défaut du module, utilisé par le `describe` existant
+  sur l'autosave `notification_days`, ainsi que le mock dédié du nouveau `describe`). Nouveau test
+  dans un `describe` dédié : avec deux comptes en cache (`accounts: [First User, Second User]`) et `getActiveAccount()`
+  retournant `Second User`, la page affiche bien "Second User" en en-tête, jamais "First User".
+  Commentaire ajouté sur le mock partagé pour signaler que `getActiveAccount` est désormais requis
+  par le composant testé, pas juste un ajout arbitraire au mock.
+
+### Décisions techniques
+
+- **Fix display-only, pas de changement d'autorisation** : `lib/api/client.ts` n'a pas été touché,
+  il résolvait déjà correctement le compte actif pour le token. Voir Contexte ci-dessus.
+
+### Vérification
+
+- Relecture des trois composants modifiés et de leurs docstrings/commentaires existants : aucune
+  docstring de module ne décrivait la logique de résolution du compte affiché, donc rien d'obsolète
+  à corriger au-delà des commentaires WHY ajoutés ci-dessus.
+- **Écart signalé, non corrigé (hors scope de ce rôle) :** `AuthButton.tsx` et `LoginButton.tsx`
+  reçoivent le même correctif mais n'ont aucune couverture de test (aucun fichier
+  `AuthButton.test.tsx` / `LoginButton.test.tsx` n'existe) — seul `ProfilePage.test.tsx` couvre le
+  scénario à deux comptes. `LoginButton.tsx` n'est par ailleurs importé nulle part dans le code
+  applicatif actuel (grep sur `LoginButton` dans `JobFinder/frontend/`) — sa docstring affirmait
+  encore "This is the only interactive element of the walking skeleton", devenu faux depuis
+  l'existence d'`AuthButton.tsx` ; une note a été ajoutée à la docstring précisant que le composant
+  n'est plus câblé dans l'app plutôt que de réécrire la phrase historique, le composant semblant
+  être du code mort plutôt qu'un défaut d'affichage actif ; à confirmer avec Vincent avant
+  suppression éventuelle.
+- Grep sur `useMsal` dans `JobFinder/frontend/__tests__/` pour tout mock qui appellerait
+  `getActiveAccount` sans l'exposer sur `instance` (aurait cassé les composants modifiés) :
+  `UploadSection.test.tsx` mocke `useMsal` sans `getActiveAccount`, mais
+  `UploadSection.tsx` ne déstructure pas `accounts` — non affecté. Aucun autre mock trouvé.
+- Pas d'accès Bash/`npm test`/`tsc`/`gh`/`git diff` depuis ce rôle — vérification par relecture des
+  trois fichiers modifiés, du test ajouté, et du grep ci-dessus, pas par exécution de la suite de
+  tests.
+- Numéro de PR dérivé du dernier titre `## PR #259` de ce fichier (+1 = #260) — non confirmé via
+  GitHub dans cette passe, `gh` n'étant pas accessible depuis ce rôle.
