@@ -42,6 +42,7 @@ describe("Page /confidentialite", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Droits des utilisateurs" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Cookies" })).toBeInTheDocument();
     expect(screen.getByText(/CNIL/)).toBeInTheDocument();
   });
 

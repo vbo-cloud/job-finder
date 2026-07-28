@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import ManageCookiesButton from "@/app/_components/ManageCookiesButton";
+
 /**
  * Discreet legal links pinned to the bottom-left corner on every page. Fixed
  * position (not an in-flow footer) so they stay reachable on the full-height
@@ -7,8 +9,9 @@ import Link from "next/link";
  * the scrollable content pages too. z-30 keeps them below the header (z-50),
  * the nav rail (z-40) and any modal (z-50), so they never float over a dialog.
  *
- * Server Component: no state, no interactivity beyond the links themselves —
- * and legal notices must stay reachable while logged out (no auth guard).
+ * Server Component with one Client island (ManageCookiesButton) for cookie
+ * withdrawal — legal notices must stay reachable while logged out (no auth
+ * guard).
  */
 export default function LegalLinks() {
   const linkClass =
@@ -28,6 +31,10 @@ export default function LegalLinks() {
       <Link href="/confidentialite" className={linkClass}>
         Confidentialité
       </Link>
+      <span aria-hidden="true" className="text-hint">
+        ·
+      </span>
+      <ManageCookiesButton className={linkClass} />
     </nav>
   );
 }

@@ -1,42 +1,72 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 
+import { useConsent } from "@/lib/consent/ConsentContext";
+
 /**
- * Wraps the application in an initialized PostHog client.
+ * Wraps the application in a PostHog client that only initializes once the user
+ * has explicitly accepted analytics cookies (ePrivacy/CNIL: no cookie, no
+ * capture before opt-in). The many `posthog.capture(...)` calls across the app
+ * are safe no-ops until `init()` runs here, so they need no consent guard of
+ * their own.
  *
  * Analytics is treated as non-critical: if `NEXT_PUBLIC_POSTHOG_KEY`/`_HOST`
  * are absent, it logs a warning and skips `init()` instead of throwing —
  * children still render normally either way.
  */
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
+  const { consent } = useConsent();
+  const initialized = useRef(false);
+
   useEffect(() => {
-    // Unlike lib/auth/msalConfig.ts's requireEnv() (fail-fast is right there:
-    // without MSAL vars the app has no auth and shouldn't pretend otherwise),
-    // this module is imported by the root layout, which has no
-    // global-error.tsx to catch a module-level throw — that would crash every
-    // route. Analytics is non-critical: read statically (required for Next.js
-    // to inline NEXT_PUBLIC_* at build time) but only inside the effect, and
-    // degrade gracefully — same failure mode already documented for "GitHub
-    // repo vars not yet created" (docs/JOURNAL.md, PR #221).
-    const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-    const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
-    if (!posthogKey || !posthogHost) {
-      console.warn(
-        "[jf] PostHog disabled: NEXT_PUBLIC_POSTHOG_KEY/NEXT_PUBLIC_POSTHOG_HOST not set.",
-      );
+    // Branch explicitly on all three states so a consent *transition* on a
+    // mounted provider (accept -> decline -> re-accept via "Gérer les cookies")
+    // is handled — not just the first-mount case.
+    if (consent === "accepted") {
+      if (initialized.current) {
+        // Already loaded once, so init() would be a no-op — but if the user had
+        // previously withdrawn, opt_out_capturing() is still in effect and only
+        // opt_in_capturing() re-enables capture. Re-accepting must resume it.
+        posthog.opt_in_capturing();
+        return;
+      }
+      // Read statically (required for Next.js to inline NEXT_PUBLIC_* at build
+      // time) but only inside the effect: the root layout has no
+      // global-error.tsx, so a module-level throw would crash every route.
+      const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+      const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+      if (!posthogKey || !posthogHost) {
+        console.warn(
+          "[jf] PostHog disabled: NEXT_PUBLIC_POSTHOG_KEY/NEXT_PUBLIC_POSTHOG_HOST not set.",
+        );
+        return;
+      }
+      posthog.init(posthogKey, {
+        api_host: posthogHost,
+        // "2026-05-30" sets capture_pageview: "history_change", which already
+        // autocaptures $pageview on App Router client-side navigation — no
+        // manual usePathname()-driven capture needed on top of this.
+        defaults: "2026-05-30",
+      });
+      initialized.current = true;
       return;
     }
-    posthog.init(posthogKey, {
-      api_host: posthogHost,
-      // "2026-05-30" sets capture_pageview: "history_change", which already
-      // autocaptures $pageview on App Router client-side navigation — no
-      // manual usePathname()-driven capture needed on top of this.
-      defaults: "2026-05-30",
-    });
-  }, []);
+
+    // Withdrawal: the user changed their mind (accepted -> declined). Stop
+    // capturing and drop the identified profile. Nothing to do if PostHog was
+    // never loaded (a fresh decline sets no cookie and writes no opt-out flag).
+    if (consent === "declined" && initialized.current) {
+      posthog.opt_out_capturing();
+      posthog.reset();
+    }
+
+    // consent === null (re-deciding window after "Gérer les cookies"): leave
+    // PostHog in its current state until the user picks again — deliberately no
+    // change here.
+  }, [consent]);
 
   return <PHProvider client={posthog}>{children}</PHProvider>;
 }
