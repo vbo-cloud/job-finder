@@ -125,13 +125,31 @@ variable "budget_amount" {
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000
-  # Single variable shared by gpt-4o-mini and text-embedding-3-small.
-  # If the two models ever need independent quotas, split into two variables.
-  description = "Token per minute quota (in thousands) for all Azure OpenAI model deployments. 1000 = 1M TPM. Each apply resets any manual portal change — update here to change the quota."
+  # Shared by gpt-4o-mini and text-embedding-3-small (gpt-5-mini has its own —
+  # see openai_capacity_tpm_gpt5_mini). Both models have ample DataZoneStandard
+  # quota at francecentral (3000 and 2000 respectively), so 1000 fits.
+  description = "Token per minute quota (in thousands) for the gpt-4o-mini and text-embedding-3-small deployments. 1000 = 1M TPM. Each apply resets any manual portal change — update here to change the quota."
 
   validation {
     condition     = var.openai_capacity_tpm > 0
     error_message = "openai_capacity_tpm must be greater than 0."
+  }
+}
+
+variable "openai_capacity_tpm_gpt5_mini" {
+  type    = number
+  default = 500
+  # Dedicated because gpt-5-mini's DataZoneStandard quota at francecentral is
+  # only 670 (in thousands), well below the 1M shared default — a higher value
+  # fails at apply. 500 (0.5M TPM) leaves headroom and is far above this
+  # portfolio's real usage. Raising it past ~670 requires an Azure quota
+  # increase first (Global routing was worldwide and had a larger quota; the EU
+  # data zone trades some quota for residency).
+  description = "Token per minute quota (in thousands) for the gpt-5-mini deployment. Capped by the DataZoneStandard gpt-5-mini quota at francecentral (currently 670). 500 = 0.5M TPM."
+
+  validation {
+    condition     = var.openai_capacity_tpm_gpt5_mini > 0
+    error_message = "openai_capacity_tpm_gpt5_mini must be greater than 0."
   }
 }
 
