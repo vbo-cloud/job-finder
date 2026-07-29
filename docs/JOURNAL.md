@@ -10999,3 +10999,135 @@ toute la classe de bug : sur un run complet de `fetch_all_offers` mocké au nive
 jamais une seule. Test `test_single_fetch...` mis à jour (le tail pin désormais `CREATION_DATE_FLOOR`
 au lieu de `None`). Preuve terrain reportée après déploiement : un code ROME auparavant en échec
 (M1827/M1861/M1507) doit revenir avec `new_offers_count > 0`.
+
+## PR #268 — docs: nettoyage documentaire BACKLOG / JOURNAL / ADR-001
+
+**Date :** 2026-07-29
+**Branche :** `docs/backlog-journal-cleanup` → `dev`
+
+### Contexte
+
+Passe de relecture documentaire : plusieurs entrées de `BACKLOG.md` décrivaient comme « à faire »
+des choses déjà en place, une entrée de `JOURNAL.md` affirmait un état IAM périmé depuis la
+migration M1→M2, et `ADR-001` décrivait l'accès réseau privé de PostgreSQL comme un *private
+endpoint* alors que le serveur est en **VNet injection**. Aucun fichier `.tf` touché, aucun apply :
+le rollback de cette PR est un simple `git revert`.
+
+### Ce qui a été fait
+
+**`docs/BACKLOG.md`**
+
+- Supprimé l'entrée « [optional] Authentification Entra ID pour le backend Terraform state » :
+  `use_azuread_auth = true` est déjà présent dans `envs/dev/backend.tf` **et**
+  `envs/lz_dev/backend.tf`. Rien à faire.
+- Reformulé l'entrée « [hardening] Désactiver les access keys sur le storage account applicatif ».
+  Elle se contentait de constater que le provider est en `~> 4.0` sans dire ce qui bloque
+  réellement. Après vérification, **le blocage historique n'existe plus** : il reposait sur le fait
+  que `azurerm_storage_container` passe par le plan de données blob (donc `listKeys`), constat
+  d'azurerm 3.x jamais revalidé après la PR #28. Les deux containers sont désormais adressés par
+  `storage_account_id`, forme pour laquelle la doc du provider est explicite (« When specifying
+  `storage_account_id` the resource will use the Resource Manager API, rather than the Data Plane
+  API »). L'entrée liste maintenant l'état réel : `blob_properties` sur le storage account est le
+  seul point restant à vérifier ; l'absence de consommateur applicatif d'une clé de compte est
+  vérifiée et notée comme telle (avec la variable résiduelle `AZURE_STORAGE_CONNECTION_STRING` de
+  `python/.env.example:7` à supprimer côté code) ; le commentaire périmé de
+  `modules/storage/main.tf:10-12` doit tomber avec le workaround qu'il justifie.
+- Même correction sur la ligne `azurerm_storage_container` de l'entrée « Self-hosted runner dans le
+  VNet », qui répétait le constat d'azurerm 3.x : elle est barrée et annotée « plus vrai ». Ce sont
+  les *containers* qui sortent du périmètre de cette entrée, pas le storage account : son accès
+  public y reste tant que `blob_properties` n'est pas tranché. La ligne `azurerm_key_vault_secret`
+  de la même entrée est au contraire confirmée — le data plane Key Vault n'a pas d'équivalent
+  ARM — et reste le motif principal de cette entrée.
+- Nouvelle entrée en section Sécurité : « [hardening] Le dépôt GitHub peut emprunter les deux
+  service principals » (constat, atténuations existantes, pistes, décision de ne pas traiter).
+
+**`docs/JOURNAL.md`**
+
+- Entrée « Opération — Migration IAM vers lz_dev » (2026-05-06) : annotation
+  `[superseded — voir migration M1→M2]` ajoutée en tête d'entrée. L'entrée elle-même n'est pas
+  réécrite — le JOURNAL est chronologique, on annote.
+- Coquille corrigée dans la même entrée : « n't est plus présente » → « n'est plus présente ».
+
+**`docs/adr/ADR-001-data-layer-database.md`**
+
+- « Configurer le private endpoint » → « Configurer l'accès réseau privé (VNet injection dans un
+  subnet délégué + zone DNS privée) » dans « Actions suivantes ».
+- Ligne « Intégration Azure » du tableau d'évaluation : `private endpoint` → `VNet injection
+  (subnet délégué)`.
+
+### Décisions techniques
+
+- **Annoter plutôt que réécrire dans le JOURNAL.** L'annotation est placée juste après la date, en
+  tête d'entrée, plutôt qu'à côté du seul bullet « sp-jf-github reçoit les rôles Contributor + User
+  Access Administrator + Storage Blob Data Contributor au niveau subscription » : la même entrée
+  réaffirme l'existence du rôle `User Access Administrator` plus bas (« Décision : User Access
+  Administrator permet à sp-jf-github de gérer les role assignments sans Owner »). Une annotation
+  en tête gouverne toute l'entrée ; deux annotations locales auraient laissé le lecteur croire que
+  seul le premier bullet était périmé.
+- **L'annotation couvre aussi le scope de `Contributor`.** L'entrée dit « au niveau subscription » ;
+  `lz_dev/rbac.tf` montre aujourd'hui `Contributor` scopé par resource group (`rg_core`, `rg_app`,
+  `rg_data`) + `Storage Blob Data Contributor` sur `rg_data`. Les deux écarts sont signalés dans la
+  même note.
+- **VNet injection ≠ private endpoint.** Deux mécanismes distincts, pas deux noms pour la même
+  chose : en VNet injection le serveur *naît* dans un subnet délégué et n'a pas d'endpoint public ;
+  un private endpoint est une NIC ajoutée devant un service qui, lui, reste hébergé côté Azure. Le
+  private endpoint du projet concerne le **Storage** (`envs/dev/storage.tf`,
+  `module.private_endpoint_blob`), pas PostgreSQL.
+- **Un blocage documenté n'est pas un blocage vérifié.** L'entrée `shared_access_key_enabled`
+  affirmait une dépendance `listKeys` héritée d'azurerm 3.x. Deux éléments du dépôt la
+  contredisaient (adressage par `storage_account_id` depuis PR #28 sur un provider 4.x ;
+  commentaire de `lz_dev/rbac.tf` qui ne rattache `listKeys` qu'à la *data source*), un seul la
+  soutenait (le commentaire de `modules/storage/main.tf`, jamais revu depuis PR #19). La
+  documentation du provider tranche en faveur des deux premiers. La leçon générale reste : un
+  constat lié à une version majeure de provider doit être re-vérifié à chaque bump, sinon il
+  survit dans le BACKLOG comme un blocage fantôme et fige un workaround (`public_network_access_
+  enabled = true`) qui n'est plus nécessaire. Le commentaire `.tf` périmé n'a pas été touché ici :
+  c'est un changement de code, il relève de la PR de hardening qui suit, pas d'une PR documentaire.
+- **La ligne du tableau d'évaluation d'ADR-001 a été corrigée, pas annotée.** C'est une cellule
+  « capacités de l'option », pas un compte rendu de ce qui a été déployé : Flexible Server *supporte*
+  bien les private endpoints dans l'absolu, mais mentionner le mécanisme que le projet n'utilise pas
+  induisait en erreur à la relecture. Un ADR décrit une décision, pas une chronologie — la règle
+  « annoter sans réécrire » qui s'applique au JOURNAL ne s'y transpose pas.
+
+### Vérification
+
+- `use_azuread_auth = true` confirmé par lecture directe de `envs/dev/backend.tf` (ligne 9) et
+  `envs/lz_dev/backend.tf` (ligne 10) avant suppression de l'entrée BACKLOG.
+- État IAM courant confirmé dans `envs/lz_dev/rbac.tf` : `sp_role_assignments` contient exactement
+  dix entrées — `kv_app_secrets_officer`, `storage_blob_contributor`, `tfstate_blob_contributor`,
+  `tfstate_reader`, `lz_rg_reader`, `rg_core_contributor`, `rg_app_contributor`,
+  `rg_data_contributor`, `subnet_cae_network_contributor`, `subnet_mgmt_network_contributor` —
+  aucun `User Access Administrator`, aucun scope subscription.
+- Chaîne `storage_account_id` vérifiée : `envs/dev/storage.tf:53,59` (containers `cvs`/`offers`),
+  migration documentée en JOURNAL PR #28 (`storage_account_name` → `storage_account_id` lors du
+  bump `~> 4.0`), contrainte `~> 4.0` dans `envs/dev/main.tf` résolue en `4.72.0`
+  (`envs/dev/.terraform.lock.hcl`). Le comportement du provider ne se lit dans aucun fichier du
+  dépôt : il a été vérifié dans sa documentation officielle à la version exacte utilisée
+  (`website/docs/r/storage_container.html.markdown`, tag `v4.72.0`), qui indique « One of
+  `storage_account_name` or `storage_account_id` must be specified. When specifying
+  `storage_account_id` the resource will use the Resource Manager API, rather than the Data Plane
+  API ».
+- Consommateurs d'une clé du storage account applicatif recherchés sur tout le dépôt (`*.py`,
+  `*.tf`, `*.yml`, `*.example`) : aucun. `AZURE_STORAGE_CONNECTION_STRING` n'apparaît qu'à
+  `JobFinder/python/.env.example:7`, déclarée vide et lue par aucun code ; les deux seuls clients
+  blob — `agents/webapp/routers/cv.py:67-69` et `scripts/backfill_thumbnails.py:207-209` —
+  construisent un `BlobServiceClient(account_url=..., credential=DefaultAzureCredential())`. Ce
+  point passe donc de « à vérifier » à vérifié dans l'entrée BACKLOG ; `blob_properties` reste le
+  seul point ouvert avant de basculer `shared_access_key_enabled = false`.
+- Condition ABAC citée dans la nouvelle entrée BACKLOG vérifiée dans
+  `JobFinder/powershell/setup-sp-jf-platform.ps1:100-108` : les trois GUID exclus sont bien
+  `8e3af657` (Owner), `18d7d88d` (User Access Administrator), `f58310d9` (RBAC Administrator), sur
+  les actions `roleAssignments/write` et `roleAssignments/delete`.
+- Credentials fédérés identiques vérifiés dans les deux scripts : sujets
+  `repo:<dépôt>:pull_request` et `repo:<dépôt>:environment:dev` dans `setup-sp-jf-github.ps1:61,72`
+  et `setup-sp-jf-platform.ps1:65,76`. `.github/workflows/terraformApply.yml` confirme que les deux
+  jobs déclarent `environment: dev` et que `apply-lz-dev` utilise `vars.AZURE_PLATFORM_CLIENT_ID`.
+- Recherche « private endpoint » sur tout `docs/` : toutes les occurrences restantes sont correctes
+  et n'ont pas été touchées — `JOURNAL.md:537-553` et `:903` (private endpoint **du Storage**,
+  exact), `JOURNAL.md:738` (private endpoint envisagé pour Azure OpenAI), `JOURNAL.md:321` (« VNet
+  injection plutôt que private endpoint » pour PostgreSQL, déjà juste), `ADR-005`/`ADR-006`
+  (capacités d'ACR et d'Azure OpenAI). Recherche « VNet injection » en complément :
+  `JOURNAL.md:308/376/453` décrivent déjà PostgreSQL correctement, rien à corriger. `ADR-001` était
+  le seul document à décrire PostgreSQL en private endpoint.
+- Aucun fichier `.tf`, `.py`, `.ts` ou `.ps1` modifié — `git diff --stat` limité à
+  `docs/BACKLOG.md`, `docs/JOURNAL.md`, `docs/adr/ADR-001-data-layer-database.md`.
