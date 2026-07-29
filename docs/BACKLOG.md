@@ -429,6 +429,46 @@ par service (`envs/dev/container_apps.tf` et jobs associés).
 
 ---
 
+### [hardening] Le dépôt GitHub peut emprunter les deux service principals
+
+**Constat**
+
+`sp-jf-github` (couche applicative) et `sp-jf-platform` (landing zone) ont des credentials
+fédérés OIDC strictement identiques : mêmes sujets `repo:<dépôt>:pull_request` et
+`repo:<dépôt>:environment:dev`, sur le même dépôt
+(`setup-sp-jf-github.ps1:61,72` et `setup-sp-jf-platform.ps1:65,76`). Rien côté Entra ID
+ne distingue les deux — toute modification mergée sur `dev` peut déclencher un job qui
+demande un jeton avec `AZURE_PLATFORM_CLIENT_ID` et obtient l'identité privilégiée.
+La séparation des rôles est donc **par job de workflow**, pas par plateforme d'identité.
+
+**Atténuations déjà en place**
+
+- Condition ABAC sur le `RBAC Administrator` de `sp-jf-platform`
+  (`setup-sp-jf-platform.ps1:100-108`) : interdit d'assigner ou de retirer
+  `Owner`, `User Access Administrator` et `Role Based Access Control Administrator`.
+  Le SP platform ne peut donc pas s'auto-élever.
+- Policy `deployIfNotExists` (`lz_dev/policies.tf`) : pose un lock `CanNotDelete` sur
+  toute ressource taguée `protect = "true"`. Un `Contributor` ne peut pas retirer un lock
+  (opération réservée à `Owner` / `User Access Administrator`).
+
+**Pistes**
+
+- Branch protection sur `dev` (pas de push direct, PR obligatoire)
+- Required reviewers sur l'environment GitHub `dev` — c'est lui qui porte le sujet OIDC
+- Filtre de chemins sur le job `apply-lz-dev` (ne déclencher que sur `envs/lz_dev/**`)
+- À l'extrême : dépôt séparé pour la landing zone, avec ses propres credentials fédérés
+
+**Décision actuelle**
+
+Non traité. Sur un projet solo où l'auteur des PR et le mainteneur sont la même personne,
+le coût opérationnel (reviewers requis sur ses propres PR) est jugé supérieur au bénéfice.
+À revoir si le dépôt s'ouvre à des contributeurs externes.
+
+**Fichiers :** `JobFinder/powershell/setup-sp-jf-github.ps1`,
+`JobFinder/powershell/setup-sp-jf-platform.ps1`, `.github/workflows/terraformApply.yml`
+
+---
+
 ### [hardening, avant public LinkedIn] Durcissement des endpoints publics — audit upload (2026-07-28)
 
 Audit de `POST /cv/upload` (session Claude Code, 2026-07-28). L'endpoint est **déjà bien durci** :
