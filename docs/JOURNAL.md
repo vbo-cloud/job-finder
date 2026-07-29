@@ -634,6 +634,16 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
 ### Opération — Migration IAM vers lz_dev
 **Date :** 2026-05-06
 
+> **[superseded — voir migration M1→M2]** L'attribution décrite dans cette entrée
+> n'est plus l'état courant. `User Access Administrator` a été retiré à `sp-jf-github` :
+> les role assignments sont désormais posés par `sp-jf-platform`, qui porte
+> `RBAC Administrator` conditionné par ABAC (interdiction d'assigner Owner /
+> User Access Administrator / RBAC Administrator — voir
+> `JobFinder/powershell/setup-sp-jf-platform.ps1`). Et `Contributor` n'est plus au
+> niveau subscription mais scopé par resource group (`rg_core`, `rg_app`, `rg_data`),
+> aux côtés de `Storage Blob Data Contributor` sur `rg_data` — voir `lz_dev/rbac.tf`.
+> Entrée conservée en l'état : le JOURNAL est chronologique, on annote sans réécrire.
+
 - sp-jf-github reçoit les rôles Contributor + User Access Administrator +
   Storage Blob Data Contributor au niveau subscription
 - Rôle Owner révoqué sur sp-jf-github
@@ -645,7 +655,7 @@ Pour débloquer le développement du Milestone 1, `sp-jf-github` reçoit tempora
   one-shot de sp-jf-platform lors de la transition M1→M2
 - Décision : User Access Administrator permet à sp-jf-github de gérer les
   role assignments sans Owner ; la permission `elevateAccess` (auto-élévation
-  Owner) n't est plus présente
+  Owner) n'est plus présente
 
 ---
 
