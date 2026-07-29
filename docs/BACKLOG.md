@@ -255,16 +255,38 @@ Garantit que ce qui est appliqué est exactement ce qui a été reviewé.
 ## Terraform
 
 ### [hardening] Désactiver les access keys sur le storage account applicatif
-`shared_access_key_enabled = false` — provider azurerm ~> 4.0 déjà en place.
-**Fichier :** `modules/storage/main.tf`
 
-### [optional] Authentification Entra ID pour le backend Terraform state
-Ajouter `use_azuread_auth = true` dans tous les `backend.tf` pour que Terraform
-accède au storage account de state via token Entra ID plutôt que via access keys.
-Nécessite le rôle `Storage Blob Data Contributor` sur `stjftfstatefrc` pour :
-- `sp-jf-github` (applies CI/CD)
-- Le compte utilisateur personnel (applies manuels `iam/`)
-**Fichiers :** tous les `backend.tf`
+`shared_access_key_enabled = false` sur `stjfdevfrc`.
+
+**Le blocage historiquement documenté n'existe plus.** L'entrée reposait sur le fait que
+`azurerm_storage_container` passe par le **plan de données** blob
+(`<account>.blob.core.windows.net`), le provider récupérant la clé du compte via `listKeys` —
+désactiver les clés partagées aurait alors cassé l'apply. Ce constat datait d'azurerm 3.x
+(PR #19, JOURNAL 2026-05-07) et n'avait jamais été revalidé depuis le passage en `~> 4.0`
+(PR #28). Il est faux aujourd'hui : les deux containers de `envs/dev/storage.tf:53,59` sont
+adressés par `storage_account_id`, et la documentation du provider (azurerm 4.72.0,
+`website/docs/r/storage_container.html.markdown`) est explicite —
+« When specifying `storage_account_id` the resource will use the Resource Manager API, rather
+than the Data Plane API ». Aucun `listKeys`, aucun appel data-plane pour ces deux ressources.
+
+**Ce qui reste avant de basculer :**
+
+- `blob_properties` (`delete_retention_policy`, `container_delete_retention_policy`) dans
+  `modules/storage/main.tf` : confirmer qu'il est géré via
+  `Microsoft.Storage/storageAccounts/blobServices/default` (ARM) et non via l'endpoint
+  *service properties* du plan de données.
+- ✅ Aucun consommateur d'une clé de compte — vérifié par recherche sur tout le dépôt
+  (`*.py`, `*.tf`, `*.yml`, `*.example`). Les deux seuls clients blob passent par
+  `DefaultAzureCredential` : `agents/webapp/routers/cv.py:67-69` et
+  `scripts/backfill_thumbnails.py:207-209`. Reste `AZURE_STORAGE_CONNECTION_STRING` dans
+  `python/.env.example:7`, déclarée vide et lue par aucun code — variable résiduelle à
+  supprimer avec le reste du hardening (changement de code, hors périmètre d'une PR
+  documentaire).
+- Le commentaire de `modules/storage/main.tf:10-12` (« azurerm_storage_container uses blob
+  endpoint, not ARM management API ») est périmé et doit tomber en même temps que le
+  workaround `public_network_access_enabled = true` qu'il justifie.
+
+**Fichiers :** `modules/storage/main.tf`, `envs/dev/storage.tf`
 
 ---
 
@@ -286,8 +308,16 @@ En dev, `max_executions = 1` sur tous les jobs queue. À revisiter pour prod :
 **Problème actuel**
 
 Le provider azurerm utilise le **data plane** (et non l'API ARM management) pour certaines ressources :
-- `azurerm_storage_container` → appelle `https://{account}.blob.core.windows.net/{container}`
+- ~~`azurerm_storage_container` → appelle `https://{account}.blob.core.windows.net/{container}`~~
+  — **plus vrai** : constat d'azurerm 3.x. Les containers sont adressés par `storage_account_id`
+  depuis la PR #28, forme qui cible l'API Resource Manager (voir l'entrée « Désactiver les access
+  keys » plus haut). Les containers ne sont donc plus un motif pour cette entrée. L'accès public
+  du storage account, lui, y reste tant que `blob_properties` n'a pas été tranché (point ouvert
+  de l'entrée « Désactiver les access keys ») : s'il passe par l'endpoint *service properties* du
+  plan de données, un runner GitHub-hosted ne l'atteindrait plus une fois l'accès public fermé.
 - `azurerm_key_vault_secret` → appelle `https://{vault}.vault.azure.net/secrets/{name}`
+  — toujours vrai, le data plane Key Vault n'a pas d'équivalent ARM. C'est désormais le motif
+  **principal** de cette entrée.
 
 Ces endpoints sont sur réseau privé (`public_network_access_enabled = false`). Le runner GitHub-hosted étant public, il ne peut pas les atteindre → 403 à l'apply.
 
