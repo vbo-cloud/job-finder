@@ -28,7 +28,7 @@ Le projet job-finder nécessite un data layer capable de stocker des offres d'em
 | Complexité | Faible — SQL standard, bien documenté |
 | Scalabilité | Suffisante pour une production réelle à l'échelle d'un projet solo |
 | Familiarité | Aucune, mais SQL est la courbe d'apprentissage la plus douce |
-| Intégration Azure | Native — private endpoint, RBAC, Key Vault pour les credentials |
+| Intégration Azure | Native — VNet injection (subnet délégué), RBAC, Key Vault pour les credentials |
 
 **Pour :** coût maîtrisé, SQL universel et transférable, extension `pgvector` disponible si besoin, pas de vendor lock-in fort, fonctionne nativement avec AKS via connection string standard.
 
@@ -72,5 +72,5 @@ CosmosDB brille à très grande échelle et en distribution géographique — de
 
 - [ ] Créer le module Terraform `data/postgresql` dans `JobFinder/Terraform/modules/data/`
 - [ ] Provisionner le Flexible Server en dev (SKU Burstable B1ms)
-- [ ] Configurer le private endpoint + credentials dans Key Vault
+- [ ] Configurer l'accès réseau privé (VNet injection dans un subnet délégué + zone DNS privée) + credentials dans Key Vault
 - [ ] Ouvrir une PR feature/data-postgresql-dev → review par le reviewer agent
