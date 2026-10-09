@@ -26,10 +26,12 @@ module "webapp" {
   image               = "${module.container_registry.login_server}/agents/webapp:latest"
   cpu                 = 0.5
   memory              = "1Gi"
-  # min_replicas = 1 trades scale-to-zero for no cold start; accepted idle-rate
-  # cost is ~$0.000008/vCPU-s + $0.000001/GiB-s (see docs/JOURNAL.md, PR #210).
-  min_replicas      = 1
+  # Cost: 1 replica only Mon-Fri 09:00-18:00 Europe/Paris (cron rule), scale-to-zero otherwise.
+  # Trade-off vs the always-on setup of PR #210: a cold start (a few seconds) for the first
+  # request outside business hours. See local.business_hours in container_apps.tf.
+  min_replicas      = 0
   max_replicas      = 1
+  active_hours      = local.business_hours
   identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
   registry_server   = module.container_registry.login_server
   registry_identity = data.azurerm_user_assigned_identity.caj.id

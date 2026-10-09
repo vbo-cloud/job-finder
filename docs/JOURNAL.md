@@ -11131,3 +11131,82 @@ le rollback de cette PR est un simple `git revert`.
   le seul document à décrire PostgreSQL en private endpoint.
 - Aucun fichier `.tf`, `.py`, `.ts` ou `.ps1` modifié — `git diff --stat` limité à
   `docs/BACKLOG.md`, `docs/JOURNAL.md`, `docs/adr/ADR-001-data-layer-database.md`.
+
+---
+
+## PR #269 — Réduction des coûts : horaires des apps, jumpbox optionnelle, Private Endpoint blob supprimé
+
+*(Branche `chore/cost-reduction`.)*
+
+### Contexte
+
+Facture « Virtual Network » à ~15 €/mois, plus ~19 € pour les deux Container Apps always-on.
+Analyse Cost Management sur 30 jours :
+
+| Poste | Coût | Décision |
+|---|---|---|
+| Container Apps front + back (`min_replicas = 1`) | 9,47 € × 2 | 1 réplica 9h-18h du lundi au vendredi |
+| Private Endpoint blob (+ zone DNS privée 0,42 €) | 6,27 € | supprimé : il n'isolait rien (accès public maintenu sur le compte) |
+| 2 IP publiques orphelines (`pip-bastion-…`, `pip-jf-lz-…`) | 3,13 € × 2 | supprimées à la main dans le portail (absentes de Terraform, donc rien à changer ici) |
+| IP du load balancer du CAE | 3,13 € | non supprimable (gérée par Azure) |
+| Disque de la VM jumpbox (VM déjà désallouée) | 1,46 € | VM optionnelle |
+| Container Registry Basic | 4,34 € | gardé (SKU minimal, coût fixe) |
+| Jobs (matching, fetch, cleanup…) | ~0,2 € au total | inchangés — les désactiver n'économiserait rien |
+
+### Ce qui a été fait
+
+- Module `container_app` : variable `active_hours` (cron début/fin + fuseau). Elle ajoute une
+  règle de scale KEDA `cron` qui impose 1 réplica dans la fenêtre, plus une règle `http` qui
+  réveille l'app pour une requête hors fenêtre (sans elle, rien ne réveillerait l'app).
+- `frontend` et `webapp` : `min_replicas = 0` + `active_hours` partagé (`local.business_hours`,
+  09:00-18:00 Europe/Paris, lundi-vendredi). Inverse l'arbitrage de la PR #210 : un cold start de
+  quelques secondes la nuit contre ~14 €/mois économisés.
+- Jumpbox : variable `enable_jumpbox` (défaut `false`) ; `count` sur le module VM, l'output
+  `jumpbox_private_ip` passe par `one()`. Le secret du mot de passe admin reste dans Key Vault
+  (gratuit), la VM se recrée en passant la variable à `true`.
+- `envs/dev/storage.tf` : suppression de `module.private_endpoint_blob`, de la zone DNS
+  `azurerm_private_dns_zone.blob` et de son lien VNet. Le compte reste en
+  `public_network_access_enabled = true` (voir `modules/storage/main.tf` et l'entrée BACKLOG
+  « Self-hosted runner dans le VNet »), donc joignable depuis Internet avec ou sans endpoint : la
+  protection réelle repose sur le RBAC (identité managée) et les conteneurs privés. Le webapp
+  utilise `AZURE_STORAGE_ACCOUNT_URL` (endpoint public) : aucune modification applicative, seule
+  la résolution DNS passe de l'IP privée à l'IP publique. `modules/private_endpoint` est conservé
+  pour le recréer une fois l'accès public fermé (note ajoutée au BACKLOG).
+- Commentaires : `frontend.tf`/`webapp.tf` renvoient vers `local.business_hours`
+  (`container_apps.tf`) ; le commentaire du budget (`monitoring.tf`) précise que le coût lié à la
+  PR #210 est réduit par cette PR.
+
+### Décisions techniques
+
+- Règle `http` ajoutée avec la règle `cron` : avec `min_replicas = 0`, KEDA ne réveille l'app
+  hors fenêtre que si une règle HTTP existe.
+- Horaires partagés dans un `local` (`business_hours`) plutôt qu'une variable : une seule valeur
+  pour front et back, pas besoin de la surcharger par environnement.
+- Jumpbox désactivée par défaut plutôt que supprimée du code : le secret Key Vault du mot de passe
+  reste, seule la VM (et son disque facturé même désallouée) disparaît.
+
+### Économies estimées (par mois)
+
+| Levier | Économie |
+|---|---|
+| Front + back à 0 réplica hors lun-ven 9h-18h (≈ 45 h/168 h au lieu de 24/7) | ≈ 14 € |
+| Private Endpoint blob + zone DNS privée | ≈ 6,7 € |
+| 2 IP publiques orphelines (supprimées à la main) | ≈ 6,3 € |
+| Disque de la jumpbox | ≈ 1,5 € |
+| **Total** | **≈ 28,4 €** (sur ~42 € facturés) |
+
+Estimation sur la facture 30 jours ; le gain des apps est approximatif (les réplicas inactifs sont
+facturés au tarif « idle », pas à zéro).
+
+### Vérification
+
+`terraform fmt` et `terraform validate` OK. **Non vérifié :** le `plan`/`apply` réel — à contrôler
+après déploiement : (1) l'app répond à 10h et se réveille bien à 22h, (2) le cold start nocturne
+reste acceptable, (3) la VM `vm-jf-dev-frc-mgmt-001` et son disque sont détruits, (4) le `plan` ne
+détruit que l'endpoint blob, sa zone DNS et son lien (le stockage reste intact) et l'upload/lecture
+d'un CV fonctionne depuis le webapp.
+
+*Précision :* le motif exact du maintien de l'accès public n'est plus la création des conteneurs
+(adressés par `storage_account_id`, donc via l'API Resource Manager, cf. PR #268) ; le point restant
+à trancher est `blob_properties` (BACKLOG). Le commentaire de `modules/storage/main.tf` a été
+corrigé en conséquence.

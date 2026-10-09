@@ -319,7 +319,11 @@ Le provider azurerm utilise le **data plane** (et non l'API ARM management) pour
   — toujours vrai, le data plane Key Vault n'a pas d'équivalent ARM. C'est désormais le motif
   **principal** de cette entrée.
 
-Ces endpoints sont sur réseau privé (`public_network_access_enabled = false`). Le runner GitHub-hosted étant public, il ne peut pas les atteindre → 403 à l'apply.
+Si ces endpoints passent sur réseau privé (`public_network_access_enabled = false`), le runner GitHub-hosted, étant public, ne peut pas les atteindre → 403 à l'apply.
+
+> Le Private Endpoint blob (et la zone DNS `privatelink.blob`) a été supprimé en PR #269 : il
+> n'isolait rien tant que l'accès public reste ouvert et coûtait ~6,7 €/mois. Le storage account
+> n'a donc plus aucune connectivité privée ; le Key Vault est traité séparément.
 
 **Workaround actuel (M1)**
 
@@ -333,7 +337,7 @@ Un runner self-hosted dans le VNet peut atteindre les endpoints privés. Options
 - **VM scale set à zéro** — scale à zéro au repos, coût de stockage résiduel uniquement.
 - **VM permanente** — ~100€/mois. Disproportionné pour un projet portfolio.
 
-Une fois un runner VNet en place : passer `public_network_access_enabled = false` sur le storage et le Key Vault, et supprimer les commentaires de workaround.
+Une fois un runner VNet en place : passer `public_network_access_enabled = false` sur le storage et le Key Vault, **recréer le Private Endpoint blob et la zone DNS `privatelink.blob.core.windows.net` (supprimés en PR #269, le module `modules/private_endpoint` est conservé pour ça)**, et supprimer les commentaires de workaround.
 
 ---
 

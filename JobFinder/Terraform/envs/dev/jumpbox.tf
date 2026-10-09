@@ -18,7 +18,10 @@ module "jumpbox_admin_password" {
   owner        = var.owner
 }
 
+# Disabled by default (var.enable_jumpbox = false): the deallocated VM still billed its OS disk
+# (~1.5 EUR/month). Set to true to recreate it; the admin password above is kept in Key Vault.
 module "jumpbox" {
+  count  = var.enable_jumpbox ? 1 : 0
   source = "../../modules/jumpbox"
 
   name                = "vm-${var.project}-dev-${var.location_short}-mgmt-001"
