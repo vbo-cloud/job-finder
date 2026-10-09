@@ -153,3 +153,8 @@ variable "openai_capacity_tpm_gpt5_mini" {
   }
 }
 
+variable "enable_jumpbox" {
+  type        = bool
+  default     = false
+  description = "Deploy the jumpbox VM used (via Azure Bastion) to reach PostgreSQL. Disabled by default: even deallocated, its OS disk is billed. Set to true when a manual DB session is needed."
+}
