@@ -7,9 +7,11 @@ resource "azurerm_storage_account" "this" {
   min_tls_version                  = "TLS1_2"
   allow_nested_items_to_be_public  = false
   cross_tenant_replication_enabled = false
-  # Public access required for GitHub-hosted runners to reach the blob data plane
-  # (azurerm_storage_container uses blob endpoint, not ARM management API).
-  # Disable when self-hosted runner in VNet is available — see BACKLOG.md.
+  # Public access kept on for the GitHub-hosted runners. Not for azurerm_storage_container:
+  # with storage_account_id it goes through the ARM API, not the blob data plane. What remains to
+  # be settled is blob_properties below (see BACKLOG.md). No private endpoint is attached (removed
+  # in PR #269: it isolated nothing while this stays true); re-add it when closing public access
+  # once a self-hosted runner in the VNet exists.
   public_network_access_enabled = true
 
   blob_properties {
