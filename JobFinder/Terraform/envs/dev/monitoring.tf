@@ -191,8 +191,9 @@ resource "azurerm_monitor_metric_alert" "servicebus_active_messages_stale" {
 # ==============================================================================
 # Catches cost drift on rg_app (Container Apps, ACR, Service Bus, etc.) without
 # manual monitoring -- e.g. min_replicas = 1 on the frontend/webapp (PR #210)
-# turned scale-to-zero apps into a small standing charge; this budget flags if
-# that estimate turns out wrong. Reuses the same action group as the metric
+# turned scale-to-zero apps into a small standing charge (since reduced by the
+# business-hours schedule, PR #269); this budget flags if the cost estimate
+# turns out wrong. Reuses the same action group as the metric
 # alerts above rather than duplicating the notification email.
 
 resource "azurerm_consumption_budget_resource_group" "app" {

@@ -50,6 +50,11 @@ locals {
   ft_client_id                     = data.azurerm_key_vault_secret.ft_client_id.value
   ft_client_secret                 = data.azurerm_key_vault_secret.ft_client_secret.value
   notifications_unsubscribe_secret = module.secret_notifications_unsubscribe.value
+  # Shared by the frontend and webapp Container Apps (see their min_replicas comment).
+  business_hours = {
+    start = "0 9 * * 1-5"
+    end   = "0 18 * * 1-5"
+  }
 }
 
 # ==============================================================================

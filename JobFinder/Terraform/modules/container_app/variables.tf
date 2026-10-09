@@ -62,6 +62,17 @@ variable "max_replicas" {
   }
 }
 
+variable "active_hours" {
+  type = object({
+    start            = string
+    end              = string
+    timezone         = optional(string, "Europe/Paris")
+    desired_replicas = optional(number, 1)
+  })
+  default     = null
+  description = "Optional business-hours schedule (cron expressions, e.g. start = \"0 9 * * 1-5\", end = \"0 18 * * 1-5\"). Outside the window the app scales to min_replicas (use 0); an HTTP rule wakes it on demand. Null disables the schedule."
+}
+
 variable "target_port" {
   type        = number
   default     = 8000
