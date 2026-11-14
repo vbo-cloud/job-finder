@@ -11210,3 +11210,61 @@ d'un CV fonctionne depuis le webapp.
 (adressés par `storage_account_id`, donc via l'API Resource Manager, cf. PR #268) ; le point restant
 à trancher est `blob_properties` (BACKLOG). Le commentaire de `modules/storage/main.tf` a été
 corrigé en conséquence.
+
+---
+
+## PR #270 — Mise hors ligne : suppression de la couche application (`envs/dev`)
+
+*(Branche `chore/decommission-app`.)*
+
+### Contexte
+
+Le projet a rempli son rôle (portfolio pendant la recherche d'emploi, emploi trouvé) et coûte
+encore ~42 €/mois. Objectif : **0 €/mois**. Un « stop » ne suffit pas : PostgreSQL redémarre seul
+après 7 jours, Service Bus, ACR et l'IP du Container App Environment sont facturés même à l'arrêt.
+Tout est donc supprimé, en deux PR successives (règle du repo : jamais plateforme + app ensemble).
+Cette PR est la première : la couche app.
+
+### Ce qui a été fait
+
+- `envs/dev/` : suppression de tous les fichiers de ressources (PostgreSQL, Service Bus, ACR,
+  Container App Environment, 7 jobs, frontend, webapp, domaine custom, Key Vault, OpenAI, Storage,
+  ACS Email, App Insights, alertes, budget, subnet PostgreSQL).
+- Conservés : `backend.tf`, `main.tf` (providers : Terraform en a besoin pour détruire ce qui est
+  dans le state), `variables.tf`, `terraform.tfvars`.
+- Le `plan` local annonce **0 à ajouter, 0 à modifier, 61 à détruire**. Le déploiement se fait par
+  la CI au merge sur `dev` (le hook interdit `terraform apply`/`destroy` en local).
+
+### Décisions techniques
+
+- Pas de PR séparée pour retirer `prevent_destroy` : supprimer le bloc entier retire aussi la
+  protection (elle ne joue que si la ressource reste dans le code).
+- Aucun verrou `CanNotDelete` n'existe sur la subscription (`az lock list` vide) : la politique
+  `jf-auto-lock-protect-tagged` est assignée mais ses ressources sont « NonCompliant » — elle n'a
+  jamais posé de verrou. Cause non investiguée, sans effet sur la mise hors ligne.
+- Le code des modules (`modules/`) et l'historique git restent : le projet se redéploie en
+  rétablissant ces fichiers depuis le tag `archive/pre-decommission`.
+- Pas de sauvegarde de la base : une vidéo de démo a été faite, et supprimer les CV (données
+  personnelles) est voulu.
+
+### Points d'attention
+
+- **Perdus** : base PostgreSQL, CV et offres (blobs), images ACR (reconstruisibles via
+  `buildAgents.yml`), file Service Bus.
+- Key Vault, Azure OpenAI et Log Analytics passent en suppression logique (gratuite). Le Key Vault
+  a la purge protection : ses secrets restent récupérables pendant la durée de rétention.
+  Secrets non gérés par Terraform (France Travail, Entra External ID) concernés. Le nom du Key
+  Vault reste réservé pendant cette rétention : un redéploiement rapide avec le même nom échouerait
+  (récupérer le vault supprimé, ou attendre la fin de la rétention : la purge manuelle est impossible
+  avec la purge protection).
+- Au premier `apply`, la suppression du subnet PostgreSQL peut échouer (`InUse` ou
+  `ServiceAssociationLink`) juste après celle du serveur : relancer la CI suffit.
+- `lz_dev` référence encore (data sources, `rbac.tf`) des ressources supprimées ici : son `plan`
+  échouera tant que la PR suivante ne les a pas retirées.
+- Hors Terraform, restent à faire à la main : CNAME `jobfinder` et enregistrements de vérification
+  email chez OVH, ressources orphelines éventuelles, `buildAgents.yml` à désactiver.
+
+### Vérification
+
+`terraform fmt`, `validate` et `plan` (lecture seule) OK en local. **Non vérifié :** l'`apply` réel
+et la disparition effective des coûts (à contrôler dans Cost Management 2-3 jours après).

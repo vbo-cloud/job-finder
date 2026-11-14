@@ -1,5 +1,7 @@
-# Application layer for dev — depends on lz_dev being deployed first.
-# Consumes the shared VNet, Key Vault, and policy baseline provisioned by the landing zone.
+# Application layer for dev — DECOMMISSIONED (PR #270): all application resources were
+# removed from this directory. Only the providers, backend and variables remain, because
+# Terraform needs the providers to destroy what is still recorded in the state.
+# To redeploy, restore the removed files from the git tag `archive/pre-decommission`.
 
 terraform {
   required_providers {
@@ -11,10 +13,9 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.8"
     }
-    # Used only for the frontend custom domain certificate binding (frontend.tf):
-    # azurerm_container_app_custom_domain cannot attach an Azure-managed certificate
-    # (only a bring-your-own one) -- see the comment above azapi_update_resource
-    # "frontend_custom_domain_binding" in frontend.tf for the full explanation.
+    # Kept only so the state can be destroyed: it was used for the frontend custom domain
+    # certificate binding (frontend.tf, now removed -- see tag `archive/pre-decommission`).
+    # azurerm_container_app_custom_domain cannot attach an Azure-managed certificate.
     azapi = {
       source  = "azure/azapi"
       version = "~> 2.0"
