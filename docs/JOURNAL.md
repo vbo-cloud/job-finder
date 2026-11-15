@@ -11210,3 +11210,33 @@ d'un CV fonctionne depuis le webapp.
 (adressés par `storage_account_id`, donc via l'API Resource Manager, cf. PR #268) ; le point restant
 à trancher est `blob_properties` (BACKLOG). Le commentaire de `modules/storage/main.tf` a été
 corrigé en conséquence.
+
+## PR #272 — Release v1.0.0 : état final déployé, avant la mise hors ligne
+
+*(Branche `release/v1.0.0`, créée depuis le tag `archive/pre-decommission` = `fd281d9`.)*
+
+### Contexte
+
+`main` datait du 02/06/2026 (PR #84), soit 935 commits de retard sur l'état réellement déployé.
+Le projet a ensuite été mis hors ligne sur `dev` (PR #270 : couche app, PR #271 : landing zone),
+ce qui retire les fichiers de ressources Terraform. Pour qu'un visiteur du dépôt public voie le
+projet complet, `main` est mise à jour à l'état de `fd281d9`, juste avant la mise hors ligne.
+
+### Ce qui a été fait
+
+- Branche `release/v1.0.0` créée depuis `archive/pre-decommission`, ouverte en PR vers `main`.
+- Aucun changement de code : seule cette entrée de journal est ajoutée.
+- Tag `v1.0.0` posé après le merge.
+
+### Décisions techniques
+
+- Cette release ne passe pas par `dev` : `dev` contient la mise hors ligne et ne sera **jamais**
+  mergée dans `main`. `dev` et `main` divergent donc volontairement.
+- Le tag `v1.0.0` marque l'état final du projet, pas l'arrivée d'un environnement de production :
+  `lz_prod/` et `prod/` n'ont jamais été recréés.
+- Aucun workflow ne se déclenche sur un push vers `main` : le merge ne redéploie rien dans Azure.
+- Les entrées #270 et #271 du journal n'existent que sur `dev` (numérotation discontinue ici).
+
+### Vérification
+
+Aucun code modifié. **Non vérifié :** que les agents de revue acceptent une PR de 935 commits.
