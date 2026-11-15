@@ -1,5 +1,5 @@
-# Landing zone (hub) for dev — must be deployed before the app layer (dev/).
-# Provides the shared foundation: resource group, Key Vault, and VNet.
+# Landing zone (hub) for dev — decommissioned: every resource was removed.
+# Only the providers and backend are kept so Terraform can destroy what the state still tracks.
 
 terraform {
   required_providers {
@@ -16,20 +16,3 @@ provider "azurerm" {
   # Authentication is handled via ARM_* environment variables injected by CI/CD (OIDC).
   # No explicit tenant_id, subscription_id, or client_id needed here.
 }
-
-# Needed to retrieve the current client's tenant_id for the Key Vault access policy.
-data "azurerm_client_config" "current" {}
-
-# ==============================================================================
-# Resource Group
-# ==============================================================================
-
-module "rg" {
-  source      = "../../modules/resource_group"
-  name        = "rg-${var.project}-lz-dev-${var.location_short}"
-  location    = var.location
-  environment = var.env
-  project     = var.project
-  owner       = var.owner
-}
-
