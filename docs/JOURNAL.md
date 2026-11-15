@@ -11268,3 +11268,47 @@ Cette PR est la première : la couche app.
 
 `terraform fmt`, `validate` et `plan` (lecture seule) OK en local. **Non vérifié :** l'`apply` réel
 et la disparition effective des coûts (à contrôler dans Cost Management 2-3 jours après).
+
+## PR #271 — Mise hors ligne : suppression de la landing zone (`envs/lz_dev`)
+
+*(Branche `chore/decommission-platform`.)*
+
+### Contexte
+
+Seconde et dernière PR de la mise hors ligne (voir PR #270). La couche application est détruite
+et l'`apply` de la CI a réussi ; il reste la couche plateforme.
+
+### Ce qui a été fait
+
+- `envs/lz_dev/` : suppression de `keyvault.tf`, `network.tf`, `outputs.tf`, `policies.tf`,
+  `rbac.tf`, `resourcegroups.tf` et du groupe de ressources de `main.tf`.
+- Conservés : `backend.tf`, `main.tf` (providers), `variables.tf`, `terraform.tfvars`.
+- Le `plan` local (lecture seule) annonce **0 à ajouter, 0 à modifier, 15 à détruire** : 3 groupes
+  de ressources, 2 politiques (définition + assignation), l'identité managée des jobs et 8 rôles.
+
+### Décisions techniques
+
+- Le VNet, les 3 subnets et le Key Vault de la landing zone avaient été supprimés à la main
+  avant cette PR. Ils étaient encore dans le state : Terraform les retire sans rien détruire.
+- Les groupes de ressources contiennent des ressources hors Terraform (annuaire Entra External ID,
+  dashboards, workbook, action group). Par défaut, le provider refuse de supprimer un RG non vide :
+  elles sont vidées **à la main avant le merge**, plutôt que de désactiver cette protection.
+- L'`apply` de `lz_dev` passe par le SP plateforme : supprimer les rôles de `sp-jf-github` ne
+  bloque pas le pipeline.
+
+### Points d'attention
+
+- **Avant le merge** : vider `rg-jf-dev-frc-core`, `-data` et `-app` dans le portail.
+- **Après l'apply** : supprimer à la main `rg-jf-tfstate-frc` (le state Terraform) et les
+  RG résiduels éventuels. Terraform en a besoin jusqu'au bout.
+- Les workflows `terraformPlan.yml` / `terraformApply.yml` restent en place pour exécuter le
+  destroy. Suite prévue, une fois le state vide : retirer `lz_dev` des deux workflows et de
+  `reviewerAgent.yml`, puis supprimer le dossier `envs/lz_dev` (dont `variables.tf`, devenu
+  inutilisé).
+- Aucun verrou `CanNotDelete` n'existe (`az lock list` vide, vérifié avant cette PR) : ils ne
+  bloqueront pas la suppression des RG.
+
+### Vérification
+
+`terraform fmt`, `validate` et `plan` (lecture seule) OK en local. **Non vérifié :** l'`apply`
+réel par la CI et la disparition effective des coûts (Cost Management, 2-3 jours après).
