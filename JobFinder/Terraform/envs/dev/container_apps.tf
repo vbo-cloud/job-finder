@@ -6,6 +6,8 @@
 # scaling, trigger, and lifecycle.
 # Naming: job names use {type}-{project}-{env}-{region}-{suffix} pattern.
 # Container App Job names are capped at 32 characters — the suffix is kept short accordingly.
+# Force-recreated 2026-06-28: CAE, webapp, and all jobs deleted manually to reset
+# the stuck KEDA azure-servicebus controller. Terraform recreates from this config.
 
 module "container_app_environment" {
   source = "../../modules/container_app_environment"
@@ -18,14 +20,19 @@ module "container_app_environment" {
   environment                = var.env
   project                    = var.project
   owner                      = var.owner
+  additional_tags            = { keda_controller_reset = "2026-06-28" }
 }
 
 # ==============================================================================
 # Agent Jobs
 # ==============================================================================
-# Agent 1 — Matching (queue: offer-ready)
+# Agent 1 — Matching (queue: start-matching)
 # Agent 2 — Cleanup (timer: 02:00 UTC)
-# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Agent 3 — Offer Fetching (queue: offer-fetch-request — event-driven, see module below)
+# Agent 4 — CV Analysis (queue: cv-analysis)
+# Agent 5 — Match Analysis (queue: match-analysis)
+# Agent 6 — Offer Fetch Scheduler (timer: 18:00 Europe/Paris local time — see module below)
+# Agent 7 — Notifications (timer: 19:00 Europe/Paris local time — see module below)
 
 data "azurerm_key_vault_secret" "ft_client_id" {
   name         = "ft-client-id"
@@ -38,11 +45,16 @@ data "azurerm_key_vault_secret" "ft_client_secret" {
 }
 
 locals {
-  postgresql_connection_string = module.postgresql.connection_string
-  openai_api_key               = module.openai.primary_key
-  openai_endpoint              = module.openai.endpoint
-  ft_client_id                 = data.azurerm_key_vault_secret.ft_client_id.value
-  ft_client_secret             = data.azurerm_key_vault_secret.ft_client_secret.value
+  postgresql_connection_string     = module.postgresql.connection_string
+  openai_endpoint                  = module.openai.endpoint
+  ft_client_id                     = data.azurerm_key_vault_secret.ft_client_id.value
+  ft_client_secret                 = data.azurerm_key_vault_secret.ft_client_secret.value
+  notifications_unsubscribe_secret = module.secret_notifications_unsubscribe.value
+  # Shared by the frontend and webapp Container Apps (see their min_replicas comment).
+  business_hours = {
+    start = "0 9 * * 1-5"
+    end   = "0 18 * * 1-5"
+  }
 }
 
 # ==============================================================================
@@ -56,7 +68,7 @@ data "azurerm_user_assigned_identity" "caj" {
   resource_group_name = data.azurerm_resource_group.rg_core.name
 }
 
-# Agent 1 — Matching (queue: offer-ready)
+# Agent 1 — Matching (queue: start-matching)
 module "job_matching" {
   source = "../../modules/container_app_job"
 
@@ -65,9 +77,8 @@ module "job_matching" {
   resource_group_name  = data.azurerm_resource_group.rg_app.name
   environment_id       = module.container_app_environment.id
   trigger_type         = "queue"
-  queue_name           = "offer-ready"
+  queue_name           = "start-matching"
   servicebus_namespace = module.servicebus.name
-  uami_client_id       = data.azurerm_user_assigned_identity.caj.client_id
   image                = "${module.container_registry.login_server}/agents/matching:latest"
   environment          = var.env
   project              = var.project
@@ -81,12 +92,12 @@ module "job_matching" {
       value = module.postgresql.connection_string
     },
     {
-      name  = "openai-api-key"
-      value = module.openai.primary_key
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
     },
     {
-      name  = "openai-endpoint"
-      value = module.openai.endpoint
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
     },
   ]
   env_vars = [
@@ -95,15 +106,11 @@ module "job_matching" {
       secret_name = "postgresql-connection-string"
     },
     {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
+      name  = "MATCHING_SCORE_THRESHOLD"
+      value = "0.5"
     },
     {
-      name        = "AZURE_OPENAI_ENDPOINT"
-      secret_name = "openai-endpoint"
-    },
-    {
-      name  = "MATCHING_TOP_K"
+      name  = "MATCH_ANALYSIS_AUTO_TOP_N"
       value = "20"
     },
     {
@@ -115,6 +122,10 @@ module "job_matching" {
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }
@@ -141,6 +152,10 @@ module "job_cleanup" {
       name  = "postgresql-connection-string"
       value = module.postgresql.connection_string
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
   ]
   env_vars = [
     {
@@ -151,11 +166,28 @@ module "job_cleanup" {
       name  = "CLEANUP_OFFER_MAX_AGE_DAYS"
       value = "60"
     },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
   ]
 }
 
-# Agent 3 — Offer Fetching (timer: 12:00 and 20:00 UTC)
+# Agent 3 — Offer Fetching (queue: offer-fetch-request)
 # Replaces offerFetch.yml GitHub Actions workflow.
+# Embeds pending offers directly (shared/embedder.py) after upsert — no distillation
+# step, hence the AZURE_OPENAI_ENDPOINT env var below (see
+# docs/prompts/prompt-remove-offer-distillation.md). Authenticates to Azure OpenAI via
+# the shared Managed Identity (AZURE_CLIENT_ID below) — no API key secret needed.
+# Event-driven since docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md:
+# this agent no longer knows the time of day at all. The DST-safe 18:00 Europe/Paris
+# full-refresh trigger (Azure Container Apps' schedule trigger only supports UTC cron
+# expressions with no timezone/DST awareness) now lives entirely in the separate
+# job_offer_fetch_scheduler below, which just publishes a message on this queue — see that
+# module's comment for the DST mechanics. A message with "rome_codes" is a targeted fetch
+# (cv_analysis, a CV's newly-merged code); one without is a full refresh (the scheduler, or a
+# manual "Run now" — which, being purely event-driven now, always runs immediately instead of
+# risking a silent no-op outside the old fixed window).
 module "job_offer_fetching" {
   source = "../../modules/container_app_job"
 
@@ -163,8 +195,9 @@ module "job_offer_fetching" {
   location                   = var.location
   resource_group_name        = data.azurerm_resource_group.rg_app.name
   environment_id             = module.container_app_environment.id
-  trigger_type               = "timer"
-  cron_expression            = "0 12,20 * * *"
+  trigger_type               = "queue"
+  queue_name                 = "offer-fetch-request"
+  servicebus_namespace       = module.servicebus.name
   replica_timeout_in_seconds = 3600
   image                      = "${module.container_registry.login_server}/agents/offer-fetching:latest"
   identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
@@ -179,10 +212,6 @@ module "job_offer_fetching" {
       value = local.postgresql_connection_string
     },
     {
-      name  = "openai-api-key"
-      value = local.openai_api_key
-    },
-    {
       name  = "ft-client-id"
       value = local.ft_client_id
     },
@@ -190,19 +219,19 @@ module "job_offer_fetching" {
       name  = "ft-client-secret"
       value = local.ft_client_secret
     },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
   ]
   env_vars = [
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
-    },
-    {
-      name  = "AZURE_OPENAI_ENDPOINT"
-      value = local.openai_endpoint
     },
     {
       name        = "FT_CLIENT_ID"
@@ -213,14 +242,277 @@ module "job_offer_fetching" {
       secret_name = "ft-client-secret"
     },
     {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
       name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
       value = "${module.servicebus.name}.servicebus.windows.net"
     },
-    # Used by DefaultAzureCredential (bus.py) to select the right UAMI.
-    # No KEDA auth here — this job is timer-triggered, not queue-triggered.
+    # Used by DefaultAzureCredential (bus.py) to select the right UAMI,
+    # and by KEDA (uami_client_id) to authenticate the Service Bus scaler.
     {
       name  = "AZURE_CLIENT_ID"
       value = data.azurerm_user_assigned_identity.caj.client_id
     },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
   ]
 }
+
+# Agent 6 — Offer Fetch Scheduler (timer: 18:00 Europe/Paris local time)
+# Relais planifié pour offer_fetching, désormais purement événementiel (voir job_offer_fetching
+# ci-dessus). Azure Container Apps' schedule trigger only supports UTC cron expressions with no
+# timezone/DST awareness — this fires at every UTC hour that could map to 18:00 Europe/Paris
+# under either CET (17 UTC) or CEST (16 UTC); the agent's own _is_scheduled_local_hour()
+# (agents/offer_fetch_scheduler/main.py) no-ops the firing that doesn't match the current DST
+# state. See docs/prompts/prompt-offer-fetching-event-driven-and-new-code-fetch.md.
+module "job_offer_fetch_scheduler" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-fetch-sched"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 16,17 * * *"
+  replica_timeout_in_seconds = 60
+  image                      = "${module.container_registry.login_server}/agents/offer-fetch-scheduler:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  secrets = [
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent notifications (timer: 19:00 Europe/Paris local time)
+# ==============================================================================
+# cron_expression covers both UTC hours that could map to 19:00 Europe/Paris under CET
+# (18 UTC) or CEST (17 UTC) — same DST-agnostic-cron pattern as job_offer_fetch_scheduler
+# above; the agent's own _is_scheduled_local_hour() (agents/notifications/main.py)
+# no-ops the firing that doesn't match the current DST state.
+# replica_timeout_in_seconds is longer than offer_fetch_scheduler's 60s (a single
+# message publish) since this job iterates every opted-in profile and sends emails
+# sequentially — revisit if the active user count grows significantly.
+module "job_notifications" {
+  source = "../../modules/container_app_job"
+
+  name                       = "job-jf-dev-frc-notifications"
+  location                   = var.location
+  resource_group_name        = data.azurerm_resource_group.rg_app.name
+  environment_id             = module.container_app_environment.id
+  trigger_type               = "timer"
+  cron_expression            = "0 17,18 * * *"
+  replica_timeout_in_seconds = 300
+  image                      = "${module.container_registry.login_server}/agents/notifications:latest"
+  identity_ids               = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server            = module.container_registry.login_server
+  registry_identity          = data.azurerm_user_assigned_identity.caj.id
+  environment                = var.env
+  project                    = var.project
+  owner                      = var.owner
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "notifications-unsubscribe-secret"
+      value = local.notifications_unsubscribe_secret
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name  = "ACS_EMAIL_ENDPOINT_HOSTNAME"
+      value = module.email_communication.hostname
+    },
+    {
+      name  = "ACS_EMAIL_SENDER_ADDRESS"
+      value = module.email_communication.sender_address
+    },
+    {
+      name  = "FRONTEND_URL"
+      value = "https://${var.frontend_custom_domain}"
+    },
+    # Base URL of the FastAPI backend itself (not the frontend) — the one-click
+    # unsubscribe link (footer + List-Unsubscribe header) must hit this agent's sibling
+    # webapp Container App directly: RFC 8058's automated POST comes from the mail
+    # client/server, never a browser, so it can't be routed through a Next.js page.
+    {
+      name  = "WEBAPP_BASE_URL"
+      value = module.webapp.fqdn
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+    {
+      name        = "NOTIFICATIONS_UNSUBSCRIBE_SECRET"
+      secret_name = "notifications-unsubscribe-secret"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent cv-analysis (queue: cv-analysis)
+# ==============================================================================
+module "job_cv_analysis" {
+  source = "../../modules/container_app_job"
+
+  name                 = "job-jf-dev-frc-cv-analysis"
+  location             = var.location
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
+  environment_id       = module.container_app_environment.id
+  trigger_type         = "queue"
+  queue_name           = "cv-analysis"
+  servicebus_namespace = module.servicebus.name
+  image                = "${module.container_registry.login_server}/agents/cv-analysis:latest"
+  environment          = var.env
+  project              = var.project
+  owner                = var.owner
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  additional_tags      = { keda_reset = "2026-06-28" }
+  max_executions       = 2
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT"
+      value = "gpt-5-mini"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+
+# ==============================================================================
+# Agent match-analysis (queue: match-analysis)
+# ==============================================================================
+module "job_match_analysis" {
+  source = "../../modules/container_app_job"
+
+  name                 = "job-jf-dev-frc-match-analysis"
+  location             = var.location
+  resource_group_name  = data.azurerm_resource_group.rg_app.name
+  environment_id       = module.container_app_environment.id
+  trigger_type         = "queue"
+  queue_name           = "match-analysis"
+  servicebus_namespace = module.servicebus.name
+  image                = "${module.container_registry.login_server}/agents/match-analysis:latest"
+  environment          = var.env
+  project              = var.project
+  owner                = var.owner
+  identity_ids         = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server      = module.container_registry.login_server
+  registry_identity    = data.azurerm_user_assigned_identity.caj.id
+  max_executions       = 8
+  secrets = [
+    {
+      name  = "postgresql-connection-string"
+      value = local.postgresql_connection_string
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
+    },
+    {
+      name  = "servicebus-connection-string"
+      value = module.servicebus.primary_connection_string
+    },
+  ]
+  env_vars = [
+    {
+      name        = "DATABASE_URL"
+      secret_name = "postgresql-connection-string"
+    },
+    {
+      name  = "AZURE_OPENAI_ENDPOINT"
+      value = local.openai_endpoint
+    },
+    {
+      name  = "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
+      value = "${module.servicebus.name}.servicebus.windows.net"
+    },
+    {
+      name  = "AZURE_OPENAI_MATCH_ANALYSIS_DEPLOYMENT"
+      value = "gpt-4o-mini"
+    },
+    {
+      name  = "AZURE_CLIENT_ID"
+      value = data.azurerm_user_assigned_identity.caj.client_id
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
+    },
+  ]
+}
+

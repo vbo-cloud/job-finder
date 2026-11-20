@@ -1,0 +1,897 @@
+"""Tests for agents/webapp/routers/profile.py.
+
+Covers: GET /profile, PUT /profile (happy path, 404, 500, partial-update
+upsert behaviour, intent_embedding recomputation, start-matching re-trigger on
+intent change), POST /credits/refill (admin-only recharge), POST
+/credits/request-more (0-credit signal + cooldown-deduplicated alert email),
+DELETE /profile (account erasure).
+"""
+import sys
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+from azure.core.exceptions import AzureError
+from azure.servicebus.exceptions import ServiceBusError
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
+
+_PYTHON_DIR = Path(__file__).parent.parent
+_WEBAPP_DIR = _PYTHON_DIR / "agents" / "webapp"
+for _d in [str(_PYTHON_DIR), str(_WEBAPP_DIR)]:
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
+
+from auth import UserIdentity, get_current_identity, get_current_user  # noqa: E402
+from dependencies import get_db  # noqa: E402
+from routers.profile import router  # noqa: E402
+
+TEST_USER_ID = "test-user-profile"
+TEST_EMAIL = "vincent@example.test"
+TEST_NAME = "Vincent Test"
+_FAKE_EMBEDDING = [0.1] * 1536
+
+
+def _make_profile() -> MagicMock:
+    profile = MagicMock()
+    profile.user_id = TEST_USER_ID
+    profile.rome_codes = {}
+    profile.commune_codes = ["75101", "75102"]
+    profile.experience_level = None
+    profile.notification_days = [7]
+    profile.candidate_description = None
+    profile.analysis_credits_remaining = 30
+    # Never dispatched before — the default cooldown-gate baseline for every test
+    # that doesn't specifically exercise the cooldown itself.
+    profile.last_intent_dispatch_at = None
+    profile.intent_updated_at = None
+    profile.more_credits_requested_at = None
+    # ProfileOut declares is_admin (computed field, not a DB column) — without a
+    # concrete value, model_validate would read a MagicMock and fail validation.
+    profile.is_admin = False
+    return profile
+
+
+@pytest.fixture()
+def mock_session() -> MagicMock:
+    session = MagicMock()
+    # Default: no CVs to re-dispatch — _dispatch_cv_reanalysis's
+    # select(CV.id).where(...).scalars().all() must return an iterable, not the bare
+    # MagicMock a fresh mock_session.execute(...) would otherwise yield. Tests that
+    # specifically cover CV reanalysis override this per-call via side_effect.
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    return session
+
+
+@pytest.fixture(autouse=True)
+def mock_send_message() -> MagicMock:
+    """Patch the Service Bus dispatch so no test ever reaches Azure."""
+    with patch("routers.profile.send_message") as mock:
+        yield mock
+
+
+def _build_client(mock_session, identity: UserIdentity | None = None) -> TestClient:
+    ident = identity or UserIdentity(
+        user_id=TEST_USER_ID, email=TEST_EMAIL, display_name=TEST_NAME
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: ident.user_id
+    app.dependency_overrides[get_current_identity] = lambda: ident
+    app.dependency_overrides[get_db] = lambda: (yield mock_session)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture()
+def test_client(mock_session) -> TestClient:
+    return _build_client(mock_session)
+
+
+# ---------------------------------------------------------------------------
+# GET /profile
+# ---------------------------------------------------------------------------
+
+
+class TestGetProfile:
+    def test_returns_profile_when_found(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["user_id"] == TEST_USER_ID
+        assert body["commune_codes"] == ["75101", "75102"]
+        assert body["notification_days"] == [7]
+        assert body["analysis_credits_remaining"] == 30
+
+    def test_creates_profile_with_defaults_on_first_get(self, test_client, mock_session):
+        """A user who reaches GET /profile before ever uploading a CV or calling
+        PUT /profile must get their profile created with default values —
+        including the 30 welcome credits — rather than a 404."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["analysis_credits_remaining"] == 30
+        assert body["notification_days"] == [7]
+        mock_session.commit.assert_called_once()
+
+    def test_does_not_create_when_profile_exists(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        mock_session.commit.assert_not_called()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 500
+
+    def test_is_admin_false_for_regular_user(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is False
+
+    def test_is_admin_true_when_user_in_admin_list(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = _make_profile()
+
+        with patch("auth.ADMIN_USER_IDS", frozenset({TEST_USER_ID})):
+            resp = test_client.get("/profile")
+
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is True
+
+
+# ---------------------------------------------------------------------------
+# PUT /profile
+# ---------------------------------------------------------------------------
+
+
+class TestPutProfile:
+    _PUT_BODY = {
+        "commune_codes": ["69381", "69382"],
+    }
+
+    def test_creates_or_updates_profile_and_returns_it(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.commune_codes = self._PUT_BODY["commune_codes"]
+        # upsert execute + select scalar_one
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json=self._PUT_BODY)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["commune_codes"] == ["69381", "69382"]
+        mock_session.commit.assert_called_once()
+        mock_embed.assert_not_called()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.put("/profile", json=self._PUT_BODY)
+
+        assert resp.status_code == 500
+
+    def test_only_commune_codes_does_not_recompute_intent(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_only_notification_days_does_not_recompute_intent(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"notification_days": [1, 3, 5]})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_notification_days_empty_list_disables_without_reverting_to_default(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.notification_days = []
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"notification_days": []})
+
+        assert resp.status_code == 200
+        assert resp.json()["notification_days"] == []
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["notification_days"] == []
+
+    def test_notification_days_absent_defaults_insert_values_to_sunday(
+        self, test_client, mock_session
+    ):
+        """A PUT that never mentions notification_days (e.g. commune_codes
+        only) must still carry the [7] default in the INSERT .values() clause
+        — `updated.get("notification_days") or []` would collapse "key
+        absent" into "[]" here, the exact trap documented in
+        routers/profile.py, and clobber a brand-new profile's default on the
+        insert path."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        insert_values = stmt.compile().params
+        assert insert_values["notification_days"] == [7]
+
+    def test_experience_and_candidate_description_recomputes_intent_embedding(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]) as mock_embed:
+            resp = test_client.put(
+                "/profile",
+                json={"experience_level": "0-2", "candidate_description": "profil autodidacte"},
+            )
+
+        assert resp.status_code == 200
+        mock_embed.assert_called_once_with(["profil autodidacte"])
+
+    @pytest.mark.parametrize("experience_level", ["0-2", "2-5", "5+"])
+    def test_experience_level_alone_never_recomputes_embedding(
+        self, test_client, mock_session, experience_level
+    ):
+        """experience_level only feeds the matching malus, never the embedded
+        text — setting it alone (no candidate_description change) must never
+        call embed()."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": experience_level})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_partial_put_preserves_existing_candidate_description_in_intent(
+        self, test_client, mock_session
+    ):
+        """A PUT that only clears experience_level, with candidate_description
+        unchanged, must not recompute the embedding at all — and must not
+        overwrite the already-stored intent_embedding in the upsert."""
+        profile = _make_profile()
+        profile.candidate_description = "profil autodidacte"
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": None})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+        # call 0 is the existing-row lookup for the intent fallback, call 1 is
+        # the upsert itself (see put_profile).
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "intent_embedding" not in set_clause
+
+    def test_intent_fields_present_but_empty_clears_embedding_without_calling_embed(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put(
+                "/profile",
+                json={
+                    "experience_level": None,
+                    "candidate_description": None,
+                },
+            )
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_empty_body_uses_on_conflict_do_nothing_without_error(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+
+    def test_candidate_description_over_1000_chars_returns_422(self, test_client, mock_session):
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"candidate_description": "a" * 1001})
+
+        assert resp.status_code == 422
+        mock_embed.assert_not_called()
+
+    def test_intent_change_dispatches_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile",
+                json={"experience_level": "2-5", "candidate_description": "profil autodidacte"},
+            )
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+        queue, body = mock_send_message.call_args.args
+        assert queue == "start-matching"
+        assert body["trigger"] == "profile_update"
+        assert body["rome_codes"] == []
+
+    def test_experience_level_alone_still_dispatches_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        """experience_level alone must still re-trigger matching (the malus
+        depends on it) even though it no longer recomputes the embedding —
+        the two triggers are decoupled, not both suppressed together."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": "2-5"})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+        mock_send_message.assert_called_once()
+        queue, body = mock_send_message.call_args.args
+        assert queue == "start-matching"
+
+    def test_unchanged_intent_values_do_not_dispatch_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.experience_level = "2-5"
+        profile.candidate_description = "profil autodidacte"
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile",
+                json={"experience_level": "2-5", "candidate_description": "profil autodidacte"},
+            )
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_commune_codes_only_does_not_dispatch_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_put_refreshes_identity_claims_in_upsert(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = test_client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        # _post_values_clause is SQLAlchemy-private but stable: it holds the
+        # ON CONFLICT DO UPDATE SET pairs passed to on_conflict_do_update(set_=...).
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["email"] == TEST_EMAIL
+        assert set_clause["display_name"] == TEST_NAME
+
+    def test_put_with_claimless_token_does_not_clobber_stored_identity(self, mock_session):
+        client = _build_client(
+            mock_session,
+            UserIdentity(user_id=TEST_USER_ID, email=None, display_name=None),
+        )
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        resp = client.put("/profile", json={"commune_codes": ["75101"]})
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[0].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "email" not in set_clause
+        assert "display_name" not in set_clause
+
+    def test_start_matching_dispatch_failure_does_not_fail_request(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_send_message.side_effect = ServiceBusError("Service Bus unavailable")
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+
+    def test_description_change_stamps_intent_updated_at(self, test_client, mock_session):
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["intent_updated_at"] is not None
+
+    def test_first_time_description_stamps_intent_updated_at_on_insert_path(
+        self, test_client, mock_session
+    ):
+        """No existing profile row (existing = None, the brand-new-user path):
+        description_changed is computed against that None fallback, so the
+        INSERT .values() clause must carry intent_updated_at too — not
+        just the ON CONFLICT UPDATE set_ clause covered by the test above."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        insert_values = stmt.compile().params
+        assert insert_values["intent_updated_at"] is not None
+
+    def test_experience_level_alone_stamps_intent_updated_at(
+        self, test_client, mock_session
+    ):
+        """experience_level alone never recomputes the embedding, but it does
+        still count as an intent change — match_analysis's own prompt context
+        (agents/match_analysis/main.py) renders experience_level too, so a
+        change there makes existing match analyses stale (see routers/matches.py
+        _mark_stale), not just a candidate_description change."""
+        profile = _make_profile()
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed") as mock_embed:
+            resp = test_client.put("/profile", json={"experience_level": "2-5"})
+
+        assert resp.status_code == 200
+        mock_embed.assert_not_called()
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["intent_updated_at"] is not None
+
+    def test_unchanged_description_value_does_not_stamp_intent_updated_at(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.candidate_description = "profil autodidacte"
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "profil autodidacte"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert "intent_updated_at" not in set_clause
+
+
+# ---------------------------------------------------------------------------
+# PUT /profile — intent-change dispatch cooldown (start-matching + CV reanalysis)
+# ---------------------------------------------------------------------------
+
+
+class TestPutProfileIntentDispatchCooldown:
+    def _setup(self, mock_session, profile, cv_ids=()) -> None:
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_session.execute.return_value.scalars.return_value.all.return_value = list(cv_ids)
+
+    def test_first_ever_dispatch_is_never_throttled(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = None
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+
+    def test_dispatch_within_cooldown_is_throttled(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_dispatch_after_cooldown_expires_is_allowed(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=400)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+
+    def test_throttled_put_still_saves_profile_and_stamps_intent_updated_at(
+        self, test_client, mock_session, mock_send_message
+    ):
+        """The profile (and intent_updated_at) must always save immediately —
+        only the recompute dispatch itself is delayed by the cooldown."""
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile)
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put(
+                "/profile", json={"candidate_description": "nouvelle intention"}
+            )
+
+        assert resp.status_code == 200
+        stmt = mock_session.execute.call_args_list[1].args[0]
+        set_clause = dict(stmt._post_values_clause.update_values_to_set)
+        assert set_clause["candidate_description"] == "nouvelle intention"
+        assert set_clause["intent_updated_at"] is not None
+        assert "last_intent_dispatch_at" not in set_clause
+        mock_send_message.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PUT /profile — automatic CV reanalysis dispatch on intent change
+# ---------------------------------------------------------------------------
+
+
+class TestPutProfileCvReanalysisDispatch:
+    def _setup(self, mock_session, profile, cv_ids=()) -> None:
+        mock_session.execute.return_value.scalar_one.return_value = profile
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+        mock_session.execute.return_value.scalars.return_value.all.return_value = list(cv_ids)
+
+    def test_dispatches_cv_analysis_for_every_cv_without_retry_flags(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        cv_id_1, cv_id_2 = uuid.uuid4(), uuid.uuid4()
+        self._setup(mock_session, profile, cv_ids=[cv_id_1, cv_id_2])
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        queues = [c.args[0] for c in mock_send_message.call_args_list]
+        assert queues.count("start-matching") == 1
+        assert queues.count("cv-analysis") == 2
+        cv_analysis_bodies = [
+            c.args[1] for c in mock_send_message.call_args_list if c.args[0] == "cv-analysis"
+        ]
+        assert {b["cv_id"] for b in cv_analysis_bodies} == {str(cv_id_1), str(cv_id_2)}
+        assert all(
+            "retry_rome_only" not in b and "retry_quality_only" not in b
+            for b in cv_analysis_bodies
+        )
+
+    def test_no_cvs_dispatches_only_start_matching(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        self._setup(mock_session, profile, cv_ids=[])
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_called_once()
+        assert mock_send_message.call_args.args[0] == "start-matching"
+
+    def test_throttled_dispatch_skips_cv_reanalysis_too(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        profile.last_intent_dispatch_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        self._setup(mock_session, profile, cv_ids=[uuid.uuid4()])
+
+        with patch("routers.profile.INTENT_DISPATCH_COOLDOWN_SECONDS", 300), patch(
+            "routers.profile.embed", return_value=[_FAKE_EMBEDDING]
+        ):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        mock_send_message.assert_not_called()
+
+    def test_one_cv_dispatch_failure_does_not_block_others_or_fail_request(
+        self, test_client, mock_session, mock_send_message
+    ):
+        profile = _make_profile()
+        cv_id_1, cv_id_2 = uuid.uuid4(), uuid.uuid4()
+        self._setup(mock_session, profile, cv_ids=[cv_id_1, cv_id_2])
+        # start-matching succeeds, first CV fails, second CV still gets sent.
+        mock_send_message.side_effect = [None, ServiceBusError("boom"), None]
+
+        with patch("routers.profile.embed", return_value=[_FAKE_EMBEDDING]):
+            resp = test_client.put("/profile", json={"experience_level": "5+"})
+
+        assert resp.status_code == 200
+        assert mock_send_message.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/credits/refill
+# ---------------------------------------------------------------------------
+
+
+class TestRefillCredits:
+    _ADMIN_PATCH = patch("auth.ADMIN_USER_IDS", frozenset({TEST_USER_ID}))
+
+    def test_returns_403_for_non_admin_without_touching_db(self, test_client, mock_session):
+        resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 403
+        mock_session.execute.assert_not_called()
+
+    def test_admin_refill_returns_new_balance_and_commits(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = 40
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"analysis_credits_remaining": 40}
+        mock_session.commit.assert_called_once()
+
+    def test_returns_404_when_admin_has_no_profile(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 404
+        mock_session.rollback.assert_called_once()
+        mock_session.commit.assert_not_called()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        with self._ADMIN_PATCH:
+            resp = test_client.post("/profile/credits/refill")
+
+        assert resp.status_code == 500
+        mock_session.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/credits/request-more
+# ---------------------------------------------------------------------------
+
+
+class TestRequestMoreCredits:
+    def test_noops_when_credits_remain(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 5
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_not_called()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_noops_when_no_profile(self, test_client, mock_session):
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_not_called()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_sends_alert_email_and_stamps_timestamp_at_zero_credits(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        profile.display_name = "Jane Doe"
+        profile.email = "jane@test.example.com"
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_session.commit.assert_called_once()
+        mock_email_client.begin_send.assert_called_once()
+        message = mock_email_client.begin_send.call_args.args[0]
+        assert message["recipients"]["to"][0]["address"] == "owner@test.example.com"
+        assert message["content"]["subject"] == "CREDITS REQUEST : Jane Doe"
+        assert message["content"]["plainText"] == (
+            "Demande de crédit faite par : \n"
+            "Nom : Jane Doe\n"
+            "Mail : jane@test.example.com\n"
+            f"user id : {TEST_USER_ID}"
+        )
+
+    def test_deduplicates_email_within_cooldown_without_restamping(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", 86400), patch(
+            "routers.profile._email_client"
+        ) as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        # A deduplicated click never touches the DB — only a successful send restamps
+        # more_credits_requested_at (see the failure/retry tests below).
+        mock_session.commit.assert_not_called()
+        mock_email_client.begin_send.assert_not_called()
+
+    def test_sends_email_again_once_cooldown_has_expired(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = datetime.now(timezone.utc) - timedelta(seconds=90000)
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile.MORE_CREDITS_REQUEST_COOLDOWN_SECONDS", 86400), patch(
+            "routers.profile._email_client"
+        ) as mock_email_client:
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        mock_email_client.begin_send.assert_called_once()
+
+    def test_acs_failure_is_tolerated_returns_202_and_does_not_start_a_cooldown(
+        self, test_client, mock_session
+    ):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            mock_email_client.begin_send.side_effect = AzureError("ACS down")
+            resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 202
+        # A failed send must not stamp more_credits_requested_at — otherwise the next
+        # click would be silently deduplicated for 24h without Vincent ever being
+        # alerted (see test_retries_immediately_after_a_failed_send below).
+        mock_session.commit.assert_not_called()
+
+    def test_retries_immediately_after_a_failed_send(self, test_client, mock_session):
+        profile = _make_profile()
+        profile.analysis_credits_remaining = 0
+        profile.more_credits_requested_at = None
+        mock_session.execute.return_value.scalar_one_or_none.return_value = profile
+
+        with patch("routers.profile._email_client") as mock_email_client:
+            mock_email_client.begin_send.side_effect = [AzureError("ACS down"), MagicMock()]
+
+            first = test_client.post("/profile/credits/request-more")
+            second = test_client.post("/profile/credits/request-more")
+
+        assert first.status_code == 202
+        assert second.status_code == 202
+        # Not deduplicated on the second attempt — the first failure never stamped
+        # more_credits_requested_at, so profile.more_credits_requested_at is still
+        # None going into the second call.
+        assert mock_email_client.begin_send.call_count == 2
+        mock_session.commit.assert_called_once()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        resp = test_client.post("/profile/credits/request-more")
+
+        assert resp.status_code == 500
+        mock_session.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DELETE /profile
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteAccount:
+    def test_no_cvs_is_idempotent_and_returns_204(self, test_client, mock_session):
+        mock_session.execute.return_value.scalars.return_value.all.return_value = []
+
+        with patch("routers.profile._delete_cv") as mock_delete_cv:
+            resp = test_client.delete("/profile")
+
+        assert resp.status_code == 204
+        mock_delete_cv.assert_not_called()
+        mock_session.commit.assert_called_once()
+
+    def test_deletes_every_cv_owned_by_user(self, test_client, mock_session):
+        cv1, cv2 = MagicMock(), MagicMock()
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [cv1, cv2]
+
+        with patch("routers.profile._delete_cv") as mock_delete_cv:
+            resp = test_client.delete("/profile")
+
+        assert resp.status_code == 204
+        assert mock_delete_cv.call_count == 2
+        mock_delete_cv.assert_any_call(mock_session, cv1, TEST_USER_ID)
+        mock_delete_cv.assert_any_call(mock_session, cv2, TEST_USER_ID)
+        mock_session.commit.assert_called_once()
+
+    def test_returns_500_on_db_error(self, test_client, mock_session):
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+
+        with patch("routers.profile._delete_cv") as mock_delete_cv:
+            resp = test_client.delete("/profile")
+
+        assert resp.status_code == 500
+        mock_delete_cv.assert_not_called()

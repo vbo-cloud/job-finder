@@ -39,13 +39,19 @@ variable "owner" {
   description = "Owner email address applied to resource tags."
 }
 
+variable "local_auth_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether API-key (local) authentication remains allowed on the account, in addition to Entra ID. Set to false once every consumer has migrated to Managed Identity — see docs/BACKLOG.md hardening item."
+}
+
 variable "deployments" {
   description = "Map of model deployments. Key = deployment name."
   type = map(object({
     model_name    = string
     model_version = string
     capacity_tpm  = number # Tokens per minute in thousands (e.g. 10 = 10K TPM)
-    sku_name      = string # Deployment SKU: "Standard" or "GlobalStandard"
+    sku_name      = string # Deployment SKU: "Standard" (regional), "DataZoneStandard" (EU) or "GlobalStandard" (worldwide)
   }))
 
   validation {
@@ -54,7 +60,7 @@ variable "deployments" {
   }
 
   validation {
-    condition     = alltrue([for d in var.deployments : contains(["Standard", "GlobalStandard"], d.sku_name)])
-    error_message = "All deployment sku_name values must be 'Standard' or 'GlobalStandard'."
+    condition     = alltrue([for d in var.deployments : contains(["Standard", "DataZoneStandard", "GlobalStandard"], d.sku_name)])
+    error_message = "All deployment sku_name values must be 'Standard', 'DataZoneStandard' or 'GlobalStandard'."
   }
 }

@@ -53,15 +53,108 @@ variable "env" {
   default     = "dev"
 }
 
+variable "alert_email" {
+  description = "Email address to notify on monitoring alerts."
+  type        = string
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+\\.[^@]+$", var.alert_email))
+    error_message = "alert_email must be a valid email address."
+  }
+}
+
+variable "admin_user_ids" {
+  type        = string
+  default     = ""
+  description = "Comma-separated Entra External ID user IDs (JWT sub claims) granted in-app admin features in the webapp (e.g. the credits refill button). Empty string means no admins — the feature is simply disabled."
+}
+
+variable "portfolio_contact_function_url" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "URL of the portfolio repo's sendContactEmail Azure Function, called server-to-server by the webapp's POST /feedback endpoint. Not a secret in the confidentiality sense — an anonymous-auth HTTP Function URL — but left empty by default since it's only known after that Function is deployed; empty string means the feedback endpoint returns 502 until this is set (see docs/JOURNAL.md). Marked sensitive = true purely as log hygiene: this repo is public, so it keeps the value out of terraform plan's formatted diff in CI logs, on top of the GitHub Actions secret already masking it at the raw-text level."
+}
+
+variable "frontend_custom_domain" {
+  type        = string
+  default     = "jobfinder.vincentboutin.dev"
+  description = "Custom domain for the frontend Container App. Not yet bound to an azurerm_container_app_custom_domain resource -- that binding lands in a follow-up PR once DNS propagation is confirmed (see docs/JOURNAL.md, PR #191). Referenced now so CORS_ALLOWED_ORIGINS and that future binding share a single source of truth instead of duplicating the literal."
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.frontend_custom_domain))
+    error_message = "frontend_custom_domain must be a valid DNS hostname (e.g. jobfinder.vincentboutin.dev)."
+  }
+}
+
+variable "notification_sender_domain" {
+  type        = string
+  default     = "vincentboutin.dev"
+  description = "Custom domain used as the sender for the notification agent's digest emails (Azure Communication Services Email, CustomerManaged domain). DNS records proving ownership (see the email_verification_records output) must be added manually at the domain's DNS host before Azure marks it Verified — same pattern as frontend_custom_domain (PR #191)."
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.notification_sender_domain))
+    error_message = "notification_sender_domain must be a valid DNS hostname (e.g. vincentboutin.dev)."
+  }
+}
+
+variable "notification_sender_username" {
+  type        = string
+  default     = "jobfinder_donotreply"
+  description = "Local part of the notification digest sender address (e.g. jobfinder_donotreply for jobfinder_donotreply@vincentboutin.dev)."
+
+  validation {
+    condition     = can(regex("^[a-z0-9._-]+$", var.notification_sender_username))
+    error_message = "notification_sender_username must contain only lowercase letters, digits, dots, underscores, or hyphens."
+  }
+}
+
+variable "budget_amount" {
+  type = number
+  # Azure bills in the subscription's billing currency (check the portal —
+  # commonly EUR, not USD, for a France-based subscription). This value is a
+  # bare number in whatever that currency is; it is not converted.
+  default     = 40
+  description = "Monthly budget amount for the rg_app resource group, in the subscription's billing currency, that triggers a cost-drift alert at 100% (see monitoring.tf's azurerm_consumption_budget_resource_group)."
+
+  validation {
+    condition     = var.budget_amount > 0
+    error_message = "budget_amount must be greater than 0."
+  }
+}
+
 variable "openai_capacity_tpm" {
   type    = number
   default = 1000
-  # Single variable shared by gpt-4o-mini and text-embedding-3-small.
-  # If the two models ever need independent quotas, split into two variables.
-  description = "Token per minute quota (in thousands) for all Azure OpenAI model deployments. 1000 = 1M TPM. Each apply resets any manual portal change — update here to change the quota."
+  # Shared by gpt-4o-mini and text-embedding-3-small (gpt-5-mini has its own —
+  # see openai_capacity_tpm_gpt5_mini). Both models have ample DataZoneStandard
+  # quota at francecentral (3000 and 2000 respectively), so 1000 fits.
+  description = "Token per minute quota (in thousands) for the gpt-4o-mini and text-embedding-3-small deployments. 1000 = 1M TPM. Each apply resets any manual portal change — update here to change the quota."
 
   validation {
     condition     = var.openai_capacity_tpm > 0
     error_message = "openai_capacity_tpm must be greater than 0."
   }
+}
+
+variable "openai_capacity_tpm_gpt5_mini" {
+  type    = number
+  default = 500
+  # Dedicated because gpt-5-mini's DataZoneStandard quota at francecentral is
+  # only 670 (in thousands), well below the 1M shared default — a higher value
+  # fails at apply. 500 (0.5M TPM) leaves headroom and is far above this
+  # portfolio's real usage. Raising it past ~670 requires an Azure quota
+  # increase first (Global routing was worldwide and had a larger quota; the EU
+  # data zone trades some quota for residency).
+  description = "Token per minute quota (in thousands) for the gpt-5-mini deployment. Capped by the DataZoneStandard gpt-5-mini quota at francecentral (currently 670). 500 = 0.5M TPM."
+
+  validation {
+    condition     = var.openai_capacity_tpm_gpt5_mini > 0
+    error_message = "openai_capacity_tpm_gpt5_mini must be greater than 0."
+  }
+}
+
+variable "enable_jumpbox" {
+  type        = bool
+  default     = false
+  description = "Deploy the jumpbox VM used (via Azure Bastion) to reach PostgreSQL. Disabled by default: even deallocated, its OS disk is billed. Set to true when a manual DB session is needed."
 }

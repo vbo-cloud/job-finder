@@ -26,6 +26,31 @@ resource "azurerm_container_app" "this" {
 
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
+
+    # Business-hours mode: min_replicas stays 0 and a KEDA cron rule holds the desired
+    # replica count between start and end. The HTTP rule is required alongside it, otherwise
+    # nothing wakes the app for a request received outside the window.
+    dynamic "custom_scale_rule" {
+      for_each = var.active_hours != null ? [var.active_hours] : []
+      content {
+        name             = "business-hours"
+        custom_rule_type = "cron"
+        metadata = {
+          timezone        = custom_scale_rule.value.timezone
+          start           = custom_scale_rule.value.start
+          end             = custom_scale_rule.value.end
+          desiredReplicas = tostring(custom_scale_rule.value.desired_replicas)
+        }
+      }
+    }
+
+    dynamic "http_scale_rule" {
+      for_each = var.active_hours != null ? [1] : []
+      content {
+        name                = "http-wake-up"
+        concurrent_requests = "10"
+      }
+    }
   }
 
   dynamic "secret" {

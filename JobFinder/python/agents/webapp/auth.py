@@ -2,6 +2,7 @@
 
 import os
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -24,14 +25,40 @@ ENTRA_EXTERNAL_CLIENT_ID = os.environ.get("ENTRA_EXTERNAL_CLIENT_ID")
 if not ENTRA_EXTERNAL_CLIENT_ID:
     raise ValueError("ENTRA_EXTERNAL_CLIENT_ID environment variable is not set")
 
+# Comma-separated Entra user IDs (JWT sub claims) granted in-app admin features
+# (e.g. the credits refill button). Deliberately optional with an empty default —
+# an unset variable means "no admins", never a broken deployment.
+ADMIN_USER_IDS = frozenset(
+    uid.strip()
+    for uid in os.environ.get("ADMIN_USER_IDS", "").split(",")
+    if uid.strip()
+)
+
 JWKS_URL = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/discovery/v2.0/keys"
-ISSUER = f"https://jobfinderapp.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
+# Entra External ID issues tokens with the tenant GUID as the subdomain regardless
+# of the custom domain used during authentication. The iss claim takes the form
+# https://{tenant_id}.ciamlogin.com/{tenant_id}/v2.0 — not the custom domain.
+ISSUER = f"https://{ENTRA_EXTERNAL_TENANT_ID}.ciamlogin.com/{ENTRA_EXTERNAL_TENANT_ID}/v2.0"
 JWKS_TTL_SECONDS = 86400  # 24h — Entra External ID rotates keys infrequently
 
 _jwks_cache: dict[str, Any] = {}
 _jwks_cached_at: float = 0.0
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@dataclass(frozen=True)
+class UserIdentity:
+    """Identity claims extracted from a validated JWT.
+
+    email and display_name are None when the Entra External ID user flow does
+    not emit the corresponding claims in the access token — callers must treat
+    them as best-effort metadata, never as required fields.
+    """
+
+    user_id: str
+    email: str | None
+    display_name: str | None
 
 
 def _fetch_jwks() -> dict[str, Any]:
@@ -92,10 +119,10 @@ def _decode_token(token: str, jwks: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def get_current_user(
+def get_current_identity(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-) -> str:
-    """FastAPI dependency — validate the Bearer JWT and return the user ID.
+) -> UserIdentity:
+    """FastAPI dependency — validate the Bearer JWT and return identity claims.
 
     On a generic JWTError (signature verification failure), the cached JWKS is
     refreshed once and the decode is retried. This handles key rotation that
@@ -105,7 +132,8 @@ def get_current_user(
         credentials: HTTP Bearer credentials extracted from the Authorization header.
 
     Returns:
-        The ``sub`` claim from the validated JWT as a string (user ID).
+        UserIdentity with the ``sub`` claim as user_id, plus the email and
+        name claims when the token carries them (None otherwise).
 
     Raises:
         HTTPException: 401 if the token is absent, malformed, expired, or has invalid claims.
@@ -160,4 +188,66 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    email = payload.get("email")
+    if email is None:
+        # Some Entra External ID / B2C user flows emit a list-valued "emails"
+        # claim instead of the singular "email".
+        emails = payload.get("emails")
+        if isinstance(emails, list) and emails:
+            email = emails[0]
+
+    return UserIdentity(
+        user_id=user_id,
+        email=email,
+        display_name=payload.get("name"),
+    )
+
+
+def get_current_user(
+    identity: UserIdentity = Depends(get_current_identity),
+) -> str:
+    """FastAPI dependency — validate the Bearer JWT and return the user ID.
+
+    Thin wrapper over get_current_identity for the many endpoints that only
+    need the ``sub`` claim.
+
+    Args:
+        identity: Identity claims extracted from the validated JWT.
+
+    Returns:
+        The ``sub`` claim from the validated JWT as a string (user ID).
+    """
+    return identity.user_id
+
+
+def is_admin(user_id: str) -> bool:
+    """Return whether this user ID is granted in-app admin features.
+
+    Args:
+        user_id: Authenticated user ID (JWT sub claim).
+
+    Returns:
+        True if the user ID appears in the ADMIN_USER_IDS environment variable.
+    """
+    return user_id in ADMIN_USER_IDS
+
+
+def get_current_admin_user(user_id: str = Depends(get_current_user)) -> str:
+    """FastAPI dependency — like get_current_user, but restricted to admins.
+
+    Args:
+        user_id: Authenticated user ID from the JWT sub claim.
+
+    Returns:
+        The authenticated admin's user ID.
+
+    Raises:
+        HTTPException: 403 if the authenticated user is not an admin.
+    """
+    if not is_admin(user_id):
+        logger.info("auth_admin_denied", user_id=user_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
     return user_id

@@ -26,14 +26,18 @@ module "webapp" {
   image               = "${module.container_registry.login_server}/agents/webapp:latest"
   cpu                 = 0.5
   memory              = "1Gi"
-  min_replicas        = 0
-  max_replicas        = 1
-  identity_ids        = [data.azurerm_user_assigned_identity.caj.id]
-  registry_server     = module.container_registry.login_server
-  registry_identity   = data.azurerm_user_assigned_identity.caj.id
-  environment         = var.env
-  project             = var.project
-  owner               = var.owner
+  # Cost: 1 replica only Mon-Fri 09:00-18:00 Europe/Paris (cron rule), scale-to-zero otherwise.
+  # Trade-off vs the always-on setup of PR #210: a cold start (a few seconds) for the first
+  # request outside business hours. See local.business_hours in container_apps.tf.
+  min_replicas      = 0
+  max_replicas      = 1
+  active_hours      = local.business_hours
+  identity_ids      = [data.azurerm_user_assigned_identity.caj.id]
+  registry_server   = module.container_registry.login_server
+  registry_identity = data.azurerm_user_assigned_identity.caj.id
+  environment       = var.env
+  project           = var.project
+  owner             = var.owner
 
   secrets = [
     {
@@ -41,12 +45,16 @@ module "webapp" {
       value = module.postgresql.connection_string
     },
     {
-      name  = "openai-api-key"
-      value = module.openai.primary_key
-    },
-    {
       name  = "entra-external-client-secret"
       value = data.azurerm_key_vault_secret.entra_client_secret.value
+    },
+    {
+      name  = "notifications-unsubscribe-secret"
+      value = local.notifications_unsubscribe_secret
+    },
+    {
+      name  = "appinsights-connection-string"
+      value = module.application_insights.connection_string
     },
   ]
 
@@ -54,10 +62,6 @@ module "webapp" {
     {
       name        = "DATABASE_URL"
       secret_name = "postgresql-connection-string"
-    },
-    {
-      name        = "AZURE_OPENAI_API_KEY"
-      secret_name = "openai-api-key"
     },
     {
       name  = "AZURE_OPENAI_ENDPOINT"
@@ -89,6 +93,50 @@ module "webapp" {
     {
       name        = "ENTRA_EXTERNAL_CLIENT_SECRET"
       secret_name = "entra-external-client-secret"
+    },
+    {
+      name        = "NOTIFICATIONS_UNSUBSCRIBE_SECRET"
+      secret_name = "notifications-unsubscribe-secret"
+    },
+    # Frontend origins allowed to call the API cross-origin. var.frontend_custom_domain is
+    # the single source of truth shared with the future custom domain binding (PR 2).
+    {
+      name  = "CORS_ALLOWED_ORIGINS"
+      value = "http://localhost:3000,https://${var.frontend_custom_domain}"
+    },
+    # Entra user IDs (JWT sub) granted in-app admin features. Opaque GUIDs,
+    # not credentials — authorization still requires a valid signed JWT for
+    # that sub, so a plain env var (not a secret) is intentional.
+    {
+      name  = "ADMIN_USER_IDS"
+      value = var.admin_user_ids
+    },
+    # Anonymous-auth Azure Function URL (portfolio repo) — semi-public by
+    # design, not a secret. Left empty until Vincent provisions the value
+    # (see docs/JOURNAL.md); POST /feedback degrades to a 502 until then.
+    {
+      name  = "PORTFOLIO_CONTACT_FUNCTION_URL"
+      value = var.portfolio_contact_function_url
+    },
+    # ACS email — already used by job_notifications (container_apps.tf); the webapp needs
+    # the same two values to send the "more credits requested" alert (POST
+    # /credits/request-more). No new RBAC: caj already holds Communication and Email
+    # Service Owner on the ACS resource (see lz_dev/rbac.tf's caj_communication_owner).
+    {
+      name  = "ACS_EMAIL_ENDPOINT_HOSTNAME"
+      value = module.email_communication.hostname
+    },
+    {
+      name  = "ACS_EMAIL_SENDER_ADDRESS"
+      value = module.email_communication.sender_address
+    },
+    {
+      name  = "OWNER_ALERT_EMAIL"
+      value = var.alert_email
+    },
+    {
+      name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+      secret_name = "appinsights-connection-string"
     },
   ]
 }

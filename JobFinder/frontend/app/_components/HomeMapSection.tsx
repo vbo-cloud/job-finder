@@ -1,0 +1,382 @@
+"use client";
+
+import { useIsAuthenticated } from "@azure/msal-react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+  type Ref,
+} from "react";
+
+import apiClient from "@/lib/api/client";
+import type { ProfileData } from "@/lib/api/types";
+
+import MapSection from "./MapSection";
+import ScrollHint from "./ScrollHint";
+import UploadSection, { type UploadSectionHandle } from "./UploadSection";
+
+export type Mode = "cv" | "to-map" | "map" | "to-cv";
+
+/** Duration of the camera focus-pull — single source of truth for the mode
+ * timers, the CSS layer transitions and the lens keyframe animation below. */
+const TRANSITION_MS = 425;
+
+/** Delay before auto-saving the painted zone to the profile (flushed
+ * immediately when leaving the map mode). */
+const SAVE_DEBOUNCE_MS = 800;
+
+/** Scrolling down over the map exits the map mode only once the view has
+ * been fully zoomed out for this long — the grace period keeps the wheel
+ * momentum of the final zoom-out from overshooting into an exit. Tuned by
+ * hand: the trailing wheel ticks of a fast zoom-out land within well under
+ * 200ms of the settling zoomend, while a deliberate second scroll takes
+ * longer than that — raise/lower with that trade-off in mind. */
+const MIN_ZOOM_EXIT_HOLD_MS = 200;
+
+/** Light blur only on the backgrounded map: its borders must stay readable
+ * behind the CV layer. The CV layer can afford a strong defocus. */
+const MAP_BLUR = "blur(4px)";
+const CV_BLUR = "blur(14px)";
+
+const LAYER_TRANSITION = ["filter", "opacity", "transform"]
+  .map((prop) => `${prop} ${TRANSITION_MS}ms ease-in-out`)
+  .join(", ");
+
+/* The layer styles are target values only: switching mode changes the
+ * targets and the CSS transitions animate towards them. Both layers stay
+ * mounted and laid out in every mode (opacity/filter/transform only — never
+ * display/visibility/unmount, which would break Leaflet's size handling). */
+
+function cvLayerStyle(mode: Mode): CSSProperties {
+  const focused = mode === "cv" || mode === "to-cv";
+  return {
+    transition: LAYER_TRANSITION,
+    filter: focused ? "none" : CV_BLUR,
+    opacity: focused ? 1 : 0,
+    transform: focused ? "scale(1)" : "scale(1.12)",
+    // "to-cv" keeps pointer-events off until the transition has fully landed.
+    pointerEvents: mode === "cv" ? "auto" : "none",
+  };
+}
+
+function mapLayerStyle(mode: Mode): CSSProperties {
+  const focused = mode === "map" || mode === "to-map";
+  return {
+    transition: LAYER_TRANSITION,
+    filter: focused ? "none" : MAP_BLUR,
+    // Never 0 outside the map mode: the map stays visible, centred and
+    // blurred, behind the CV layer at all times. Scaling around the centre
+    // keeps the map seated at the same spot in both modes — the offset that
+    // seats France on the CV icon lives in the embedded MapContainer
+    // geometry (CommuneZonePicker), not in this transform.
+    opacity: focused ? 1 : 0.3,
+    transform: focused ? "scale(1)" : "scale(0.94)",
+    pointerEvents: mode === "map" ? "auto" : "none",
+  };
+}
+
+const LENS_BACKGROUND =
+  "radial-gradient(ellipse at center, transparent 55%, var(--bg-scrim) 100%)";
+
+/** Decorative vignette flashing in and out during the transitions —
+ * lensPulse (globals.css) animates opacity 0 → peak → 0. */
+function lensStyle(mode: Mode): CSSProperties {
+  return {
+    pointerEvents: "none",
+    opacity: 0,
+    background: LENS_BACKGROUND,
+    animation:
+      mode === "to-map" || mode === "to-cv"
+        ? `lensPulse ${TRANSITION_MS}ms ease-in-out`
+        : "none",
+  };
+}
+
+interface HomeMapSectionProps {
+  uploadProps: ComponentProps<typeof UploadSection>;
+  /** Forwarded to UploadSection so a sibling (LibrarySection, via HomeClient)
+   * can open its file picker and reuse its upload/animation pipeline. */
+  uploadSectionRef?: Ref<UploadSectionHandle>;
+  /** Called after the painted zone is successfully persisted to the
+   * profile — lets the parent invalidate anything derived from it (e.g.
+   * the matches list, which stays mounted and won't refetch on its own). */
+  onZoneSaved?: () => void;
+  /** Reports every mode change — lets HomeClient know whether the map is
+   * currently focused, to highlight the right icon in LeftNavRail. */
+  onModeChange?: (mode: Mode) => void;
+}
+
+export interface HomeMapSectionHandle {
+  /** Imperative entry into the map mode — used by LeftNavRail, which lives
+   * outside this component and can't reach the mode state directly. */
+  enterMap: () => void;
+  /** Imperative exit from the map mode — same reason as enterMap. */
+  exitMap: () => void;
+}
+
+/**
+ * Home hero section holding two stacked layers: the CV upload screen
+ * (UploadSection) and the commune map (MapSection) behind it, blurred.
+ * Scrolling up from the CV layer (signed in only — the zone lives on the
+ * profile) triggers a camera focus-pull transition that brings the map
+ * into focus and makes it paintable; scrolling down
+ * from the map plays the reverse transition — either with the cursor
+ * outside the Leaflet container, or over it once the view has been fully
+ * zoomed out for a moment (no brush stroke in progress in both cases).
+ * On coarse pointers the wheel gesture has no equivalent — pill buttons
+ * ("Carte" / "Terminé") enter and leave the map mode instead. LeftNavRail's
+ * "Carte" icon (outside this component) drives the same transition via the
+ * imperative handle below.
+ * The painted zone is auto-saved to the profile with a debounce, flushed
+ * when leaving the map mode.
+ */
+const HomeMapSection = forwardRef<HomeMapSectionHandle, HomeMapSectionProps>(function HomeMapSection(
+  { uploadProps, uploadSectionRef, onZoneSaved, onModeChange },
+  ref,
+) {
+  const isAuthenticated = useIsAuthenticated();
+  const sectionRef = useRef<HTMLElement>(null);
+  const onZoneSavedRef = useRef(onZoneSaved);
+  onZoneSavedRef.current = onZoneSaved;
+  const onModeChangeRef = useRef(onModeChange);
+  onModeChangeRef.current = onModeChange;
+
+  const [mode, setMode] = useState<Mode>("cv");
+  const [communeCodes, setCommuneCodes] = useState<string[]>([]);
+  // Incremented on each exit so the map snaps back to its origin view —
+  // the backgrounded map must never keep a zoom or pan offset.
+  const [viewResetToken, setViewResetToken] = useState(0);
+
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  isAuthenticatedRef.current = isAuthenticated;
+
+  // Refs, not state: painting and dirtiness must not re-render the layers.
+  const paintingRef = useRef(false);
+  // Timestamp of when the map reached its minimum zoom, null while zoomed in.
+  const atMinZoomSinceRef = useRef<number | null>(null);
+  const communeCodesRef = useRef<string[]>([]);
+  const dirtyRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const modeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Initial zone load — same pattern as /profile (404 = no profile yet).
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    apiClient
+      .get<ProfileData>("/profile")
+      .then((res) => {
+        if (cancelled) return;
+        const codes = res.data.commune_codes ?? [];
+        setCommuneCodes(codes);
+        communeCodesRef.current = codes;
+      })
+      .catch((err: unknown) => {
+        const status = (err as { response?: { status?: number } }).response?.status;
+        if (status === 404) return;
+        console.error("[home] GET /profile failed:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  const flushSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (!dirtyRef.current || !isAuthenticatedRef.current) return;
+    dirtyRef.current = false;
+    apiClient
+      .put("/profile", { commune_codes: communeCodesRef.current })
+      .then(() => onZoneSavedRef.current?.())
+      .catch((err: unknown) => console.error("[home] PUT /profile failed:", err));
+  }, []);
+
+  const handleZoneChange = useCallback(
+    (codes: string[]) => {
+      setCommuneCodes(codes);
+      communeCodesRef.current = codes;
+      dirtyRef.current = true;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+    },
+    [flushSave],
+  );
+
+  const handlePaintingChange = useCallback((painting: boolean) => {
+    paintingRef.current = painting;
+  }, []);
+
+  const handleAtMinZoomChange = useCallback((atMinZoom: boolean) => {
+    atMinZoomSinceRef.current = atMinZoom ? performance.now() : null;
+  }, []);
+
+  const startTransition = useCallback((transition: Mode, target: Mode) => {
+    setMode(transition);
+    modeTimerRef.current = setTimeout(() => setMode(target), TRANSITION_MS);
+  }, []);
+
+  const exitMap = useCallback(() => {
+    flushSave(); // do not lose the last stroke to the debounce
+    setViewResetToken((t) => t + 1); // origin view snaps behind the exit blur
+    startTransition("to-cv", "cv");
+  }, [flushSave, startTransition]);
+
+  // Entry point shared by the wheel gesture, the touch pill, the desktop
+  // scroll hint and LeftNavRail's "Carte" icon (via the imperative handle
+  // below) — the auth check lives here rather than only at each caller so a
+  // future caller can't accidentally open the map (profile-backed zone) for
+  // a signed-out user.
+  const enterMap = useCallback(() => {
+    if (modeRef.current !== "cv" || !isAuthenticatedRef.current) return;
+    startTransition("to-map", "map");
+  }, [startTransition]);
+
+  // LeftNavRail lives outside this component (mounted from HomeClient) and
+  // can't reach modeRef directly — enterMap/exitMap are exposed imperatively,
+  // same pattern as UploadSectionHandle.
+  useImperativeHandle(ref, () => ({ enterMap, exitMap }), [enterMap, exitMap]);
+
+  // Mirrors mode to the parent so LeftNavRail can highlight the map icon —
+  // "to-map"/"to-cv" count as map-focused/cv-focused for that purpose.
+  useEffect(() => {
+    onModeChangeRef.current?.(mode);
+  }, [mode]);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+
+    // Native non-passive listener: React attaches onWheel as passive, which
+    // would silently ignore preventDefault(). Capture phase, because
+    // Leaflet's ScrollWheelZoom handler stops propagation of every wheel
+    // over its container — a bubble listener would never see those. Events
+    // over the map are still left to Leaflet (zoom), except a scroll down
+    // once the view has been fully zoomed out for a while: that one exits.
+    // TODO(a11y): an Escape shortcut out of the map mode would fit here.
+    const onWheel = (e: WheelEvent) => {
+      const mode = modeRef.current;
+      if (mode === "to-map" || mode === "to-cv") {
+        e.preventDefault();
+        return;
+      }
+      if (mode === "cv") {
+        // The map mode is gated behind authentication — the zone is loaded
+        // from and saved to the profile, which requires being signed in.
+        if (e.deltaY < 0 && isAuthenticatedRef.current) {
+          e.preventDefault();
+          enterMap();
+        }
+        return;
+      }
+      // mode === "map" — a brush stroke in progress absorbs the scroll,
+      // even if the cursor drifted outside the Leaflet container mid-drag.
+      if (paintingRef.current) return;
+      const overMap =
+        e.target instanceof Element && e.target.closest(".leaflet-container") !== null;
+      if (overMap) {
+        const since = atMinZoomSinceRef.current;
+        if (
+          e.deltaY > 0 &&
+          since !== null &&
+          performance.now() - since >= MIN_ZOOM_EXIT_HOLD_MS
+        ) {
+          e.preventDefault();
+          e.stopPropagation(); // keep Leaflet's own wheel handler out of it
+          exitMap();
+        }
+        return; // otherwise let Leaflet zoom
+      }
+      e.preventDefault();
+      if (e.deltaY > 0) exitMap();
+    };
+
+    section.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => section.removeEventListener("wheel", onWheel, { capture: true });
+  }, [enterMap, exitMap]);
+
+  // Unmount: drop a pending mode timer, flush a pending save (best effort).
+  useEffect(() => {
+    return () => {
+      if (modeTimerRef.current) clearTimeout(modeTimerRef.current);
+      flushSave();
+    };
+  }, [flushSave]);
+
+  return (
+    // md:ml-24 clears LeftNavRail (fixed left-4, ~52px wide, plus breathing room) — must stay ≥ its right edge.
+    // margin, not padding: this section is `relative` and the CV/map layers below
+    // are `absolute inset-0` children of it, so their containing block is this
+    // section's padding box. A padding-left would shift the in-flow content but
+    // leave those absolute layers anchored to the untouched padding edge — margin
+    // moves the whole border box (and with it the padding box the layers anchor
+    // to), keeping both in sync.
+    <section id="home" ref={sectionRef} className="relative h-dvh snap-start overflow-hidden bg-page md:ml-24">
+      <div className="absolute inset-0" style={cvLayerStyle(mode)}>
+        <UploadSection {...uploadProps} onEnterMap={enterMap} ref={uploadSectionRef} />
+      </div>
+      <div className="absolute inset-0" style={mapLayerStyle(mode)}>
+        <MapSection
+          communeCodes={communeCodes}
+          onChange={handleZoneChange}
+          onPaintingChange={handlePaintingChange}
+          onAtMinZoomChange={handleAtMinZoomChange}
+          viewResetToken={viewResetToken}
+        />
+      </div>
+      <div aria-hidden="true" className="absolute inset-0" style={lensStyle(mode)} />
+      {/* Coarse-pointer replacement for the wheel-driven CV ↔ map switch:
+          scroll-up/scroll-down has no one-finger equivalent (the map consumes
+          touch gestures for painting), so pill buttons enter and leave the map
+          mode. Hidden on mouse-only devices — the desktop hero is unchanged
+          (UploadSection's decorative "CARTE" hint is hidden on coarse pointers
+          in exchange, so the two never show together). */}
+      {isAuthenticated && mode === "cv" && (
+        <button
+          type="button"
+          onClick={enterMap}
+          // max-md:top-16 drops it below the pinned mobile bar (h-14).
+          className="absolute left-1/2 top-3 z-10 hidden min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default max-md:top-16 [@media(any-pointer:coarse)]:flex"
+        >
+          <span aria-hidden="true" className="animate-bounce text-sm text-hint">⌃</span>
+          Carte
+        </button>
+      )}
+      {mode === "map" && (
+        <button
+          type="button"
+          onClick={exitMap}
+          aria-label="Quitter la carte et revenir à l'import de CV"
+          // Below md it moves to the bottom-right corner: the top row is taken
+          // by the pinned bar and the picker's own toolbar (undo/redo/status).
+          className="absolute right-4 top-3 z-10 hidden min-h-11 items-center gap-2 rounded-full border border-subtle bg-surface px-5 text-sm text-body shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-default max-md:bottom-4 max-md:top-auto [@media(any-pointer:coarse)]:flex"
+        >
+          Terminé
+        </button>
+      )}
+      {/* Mouse-only equivalent of the "Terminé" pill above (which targets
+          coarse pointers): same scroll-hint pattern as the other sections. */}
+      {mode === "map" && (
+        <ScrollHint
+          direction="down"
+          label="ACCUEIL"
+          ariaLabel="Quitter la carte et revenir à l'accueil"
+          onClick={exitMap}
+          className="absolute bottom-[18px] left-1/2 z-10 -translate-x-1/2 max-md:hidden [@media(any-pointer:coarse)]:hidden"
+        />
+      )}
+    </section>
+  );
+});
+
+HomeMapSection.displayName = "HomeMapSection";
+export default HomeMapSection;

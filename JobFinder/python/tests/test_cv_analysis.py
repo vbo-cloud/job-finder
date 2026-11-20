@@ -1,0 +1,1092 @@
+"""Tests for agents/cv_analysis/main.py.
+
+Covers: _extract_rome_codes, _get_cv_text, _set_cv_status, _merge_rome_codes,
+_get_profile_intent, _analyze_cv_quality, _upsert_cv_analysis.
+
+The module is loaded via importlib under the unique name 'cv_analysis_main' to
+avoid sys.modules collision with the matching agent's main.py.
+"""
+import importlib.util
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+from azure.servicebus.exceptions import ServiceBusError
+from openai import OpenAIError
+from sqlalchemy.exc import SQLAlchemyError
+
+_AGENTS_DIR = Path(__file__).parent.parent / "agents"
+_spec = importlib.util.spec_from_file_location(
+    "cv_analysis_main", _AGENTS_DIR / "cv_analysis" / "main.py"
+)
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules["cv_analysis_main"] = _mod
+_spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+
+_extract_rome_codes = _mod._extract_rome_codes
+_get_cv_text = _mod._get_cv_text
+_set_cv_status = _mod._set_cv_status
+_mark_rome_analyzed = _mod._mark_rome_analyzed
+_merge_rome_codes = _mod._merge_rome_codes
+_get_profile_intent = _mod._get_profile_intent
+_analyze_cv_quality = _mod._analyze_cv_quality
+_upsert_cv_analysis = _mod._upsert_cv_analysis
+_run_quality_analysis = _mod._run_quality_analysis
+_sampling_kwargs = _mod._sampling_kwargs
+
+_TEST_REFERENTIEL: dict[str, str] = {
+    "M1805": "Études et développement informatique",
+    "M1802": "Expertise et support en systèmes d'information",
+    "M1804": "Études et développement de progiciels",
+}
+
+
+def _session_cm(session: MagicMock):
+    """Return a contextmanager-compatible callable that yields the given session."""
+    @contextmanager
+    def _cm():
+        yield session
+    return _cm
+
+
+def _receive_message_cm(payload: dict):
+    """Return a receive_message-compatible callable (takes a queue name) yielding payload."""
+    @contextmanager
+    def _cm(_queue_name):
+        yield payload
+    return _cm
+
+
+@pytest.fixture(autouse=True)
+def patch_referentiel(mocker):
+    """Replace the live ROME referential with a minimal test dict for all tests."""
+    mocker.patch.object(_mod, "ROME_REFERENTIEL", _TEST_REFERENTIEL)
+
+
+# ---------------------------------------------------------------------------
+# _sampling_kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestSamplingKwargs:
+    def test_returns_temperature_and_seed_for_supported_deployment(self, mocker):
+        mocker.patch.object(_mod, "AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-4o-mini")
+
+        assert _sampling_kwargs() == {
+            "temperature": _mod.ANALYSIS_TEMPERATURE,
+            "seed": _mod.ANALYSIS_SEED,
+        }
+
+    def test_returns_empty_dict_for_deployment_without_temperature_seed_support(self, mocker):
+        mocker.patch.object(_mod, "AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT", "gpt-5-mini")
+
+        assert _sampling_kwargs() == {}
+
+
+# ---------------------------------------------------------------------------
+# _extract_rome_codes
+# ---------------------------------------------------------------------------
+
+
+class TestExtractRomeCodes:
+    def test_returns_valid_codes_on_first_attempt(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805", "M1802"]}'
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        result = _extract_rome_codes("cv text")
+
+        assert result == [
+            {"code": "M1805", "label": "Études et développement informatique"},
+            {"code": "M1802", "label": "Expertise et support en systèmes d'information"},
+        ]
+
+    def test_retries_on_json_decode_error_then_succeeds(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        good = MagicMock()
+        good.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        result = _extract_rome_codes("cv text")
+
+        assert result == [{"code": "M1805", "label": "Études et développement informatique"}]
+        assert mock_create.call_count == 2
+
+    def test_filters_codes_not_matching_pattern(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = (
+            '{"rome_codes": ["INVALID", "12345", "ab123"]}'
+        )
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        with pytest.raises(ValueError):
+            _extract_rome_codes("cv text")
+
+    def test_raises_value_error_after_max_attempts_with_empty_list(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": []}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        with pytest.raises(ValueError):
+            _extract_rome_codes("cv text")
+
+        assert mock_create.call_count == _mod.MAX_ATTEMPTS
+
+    def test_reraises_openai_error_immediately_without_retry(self, mocker):
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions,
+            "create",
+            side_effect=OpenAIError("API failure"),
+        )
+
+        with pytest.raises(OpenAIError):
+            _extract_rome_codes("cv text")
+
+        assert mock_create.call_count == 1
+
+    def test_filters_codes_absent_from_referentiel(self, mocker):
+        mock_response = MagicMock()
+        # Z9999 matches the pattern but is not in _TEST_REFERENTIEL
+        mock_response.choices[0].message.content = (
+            '{"rome_codes": ["Z9999", "M1805"]}'
+        )
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        result = _extract_rome_codes("cv text")
+
+        assert len(result) == 1
+        assert result[0]["code"] == "M1805"
+
+    def test_pins_temperature_and_seed_for_determinism(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text")
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
+        assert kwargs["seed"] == _mod.ANALYSIS_SEED
+
+    def test_includes_candidate_description_in_user_message_when_provided(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text", "Recherche un poste de développeur")
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Recherche un poste de développeur" in user_message
+
+    @pytest.mark.parametrize("candidate_description", [None, "", "   "])
+    def test_omits_candidate_description_when_none_or_blank(self, mocker, candidate_description):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text", candidate_description)
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Intention de recherche" not in user_message
+
+    def test_includes_todays_date_in_user_message(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _extract_rome_codes("cv text")
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert f"Date du jour : {_mod.date.today().isoformat()}" in user_message
+
+    def test_logs_openai_call_completed_with_token_usage(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        mock_response.usage.prompt_tokens = 400
+        mock_response.usage.completion_tokens = 60
+        mock_response.usage.total_tokens = 460
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _extract_rome_codes("cv text")
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=400,
+            completion_tokens=60,
+            total_tokens=460,
+        )
+
+    def test_logs_openai_call_completed_on_every_attempt_including_failed_parse(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        bad.usage.prompt_tokens = 100
+        bad.usage.completion_tokens = 10
+        bad.usage.total_tokens = 110
+        good = MagicMock()
+        good.choices[0].message.content = '{"rome_codes": ["M1805"]}'
+        good.usage.prompt_tokens = 105
+        good.usage.completion_tokens = 15
+        good.usage.total_tokens = 120
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _extract_rome_codes("cv text")
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=100,
+            completion_tokens=10,
+            total_tokens=110,
+        )
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="rome_extraction",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=2,
+            prompt_tokens=105,
+            completion_tokens=15,
+            total_tokens=120,
+        )
+
+
+class TestRomeExtractionSystemPrompt:
+    def test_embeds_a_sample_of_referential_entries(self):
+        # Built once at module import from the real shared/rome_referentiel.json (patch_referentiel
+        # only swaps the ROME_REFERENTIEL name used at call time, not this already-built string) —
+        # F1104 is the code confirmed correct for the real diagnostic CV this fix addresses.
+        assert "F1104:" in _mod.ROME_EXTRACTION_SYSTEM_PROMPT
+
+    def test_forbids_inventing_codes_outside_the_list(self):
+        assert "jamais inventer un code absent de cette liste" in _mod.ROME_EXTRACTION_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# _get_cv_text
+# ---------------------------------------------------------------------------
+
+
+class TestGetCvText:
+    def test_returns_text_user_id_and_columns_detected_when_cv_found(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = (
+            "extracted cv text",
+            "user-123",
+            2,
+        )
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        text, user_id, columns_detected = _get_cv_text("cv-uuid-1")
+
+        assert text == "extracted cv text"
+        assert user_id == "user-123"
+        assert columns_detected == 2
+
+    def test_returns_none_columns_detected_for_pre_feature_cv(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = (
+            "extracted cv text",
+            "user-123",
+            None,
+        )
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _, _, columns_detected = _get_cv_text("cv-uuid-1")
+
+        assert columns_detected is None
+
+    def test_raises_value_error_when_cv_not_found(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = None
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(ValueError, match="CV cv-missing not found"):
+            _get_cv_text("cv-missing")
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _get_cv_text("cv-uuid-1")
+
+
+# ---------------------------------------------------------------------------
+# _set_cv_status
+# ---------------------------------------------------------------------------
+
+
+class TestSetCvStatus:
+    def test_calls_execute_and_commit(self, mocker):
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _set_cv_status("cv-uuid-1", "done")
+
+        mock_session.execute.assert_called_once()
+        mock_session.commit.assert_called_once()
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _set_cv_status("cv-uuid-1", "error")
+
+
+# ---------------------------------------------------------------------------
+# _mark_rome_analyzed
+# ---------------------------------------------------------------------------
+
+
+class TestMarkRomeAnalyzed:
+    def test_calls_execute_and_commit(self, mocker):
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _mark_rome_analyzed("cv-uuid-1")
+
+        mock_session.execute.assert_called_once()
+        mock_session.commit.assert_called_once()
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _mark_rome_analyzed("cv-uuid-1")
+
+
+# ---------------------------------------------------------------------------
+# _merge_rome_codes
+# ---------------------------------------------------------------------------
+
+
+class TestMergeRomeCodes:
+    def test_merges_new_code_into_empty_profile(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {}
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        assert "M1805" in mock_profile.rome_codes
+        assert "cv-uuid-1" in mock_profile.rome_codes["M1805"]["cv_ids"]
+        mock_session.commit.assert_called_once()
+        assert new_codes == ["M1805"]
+
+    def test_does_not_duplicate_cv_id_on_second_call(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        assert mock_profile.rome_codes["M1805"]["cv_ids"].count("cv-uuid-1") == 1
+        assert new_codes == []
+
+    def test_appends_new_cv_id_to_existing_code(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        assert "cv-uuid-2" in mock_profile.rome_codes["M1805"]["cv_ids"]
+        assert "cv-uuid-1" in mock_profile.rome_codes["M1805"]["cv_ids"]
+        assert new_codes == []
+
+    def test_returns_new_codes_only(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [
+                {"code": "M1805", "label": "Dev info"},
+                {"code": "M1502", "label": "Chargé de recrutement"},
+            ],
+        )
+
+        assert new_codes == ["M1502"]
+
+    def test_calls_flag_modified_for_jsonb_dirty_tracking(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+        mock_flag_modified = mocker.patch.object(_mod, "flag_modified")
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        mock_flag_modified.assert_called_once_with(mock_profile, "rome_codes")
+
+    def test_deep_copies_so_original_nested_dict_is_left_untouched(self, mocker):
+        original_m1805 = {"cv_ids": ["cv-uuid-1"], "label": "Dev info"}
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {"M1805": original_m1805}
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-2",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        # A shallow dict(profile.rome_codes) would share this nested dict, so mutating
+        # the merged copy's cv_ids would also mutate original_m1805 in place — which
+        # defeats SQLAlchemy's old/new equality check at flush and silently drops the
+        # write (the bug this fix addresses). With a real copy.deepcopy, original_m1805
+        # must stay exactly as it was before the call.
+        assert original_m1805["cv_ids"] == ["cv-uuid-1"]
+
+    def test_removes_cv_id_from_codes_no_longer_produced(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"},
+            "G1803": {"cv_ids": ["cv-uuid-1"], "label": "Service en salle"},
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        new_codes = _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        assert "G1803" not in mock_profile.rome_codes
+        assert mock_profile.rome_codes["M1805"]["cv_ids"] == ["cv-uuid-1"]
+        assert new_codes == []
+
+    def test_reconciliation_only_removes_this_cv_id_not_a_shared_codes_entry(self, mocker):
+        mock_profile = MagicMock()
+        mock_profile.rome_codes = {
+            "M1805": {"cv_ids": ["cv-uuid-1"], "label": "Dev info"},
+            "G1803": {"cv_ids": ["cv-uuid-1", "cv-uuid-2"], "label": "Service en salle"},
+        }
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_profile
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _merge_rome_codes(
+            "user-123",
+            "cv-uuid-1",
+            [{"code": "M1805", "label": "Dev info"}],
+        )
+
+        # G1803 stays — cv-uuid-2 still uses it — but cv-uuid-1's reference is gone.
+        assert mock_profile.rome_codes["G1803"]["cv_ids"] == ["cv-uuid-2"]
+
+    def test_raises_value_error_when_profile_not_found(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(ValueError, match="UserProfile not found"):
+            _merge_rome_codes(
+                "user-missing",
+                "cv-uuid-1",
+                [{"code": "M1805", "label": "Dev info"}],
+            )
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _merge_rome_codes(
+                "user-123",
+                "cv-uuid-1",
+                [{"code": "M1805", "label": "Dev info"}],
+            )
+
+
+# ---------------------------------------------------------------------------
+# _get_profile_intent
+# ---------------------------------------------------------------------------
+
+
+class TestGetProfileIntent:
+    def test_returns_intent_fields_when_profile_exists(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = (
+            "2-5",
+            "Recherche un poste cloud",
+        )
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        experience_level, candidate_description = _get_profile_intent("user-123")
+
+        assert experience_level == "2-5"
+        assert candidate_description == "Recherche un poste cloud"
+
+    def test_returns_none_tuple_when_no_profile(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.return_value.one_or_none.return_value = None
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        assert _get_profile_intent("user-missing") == (None, None)
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _get_profile_intent("user-123")
+
+
+# ---------------------------------------------------------------------------
+# _analyze_cv_quality
+# ---------------------------------------------------------------------------
+
+_QUALITY_JSON = (
+    '{"ats_score": 72, '
+    '"synthese": "Un CV bien structuré, avec une reconversion cohérente vers le cloud.", '
+    '"points_forts": ["Structure claire"], '
+    '"points_faibles": ["Objectif absent"], "suggestions": ["Ajouter un titre"], '
+    '"coherence_intention": "Cohérent avec le profil senior."}'
+)
+
+
+class TestAnalyzeCvQuality:
+    def test_returns_parsed_result_on_valid_json(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        result = _analyze_cv_quality("cv text", "5+", "Recherche un poste cloud", None)
+
+        assert result == {
+            "ats_score": 72,
+            "synthese": "Un CV bien structuré, avec une reconversion cohérente vers le cloud.",
+            "points_forts": ["Structure claire"],
+            "points_faibles": ["Objectif absent"],
+            "suggestions": ["Ajouter un titre"],
+            "coherence_intention": "Cohérent avec le profil senior.",
+        }
+
+    def test_retries_on_invalid_json_then_succeeds(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        good = MagicMock()
+        good.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        result = _analyze_cv_quality("cv text", None, None, None)
+
+        assert result["ats_score"] == 72
+        assert mock_create.call_count == 2
+
+    def test_clamps_ats_score_out_of_bounds(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = (
+            '{"ats_score": 150, "points_forts": [], "points_faibles": [], '
+            '"suggestions": [], "coherence_intention": ""}'
+        )
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        assert _analyze_cv_quality("cv text", None, None, None)["ats_score"] == 100
+
+    def test_raises_value_error_after_max_attempts(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "never valid json"
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+
+        with pytest.raises(ValueError):
+            _analyze_cv_quality("cv text", None, None, None)
+
+        assert mock_create.call_count == _mod.MAX_ATTEMPTS
+
+    def test_reraises_openai_error_immediately_without_retry(self, mocker):
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions,
+            "create",
+            side_effect=OpenAIError("API failure"),
+        )
+
+        with pytest.raises(OpenAIError):
+            _analyze_cv_quality("cv text", "0-2", None, None)
+
+        assert mock_create.call_count == 1
+
+    def test_pins_temperature_and_seed_for_determinism(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["temperature"] == _mod.ANALYSIS_TEMPERATURE
+        assert kwargs["seed"] == _mod.ANALYSIS_SEED
+
+    def test_includes_todays_date_in_user_message(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert f"Date du jour : {_mod.date.today().isoformat()}" in user_message
+
+    @pytest.mark.parametrize("columns_detected", [2, 3])
+    def test_includes_layout_note_when_two_or_more_columns_detected(self, mocker, columns_detected):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_cv_quality("cv text", None, None, columns_detected)
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert f"Mise en page détectée : {columns_detected} colonnes." in user_message
+
+    @pytest.mark.parametrize("columns_detected", [None, 0, 1])
+    def test_omits_layout_note_when_fewer_than_two_columns_detected(self, mocker, columns_detected):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_create = mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+
+        _analyze_cv_quality("cv text", None, None, columns_detected)
+
+        user_message = mock_create.call_args.kwargs["messages"][1]["content"]
+        assert "Mise en page détectée" not in user_message
+
+    def test_logs_openai_call_completed_with_token_usage(self, mocker):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = _QUALITY_JSON
+        mock_response.usage.prompt_tokens = 700
+        mock_response.usage.completion_tokens = 180
+        mock_response.usage.total_tokens = 880
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", return_value=mock_response
+        )
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=700,
+            completion_tokens=180,
+            total_tokens=880,
+        )
+
+    def test_logs_openai_call_completed_on_every_attempt_including_failed_parse(self, mocker):
+        bad = MagicMock()
+        bad.choices[0].message.content = "not valid json"
+        bad.usage.prompt_tokens = 200
+        bad.usage.completion_tokens = 20
+        bad.usage.total_tokens = 220
+        good = MagicMock()
+        good.choices[0].message.content = _QUALITY_JSON
+        good.usage.prompt_tokens = 210
+        good.usage.completion_tokens = 40
+        good.usage.total_tokens = 250
+        mocker.patch.object(
+            _mod._openai_client.chat.completions, "create", side_effect=[bad, good]
+        )
+        mocker.patch.object(_mod, "time", MagicMock())
+        mock_logger = mocker.patch.object(_mod, "logger")
+
+        _analyze_cv_quality("cv text", None, None, None)
+
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=1,
+            prompt_tokens=200,
+            completion_tokens=20,
+            total_tokens=220,
+        )
+        mock_logger.info.assert_any_call(
+            "openai_call_completed",
+            agent="cv-analysis",
+            operation="cv_quality_analysis",
+            model=_mod.AZURE_OPENAI_CV_ANALYSIS_DEPLOYMENT,
+            attempt=2,
+            prompt_tokens=210,
+            completion_tokens=40,
+            total_tokens=250,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _upsert_cv_analysis
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertCvAnalysis:
+    def _run(self, mocker, status: str, **fields) -> tuple[MagicMock, MagicMock]:
+        """Run _upsert_cv_analysis with pg_insert and the session mocked."""
+        mock_pg_insert = mocker.patch.object(_mod, "pg_insert")
+        mock_session = MagicMock()
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        _upsert_cv_analysis("cv-uuid-1", status, **fields)
+
+        return mock_pg_insert, mock_session
+
+    def test_sets_completed_at_for_done(self, mocker):
+        mock_pg_insert, mock_session = self._run(mocker, "done", ats_score=72)
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert values_kwargs["status"] == "done"
+        assert values_kwargs["ats_score"] == 72
+        assert values_kwargs["completed_at"] is not None
+        set_kwargs = (
+            mock_pg_insert.return_value.values.return_value.on_conflict_do_update.call_args.kwargs
+        )
+        assert "completed_at" in set_kwargs["set_"]
+        mock_session.commit.assert_called_once()
+
+    def test_sets_completed_at_for_error(self, mocker):
+        mock_pg_insert, _ = self._run(mocker, "error")
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert "completed_at" in values_kwargs
+
+    def test_does_not_set_completed_at_for_processing(self, mocker):
+        mock_pg_insert, mock_session = self._run(mocker, "processing")
+
+        values_kwargs = mock_pg_insert.return_value.values.call_args.kwargs
+        assert "completed_at" not in values_kwargs
+        set_kwargs = (
+            mock_pg_insert.return_value.values.return_value.on_conflict_do_update.call_args.kwargs
+        )
+        assert "completed_at" not in set_kwargs["set_"]
+        mock_session.commit.assert_called_once()
+
+    def test_reraises_sqlalchemy_error(self, mocker):
+        mocker.patch.object(_mod, "pg_insert")
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = SQLAlchemyError("DB error")
+        mocker.patch.object(_mod, "get_session", _session_cm(mock_session))
+
+        with pytest.raises(SQLAlchemyError):
+            _upsert_cv_analysis("cv-uuid-1", "done")
+
+
+# ---------------------------------------------------------------------------
+# _run_quality_analysis
+# ---------------------------------------------------------------------------
+
+
+class TestRunQualityAnalysis:
+    def test_writes_done_on_success(self, mocker):
+        mock_upsert = mocker.patch.object(_mod, "_upsert_cv_analysis")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=("2-5", "desc"))
+        mock_analyze = mocker.patch.object(
+            _mod, "_analyze_cv_quality", return_value={"ats_score": 80}
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text", 2)
+
+        mock_upsert.assert_any_call("cv-uuid-1", "processing")
+        mock_upsert.assert_any_call("cv-uuid-1", "done", ats_score=80)
+        # columns_detected must reach _analyze_cv_quality unchanged — the only mechanism
+        # by which the ATS-risk note ever surfaces for this CV.
+        mock_analyze.assert_called_once_with("cv text", "2-5", "desc", 2)
+
+    def test_writes_error_status_on_openai_failure_without_raising(self, mocker):
+        mock_upsert = mocker.patch.object(_mod, "_upsert_cv_analysis")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_analyze_cv_quality", side_effect=OpenAIError("API failure")
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text", None)  # must not raise
+
+        mock_upsert.assert_any_call("cv-uuid-1", "error")
+
+    def test_swallows_sqlalchemy_error_when_writing_error_status(self, mocker):
+        mock_upsert = mocker.patch.object(
+            _mod,
+            "_upsert_cv_analysis",
+            side_effect=[None, SQLAlchemyError("DB down")],
+        )
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_analyze_cv_quality", side_effect=OpenAIError("API failure")
+        )
+
+        _run_quality_analysis("cv-uuid-1", "user-123", "cv text", None)  # must not raise
+
+        assert mock_upsert.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# main() — retry_quality_only branch
+# ---------------------------------------------------------------------------
+
+
+class TestMainRetryQualityOnly:
+    def _run_main_with_payload(self, mocker, payload: dict):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "receive_message", _receive_message_cm(payload))
+        return mocker.patch.object(_mod, "_run_quality_analysis")
+
+    def test_retry_only_runs_quality_analysis_not_rome(self, mocker):
+        mock_run_quality = self._run_main_with_payload(
+            mocker, {"cv_id": "cv-uuid-1", "retry_quality_only": True}
+        )
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123", 2))
+        mock_set_status = mocker.patch.object(_mod, "_set_cv_status")
+        mock_extract = mocker.patch.object(_mod, "_extract_rome_codes")
+
+        _mod.main()
+
+        mock_run_quality.assert_called_once_with("cv-uuid-1", "user-123", "cv text", 2)
+        mock_extract.assert_not_called()
+        mock_set_status.assert_not_called()
+
+    def test_retry_only_skips_cleanly_when_cv_deleted(self, mocker):
+        mock_run_quality = self._run_main_with_payload(
+            mocker, {"cv_id": "cv-missing", "retry_quality_only": True}
+        )
+        mocker.patch.object(_mod, "_get_cv_text", side_effect=ValueError("not found"))
+
+        _mod.main()  # must not raise
+
+        mock_run_quality.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# main() — retry_rome_only branch
+# ---------------------------------------------------------------------------
+
+
+class TestMainRetryRomeOnly:
+    def _run_main_with_payload(self, mocker, payload: dict):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(_mod, "receive_message", _receive_message_cm(payload))
+
+    def test_retry_only_runs_rome_extraction_not_quality(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123", 1))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, "Recherche dev"))
+        mock_extract = mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=[])
+        mock_mark = mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_run_quality = mocker.patch.object(_mod, "_run_quality_analysis")
+        mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        mock_extract.assert_called_once_with("cv text", "Recherche dev")
+        mock_mark.assert_called_once_with("cv-uuid-1")
+        mock_run_quality.assert_not_called()
+
+    def test_retry_only_skips_cleanly_when_cv_deleted(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-missing", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", side_effect=ValueError("not found"))
+        mock_extract = mocker.patch.object(_mod, "_extract_rome_codes")
+
+        _mod.main()  # must not raise
+
+        mock_extract.assert_not_called()
+
+    def test_retry_only_always_dispatches_start_matching_with_rome_retry_trigger(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123", 1))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=[])
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_send = mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        start_matching_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.START_MATCHING_QUEUE
+        ]
+        assert len(start_matching_calls) == 1
+        assert start_matching_calls[0].args[1]["trigger"] == "cv_analysis_rome_retry"
+
+    def test_retry_only_dispatches_offer_fetch_request_only_when_new_codes_present(self, mocker):
+        self._run_main_with_payload(mocker, {"cv_id": "cv-uuid-1", "retry_rome_only": True})
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123", 1))
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(
+            _mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}]
+        )
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=["M1805"])
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mock_send = mocker.patch.object(_mod, "send_message")
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert len(offer_fetch_calls) == 1
+        assert offer_fetch_calls[0].args[1] == {"trigger": "cv_analysis", "rome_codes": ["M1805"]}
+
+
+# ---------------------------------------------------------------------------
+# main() — offer-fetch-request dispatch on newly-merged ROME codes
+# ---------------------------------------------------------------------------
+
+
+class TestMainOfferFetchDispatch:
+    def _run_main_for_new_cv(self, mocker, merge_return_value: list[str]):
+        mocker.patch.object(_mod, "configure_telemetry")
+        mocker.patch.object(_mod, "run_migrations")
+        mocker.patch.object(
+            _mod, "receive_message", _receive_message_cm({"cv_id": "cv-uuid-1"})
+        )
+        mocker.patch.object(_mod, "_get_cv_text", return_value=("cv text", "user-123", 1))
+        mocker.patch.object(_mod, "_set_cv_status")
+        mocker.patch.object(_mod, "_get_profile_intent", return_value=(None, None))
+        mocker.patch.object(_mod, "_extract_rome_codes", return_value=[{"code": "M1805", "label": "Dev info"}])
+        mocker.patch.object(_mod, "_merge_rome_codes", return_value=merge_return_value)
+        mocker.patch.object(_mod, "_mark_rome_analyzed")
+        mocker.patch.object(_mod, "_run_quality_analysis")
+        return mocker.patch.object(_mod, "send_message")
+
+    def test_dispatches_targeted_request_when_new_codes_present(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, ["M1502"])
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert len(offer_fetch_calls) == 1
+        assert offer_fetch_calls[0].args[1] == {
+            "trigger": "cv_analysis",
+            "rome_codes": ["M1502"],
+        }
+
+    def test_does_not_dispatch_when_no_new_codes(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, [])
+
+        _mod.main()
+
+        offer_fetch_calls = [
+            c for c in mock_send.call_args_list if c.args[0] == _mod.OFFER_FETCH_REQUEST_QUEUE
+        ]
+        assert offer_fetch_calls == []
+
+    def test_logs_but_does_not_raise_on_servicebus_error_for_offer_fetch_dispatch(self, mocker):
+        mock_send = self._run_main_for_new_cv(mocker, ["M1502"])
+
+        def _send_side_effect(queue_name, _body):
+            if queue_name == _mod.OFFER_FETCH_REQUEST_QUEUE:
+                raise ServiceBusError("boom")
+
+        mock_send.side_effect = _send_side_effect
+
+        _mod.main()  # must not raise despite the offer-fetch-request send failing

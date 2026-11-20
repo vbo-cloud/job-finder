@@ -12,11 +12,6 @@ This project is managed by two Claude instances with distinct roles:
 
 **Claude Code** — execution role. Applies decisions made with Claude Cowork. Owns the full feature lifecycle: branch creation, implementation, PR opening. Has exclusive ownership of Terraform, Python, and PowerShell code.
 
-## Context
-Portfolio project for a Cloud/AI career transition.
-Unity developer transitioning to Azure + AI.
-Az-104 certification obtained.
-
 ## Tech Stack
 - Cloud: Azure
 - IaC: Terraform
@@ -32,101 +27,15 @@ Az-104 certification obtained.
 - iam/dev/, iam/prod/ → RBAC management, applied manually by the user (not via CI/CD, not via sp-jf-github). The identity running `terraform apply` is the current session user (`data.azurerm_client_config.current`). Never add iam/ to the Plan/Apply workflows.
 
 ## Terraform Conventions
-- Cloud provider: Azure only — no AWS, GCP, or other provider resources allowed
-- Environment folder names use underscores (`lz_dev`, `dev`). Tag values and Azure resource names use hyphens (`lz-dev`, `rg-jf-dev-frc`)
-- Modules: compute / network / data / resource-group
-- Remote state: Azure Storage Backend
-- Naming pattern: `{type}-{project}-{environment}-{region}-{index}`
-- Section separators in `.tf` files: use the following format to separate logical groups of resources within a file:
-  ```hcl
-  # ==============================================================================
-  # Section Name
-  # ==============================================================================
-  ```
-  - Project: `jf`
-  - Environments: `dev`, `prod`, `lz-dev`, `lz-prod`
-  - Region: `frc` (France Central)
-  - Index: `001`, `002`… (optional)
-  - Prefixes: `rg`, `vnet`, `snet`, `kv`, `st`, `aks`, `nsg`
-  - Examples: `rg-jf-dev-frc`, `vnet-jf-lz-dev-frc`, `snet-jf-dev-frc-app`
-  - Storage accounts omit hyphens and are capped at 24 chars: `stjfdevfrc`
 
-## Rules
-- Always write reusable modules
-- Comment non-obvious architecture decisions
-- Every resource must have tags: environment, project, owner
-- Every `variable` and `output` block in a module must have a `description`. No exceptions.
-- Add `validation` blocks to module variables that have obvious constraints (accepted values, value ranges, expected formats). Do not validate unconstrained fields like `name` or `location` — those are validated by Azure at apply time.
-- Always reference other resources through their module outputs, never directly.
-  For example: `module.keyvault.id` not `azurerm_key_vault.this.id`,
-  `module.rg_app.name` not `azurerm_resource_group.rg_app.name`.
-  Before writing any reference to another resource, check whether a module
-  already manages it and use its output.
-- Every provider used in an environment — directly or via a module — must be declared explicitly in the `required_providers` block of the root environment (`envs/*/main.tf`). Modules must not be the sole place where a provider is declared. This ensures all provider dependencies are visible at the environment level and versions are controlled centrally.
-- Never run `terraform apply` locally. All applies must go through the CI/CD pipeline via a PR merged to main.
-- `terraform.tfvars` files are never committed (gitignored). Do not attempt to stage or commit them.
-- Always update `docs/JOURNAL.md` when creating or updating a PR. `docs/JOURNAL.md` is a concise log of the project's progress. For each PR, add an entry with: PR number and title, date, summary of what was implemented and why, and any important technical decisions made.
-- During Milestone 1, only implement changes in `envs/dev/`. Do not mirror to `envs/prod/` until dev is stable and testable (end of M1). A single prod mirror + apply will be done at v1.0.0, with prod-specific adjustments (SKUs, retention, geo-redundancy).
-
-## Project Overview
-
-This is an Azure Infrastructure-as-Code project using Terraform. It provisions cloud resources across multiple environments (dev/prod) with a landing zone pattern.
-
-## Common Commands
-
-All Terraform commands must be run from within the specific environment directory (e.g., `JobFinder/Terraform/envs/dev/`).
-
-```bash
-terraform init                      # Initialize backend and providers
-terraform fmt                       # Format code
-terraform fmt -check                # Check formatting (used in CI)
-terraform validate                  # Validate syntax
-terraform plan -input=false         # Preview changes
-terraform apply -auto-approve -input=false  # Apply changes (CI only)
-```
-
-## Architecture
-
-### Environment Structure
-
-Two-layer pattern per environment:
-
-- **Landing Zone** (`lz_dev`, `lz_prod`): Foundation infrastructure — resource groups, Key Vault, virtual networks/subnets. Must be deployed before the app layer.
-- **Application** (`dev`, `prod`): App-level resource groups split into core, app, and data concerns.
-
-### Modules
-
-Reusable modules live in `JobFinder/Terraform/modules/`:
-- `resource_group/` — Azure resource groups
-- `vnet/` — Virtual networks
-- `subnet/` — Subnets (with optional delegation)
-- `keyvault/` — Key Vault (RBAC, purge protection)
-- `keyvault_secret/` — Key Vault secrets
-- `private_endpoint/` — Generic private endpoint + DNS zone group
-- `storage/` — Storage accounts
-- `postgresql/` — PostgreSQL Flexible Server (pgvector, VNet injection, KV secret)
-- `servicebus/` — Service Bus namespace + queues
-- `openai/` — Azure OpenAI account + model deployments
-- `container_registry/` — Azure Container Registry
-- `application_insights/` — Application Insights + Log Analytics Workspace
-- `container_app_environment/` — Container Apps Environment (shared)
-- `container_app_job/` — Container App Job (timer or queue trigger)
-- `policy/allowed_locations/` — Azure Policy: restrict deployments to allowed regions
-- `policy/auto_lock/` — Azure Policy: CanNotDelete lock on `protect=true` resources
-- `compute/`, `network/`, `data/` — Placeholders (not yet implemented)
-
-**Module design rule:** one primary resource per module, plus resources intrinsically linked that have no meaning without it. If a secondary resource cannot exist independently of the primary, it goes in the module. If it can exist alone or be shared between multiple resources, it stays outside the module.
-
-### State Backend
-
-Remote state in Azure Storage (`stjftfstatefrc` storage account, `tfstate` container). Each environment has its own state file: `dev.tfstate`, `lz-dev.tfstate`, `lz-prod.tfstate`, `prod.tfstate`.
+→ Enforced via the `conventions-terraform` skill (`.claude/skills/conventions-terraform/`). Consult it before writing or editing any Terraform code.
 
 ## CI/CD
 
 - **PRs** → `.github/workflows/terraformPlan.yml`: runs `fmt -check`, `validate`, and `plan` on `lz_dev` and `dev` (change-detection via git diff).
 - **Push to dev** → `.github/workflows/terraformApply.yml`: applies `lz_dev` then `dev` sequentially (landing zone first).
 
-Authentication uses Azure OIDC (no stored credentials). Required GitHub variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLATFORM_CLIENT_ID`, `SP_GITHUB_OBJECT_ID`. GitHub secrets (sensitive): `CLAUDE_API_KEY`, `REVIEWER_GITHUB_TOKEN`.
+Authentication uses Azure OIDC (no stored credentials). Required GitHub variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLATFORM_CLIENT_ID`, `SP_GITHUB_OBJECT_ID`. GitHub secrets (sensitive): `CLAUDE_API_KEY`, `REVIEWER_GITHUB_TOKEN`, `PORTFOLIO_CONTACT_FUNCTION_URL`.
 
 ## Key Details
 
@@ -194,59 +103,45 @@ Authentication uses Azure OIDC (no stored credentials). Required GitHub variable
 - Never use merge to catch up with the base branch, always rebase
 - Never force push without `--force-with-lease`
 
+### Enforcement via hooks
+
+The rules above that are mechanically checkable are enforced by a `PreToolUse` hook on
+the Bash tool (`.claude/settings.json` → `.claude/hooks/pre_bash_guard.py`), not just
+documented here. It blocks, for either Claude instance:
+- Direct `git push` to `main`/`dev`
+- Force-push without `--force-with-lease`
+- `git merge` used to catch up a branch (the `--ff-only` local sync in the workflow above stays allowed)
+- Local `terraform apply`/`terraform destroy` (CI-only, see Terraform Conventions)
+- Mutating Azure CLI commands (`az ... create/update/delete/set/remove/assign/deploy/restore/purge/...`) — read-only verbs (`show`, `list`, `get`...) stay allowed
+- Mutating Azure PowerShell cmdlets (`New-Az*`, `Remove-Az*`, `Set-Az*`, `Update-Az*`)
+- `gh pr create` if `docs/JOURNAL.md` wasn't updated on the branch, if any commit since the base branch is a WIP marker or doesn't follow Conventional Commits, if the `doc-writer` subagent hasn't run since the last edit, or if any touched category (frontend/backend/infra) doesn't have an `APPROUVÉ` verdict from its reviewer subagent since the last edit in that category (see Reviewer subagents below)
+
+This same hook applies identically inside `claude-code-action` CI runs (see `.github/CLAUDE_ACTION.md`), since the action runs the real Claude Code engine against the checked-out repo and reads the same `.claude/settings.json`. The Azure CLI/PowerShell verb list is a backstop, not exhaustive — it covers common mutating verb families, not every possible destructive command; `reviewer-infra`'s own judgment and the CI-only apply pipeline remain the primary controls.
+
+A `PostToolUse` hook (`.claude/hooks/post_edit_format.py`) best-effort runs `terraform fmt`
+after editing a `.tf` file and `eslint --fix` after editing a frontend file, to preempt
+CI formatting failures. It never blocks — PostToolUse can't undo an edit that already happened.
+
+Known limitation: hooks can't technically distinguish a Claude Cowork session from a
+Claude Code session (no reliable signal exposed to hook scripts for that), so the
+Cowork/Code role boundary described above is still enforced by instruction only, not
+by a hook.
+
 ## Python Conventions
 
-### Typage et documentation
-- Type hints obligatoires sur toutes les fonctions — paramètres et valeur de retour
-- Docstrings Google style sur tous les modules, classes et fonctions publiques
-- Les fonctions sans docstring sont considérées incomplètes
-
-### Constantes
-- Les constantes (noms en MAJUSCULES) sont déclarées immédiatement après les imports, avant tout autre code de niveau module (loggers, variables d'environnement, initialisations de clients)
-
-### Logging
-- Utiliser `structlog` exclusivement — jamais `print()` ni `logging` standard
-- JSON en production, coloré en dev (contrôlé par `LOG_LEVEL` depuis l'environnement)
-- Chaque module configure son logger en tête de fichier : `logger = structlog.get_logger()`
-- Les logs d'erreur incluent toujours l'exception : `logger.error("msg", exc_info=True)`
-
-### Variables d'environnement
-- Chargées au démarrage du module (niveau module, pas dans les fonctions)
-- Une variable manquante lève une `ValueError` explicite avec le nom de la variable
-- Ne jamais utiliser de valeur par défaut silencieuse pour une variable critique
-
-### Gestion des erreurs
-- Jamais de `except Exception` nu — toujours catcher une exception spécifique
-- Dans un bloc `except` dont le seul but est de logger et relancer, utiliser `raise` nu — jamais `raise X(str(e)) from e`. `raise` nu préserve le type exact de l'exception originale. `raise X(str(e)) from e` n'est approprié que si on veut volontairement changer le type de l'exception (cas rare).
-- Les ressources (sessions DB, clients Service Bus) sont toujours gérées via context managers (`with`)
-- Toute fonction effectuant un appel externe (API, base de données, réseau) doit logger son entrée avec `logger.info` et entourer l'appel d'un `try/except` sur l'exception spécifique de la librairie concernée, avec `logger.error(..., exc_info=True)` et re-raise via `raise ... from e`
-
-### Style
-- f-strings exclusivement — pas de `.format()` ni de `%`
-- Pas de logique métier dans `main.py` — il orchestre uniquement (appels aux autres modules)
-- Une fonction = une responsabilité. Si une fonction fait plus de 40 lignes, la découper.
+→ Enforced via the `conventions-python` skill (`.claude/skills/conventions-python/`). Consult it before writing or editing any Python code.
 
 ---
 
 ## SQL / Alembic Conventions
 
-### Modèles SQLAlchemy
-- Clés primaires : UUID v4 (`uuid.uuid4`) — jamais d'autoincrement
-- Toutes les tables ont `created_at` (DateTime, default `utcnow`, `nullable=False`)
-- Nommage des tables : snake_case pluriel (`offers`, `cvs`, `matches`)
-- `nullable=True` et `nullable=False` toujours explicites — jamais implicites
-- Toutes les colonnes DateTime utilisent `DateTime(timezone=True)` (mappe vers TIMESTAMPTZ en PostgreSQL) — jamais `DateTime` seul. Compatible avec `datetime.now(timezone.utc)`.
+→ Enforced via the `conventions-sql` skill (`.claude/skills/conventions-sql/`). Consult it before writing or editing any SQLAlchemy models or Alembic migrations.
 
-### Nommage des contraintes
-- Index : `ix_{table}_{colonne}` (ex: `ix_offers_ft_id`)
-- Contraintes d'unicité : `uq_{table}_{colonne}` (ex: `uq_offers_ft_id`)
-- Clés étrangères : `fk_{table}_{colonne}_ref_{table_cible}` (ex: `fk_matches_cv_id_ref_cvs`)
+---
 
-### Migrations Alembic
-- Une migration = un changement logique — jamais plusieurs features dans la même migration
-- Nommage fichier : `{NNN}_{description_courte}.py` (ex: `001_initial_schema.py`)
-- `down_revision` toujours renseigné — chaque migration doit implémenter `downgrade()`
-- `alembic upgrade head` appelé au démarrage de chaque agent (idempotent)
+## Frontend / Next.js Conventions
+
+→ Enforced via the `conventions-frontend` skill (`.claude/skills/conventions-frontend/`). Consult it before writing or editing any Next.js / React / TypeScript frontend code.
 
 ---
 
@@ -298,3 +193,84 @@ A PR is blocked (REQUEST_CHANGES) if any of the following apply:
 - Any security rule above is violated
 - Required tags missing on any resource
 - Hardcoded secrets or credentials present
+
+### Exploration subagent
+
+`explorer` (`.claude/agents/explorer.md`) is meant to run *before* implementation
+starts on a non-trivial feature: delegate the codebase reading (which files are
+relevant, what pattern an existing similar case already uses, what real
+conventions are in play beyond what a skill documents in general) to it,
+instead of filling the main session's context with dozens of `Read`/`Grep`
+calls that won't be needed once a plan is in place. It's read-only
+(`Read, Grep, Glob`) and returns a short, structured summary — relevant files,
+the existing pattern to reuse, conventions worth respecting — never a detailed
+implementation plan and never a code fix.
+
+Unlike the reviewer subagents and `doc-writer`, there's no hook enforcing that
+`explorer` gets called — "is this feature big enough to warrant delegating
+exploration" isn't something a hook can reliably judge, so this stays a
+judgment call driven by the subagent's own description, same as the general
+built-in `Explore` agent type this one specializes for the project.
+
+### Documentation subagent
+
+`doc-writer` (`.claude/agents/doc-writer.md`) checks that docstrings, WHY-comments,
+and the `docs/JOURNAL.md` entry for the current PR are accurate and complete —
+and, unlike the reviewer subagents below, has `Edit`/`Write` and fixes what it
+finds directly instead of only reporting it. It's meant to run before the
+reviewers, around the time a PR is opened.
+
+**Enforcement:** see Reviewer subagents below — both are gated together on the
+same `gh pr create` check.
+
+### Reviewer subagents
+
+Three read-only reviewer subagents live in `.claude/agents/`, one per layer:
+- **`reviewer-frontend`** — `.ts`/`.tsx`/`.jsx`/`.js` under `JobFinder/frontend/`, checked against the `conventions-frontend` skill. Tools: `Read, Grep, Glob` only — no Edit/Write/Bash, so it is structurally unable to modify anything.
+- **`reviewer-backend`** — `.py` under `JobFinder/python/` (excluding migrations), checked against `conventions-python`. Same read-only tool set.
+- **`reviewer-infra`** — `.tf`, Alembic migrations, PowerShell/Azure CLI scripts, checked against `conventions-terraform` and `conventions-sql`. Tools: `Read, Grep, Glob, Bash` — Bash is scoped by instruction to read-only commands (`terraform plan`, `terraform validate`, `terraform fmt -check`, `tflint`); it must never run `terraform apply` or a mutating `az`/`New-Az*`/`Set-Az*`/`Remove-Az*` command. The `pre_bash_guard.py` hook independently blocks `terraform apply` regardless of caller, but that's a backstop, not the primary control.
+
+Every reviewer's job is to report findings (verdict + `file:line` + violated rule), never to fix them itself.
+
+**Enforcement:** folded into the same `pre_bash_guard.py` `PreToolUse` hook that
+already gates `gh pr create` on `docs/JOURNAL.md` and clean commit history (this
+used to be a separate `Stop` hook blocking the session from ending at all;
+moved here so it gates PR creation specifically — see the note in
+`pre_bash_guard.py`'s `gh pr create` section for why). Before `gh pr create` is
+allowed to run, the hook inspects the session transcript and, per category
+touched since the branch diverged, requires that the matching reviewer subagent
+was called *after* the last edit in that category, and that its report reads as
+`APPROUVÉ` (contains `CHANGEMENTS REQUIS`, or an unidentifiable verdict, both
+block — ambiguous is treated as not-approved on purpose). `doc-writer` is
+checked the same way in the same pass (called since the last edit at all,
+no verdict concept since it isn't an approve/reject reviewer).
+
+Known limitation: this is a keyword match on the reviewer's own report text, not
+semantic understanding of whether the underlying issues were actually fixed —
+it can't tell a genuine fix from a reviewer that was talked into changing its
+verdict. It also fails open (allows `gh pr create`) if the transcript itself
+can't be parsed (unreadable file, unexpected schema), so a structural mismatch
+never leaves the agent stuck — but an ambiguous or negative verdict on a
+successfully-parsed report is deliberately NOT treated as one of those
+failures, and blocks. Treat it as a safety net on top of the instruction to
+call reviewers and act on their feedback, not as a substitute for it.
+
+There is no cycle limit / give-up counter for an actual `CHANGEMENTS REQUIS`
+verdict (or an unidentifiable one) — that always blocks `gh pr create` until
+resolved, unlike the old Stop hook: if a reviewer never approves, Claude can
+simply choose not to open the PR and report the disagreement to the user
+instead, so there's no risk of the session itself getting stuck the way there
+was when this same logic gated ending a response.
+
+**Non-blocking remarks, capped at 3 attempts.** Every reviewer report must
+include a `Remarques non-bloquantes :` line even on an `APPROUVÉ` verdict —
+`aucune`, or a short list (see `.claude/agents/reviewer-*.md`). If that line
+is non-empty (or missing entirely — treated the same as an unclear verdict,
+conservatively), `gh pr create` is blocked too, asking Claude to address them
+and re-run the reviewer, up to `MAX_WARNING_ATTEMPTS = 3` consecutive attempts
+per agent (a small counter persisted next to the transcript). Past that, the
+hook stops enforcing that specific agent's warnings and lets `gh pr create`
+through — this *is* a cycle limit, deliberately, unlike the blocking-verdict
+case above: minor remarks are worth a few nudges but not an unbounded loop.
+The counter resets to zero for an agent as soon as it explicitly reports
+`aucune`, or stops being touched.

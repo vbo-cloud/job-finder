@@ -39,3 +39,9 @@ variable "infrastructure_subnet_id" {
   default     = null
   description = "Resource ID of the subnet to inject the Container App Environment into. Must be a /23 or larger, delegated to Microsoft.App/environments. Null = no VNet injection (Consumption-only mode)."
 }
+
+variable "additional_tags" {
+  type        = map(string)
+  default     = {}
+  description = "Additional tags merged into the resource tags. Useful for one-off operational markers (e.g. keda_controller_reset)."
+}

@@ -64,6 +64,11 @@ locals {
       scope                = module.subnet_cae.id
       role_definition_name = "Network Contributor"
     }
+    # Same permission required for the jumpbox NIC (dev) joining the mgmt subnet (lz_dev).
+    subnet_mgmt_network_contributor = {
+      scope                = module.subnet_mgmt.id
+      role_definition_name = "Network Contributor"
+    }
   }
 }
 
@@ -115,6 +120,16 @@ resource "azurerm_role_assignment" "caj_acr_pull" {
 }
 
 # ==============================================================================
+# Role — Storage Blob Data Contributor (CV and offers storage)
+# ==============================================================================
+
+resource "azurerm_role_assignment" "caj_storage_blob_contributor" {
+  scope                = module.rg_data.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
+
+# ==============================================================================
 # Role — Service Bus Data Owner
 # ==============================================================================
 
@@ -126,5 +141,35 @@ data "azurerm_servicebus_namespace" "dev" {
 resource "azurerm_role_assignment" "caj_servicebus_owner" {
   scope                = data.azurerm_servicebus_namespace.dev.id
   role_definition_name = "Azure Service Bus Data Owner"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
+
+# ==============================================================================
+# Role — Cognitive Services OpenAI User (Azure OpenAI, migration Managed Identity)
+# ==============================================================================
+
+data "azurerm_cognitive_account" "openai" {
+  name                = "oai-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_app.name
+}
+
+resource "azurerm_role_assignment" "caj_openai_user" {
+  scope                = data.azurerm_cognitive_account.openai.id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = azurerm_user_assigned_identity.caj.principal_id
+}
+
+# ==============================================================================
+# Role — Communication and Email Service Owner (ACS Email, notification digests)
+# ==============================================================================
+
+data "azurerm_communication_service" "acs" {
+  name                = "acs-${var.project}-dev-${var.location_short}"
+  resource_group_name = module.rg_app.name
+}
+
+resource "azurerm_role_assignment" "caj_communication_owner" {
+  scope                = data.azurerm_communication_service.acs.id
+  role_definition_name = "Communication and Email Service Owner"
   principal_id         = azurerm_user_assigned_identity.caj.principal_id
 }

@@ -1,0 +1,78 @@
+import type { Theme } from "../types";
+
+export const darkTheme: Theme = {
+  /* Backgrounds */
+  "--bg-page": "#0a0a0f",
+  "--bg-surface": "#1a1a22",
+  "--bg-card": "rgba(255, 255, 255, 0.04)",
+  "--bg-overlay": "rgba(255, 255, 255, 0.06)",
+  "--bg-card-hover": "rgba(255, 255, 255, 0.08)",
+  "--bg-badge": "rgba(255, 255, 255, 0.12)",
+  "--bg-interactive": "rgba(255, 255, 255, 0.10)",
+  "--bg-interactive-hover": "rgba(255, 255, 255, 0.20)",
+  "--bg-destructive-muted": "rgba(239, 68, 68, 0.08)",
+  "--bg-accent-muted": "rgba(37, 99, 235, 0.15)",
+  "--bg-solid-primary": "rgb(37, 99, 235)",
+  "--bg-solid-primary-hover": "rgb(29, 78, 216)",
+  "--bg-solid-secondary": "rgba(255, 255, 255, 0.08)",
+  "--bg-solid-secondary-hover": "rgba(255, 255, 255, 0.14)",
+  "--bg-solid-destructive": "rgb(153, 27, 27)",
+  "--bg-solid-destructive-hover": "rgb(220, 38, 38)",
+  "--bg-solid-confirm": "rgb(22, 101, 52)",
+  "--bg-solid-confirm-hover": "rgb(22, 163, 74)",
+  "--bg-scrim": "rgba(0, 0, 0, 0.40)",
+  "--bg-chip": "rgba(255, 255, 255, 0.03)",
+  "--bg-dot-active": "rgba(255, 255, 255, 0.60)",
+
+  /* Text */
+  "--text-empty": "rgba(255, 255, 255, 0.15)",
+  "--text-label": "rgba(255, 255, 255, 0.20)",
+  "--text-hint": "rgba(255, 255, 255, 0.25)",
+  "--text-muted": "rgba(255, 255, 255, 0.35)",
+  "--text-secondary": "rgba(255, 255, 255, 0.55)",
+  "--text-body": "rgba(255, 255, 255, 0.65)",
+  "--text-primary": "rgba(255, 255, 255, 0.75)",
+  "--text-strong": "rgba(255, 255, 255, 0.85)",
+  "--text-success": "rgb(52, 211, 153)",
+  "--text-warning": "rgb(251, 191, 36)",
+  "--text-destructive": "rgba(248, 113, 113, 0.65)",
+  "--text-accent": "rgb(96, 165, 250)",
+
+  /* Borders */
+  "--border-faint": "rgba(255, 255, 255, 0.06)",
+  "--border-subtle": "rgba(255, 255, 255, 0.10)",
+  "--border-soft": "rgba(255, 255, 255, 0.18)",
+  "--border-default": "rgba(255, 255, 255, 0.25)",
+  "--border-hover": "rgba(255, 255, 255, 0.40)",
+  "--border-active": "rgba(255, 255, 255, 0.50)",
+  "--border-accent": "rgba(96, 165, 250, 0.35)",
+
+  /* Focus rings */
+  "--ring-default": "rgba(255, 255, 255, 0.30)",
+  "--ring-primary": "rgb(96, 165, 250)",
+  "--ring-destructive": "rgb(248, 113, 113)",
+  "--ring-confirm": "rgb(34, 197, 94)",
+
+  /* Match / offer-card semantic */
+  "--bg-match-skill":  "rgba(52, 211, 153, 0.12)",
+  "--text-match-skill": "rgb(52, 211, 153)",
+  "--bg-new-offer":    "rgb(253, 234, 234)",
+  "--text-new-offer":  "rgb(200, 16, 46)",
+  "--border-match":    "rgb(22, 163, 74)",
+  "--text-on-solid":   "rgba(255, 255, 255, 0.95)",
+
+  /* Profile page (design handoff palette) — no dark variant specified in the
+     handoff, so these reuse the app's existing dark-mode equivalents. */
+  "--bg-profile-page":              "#0a0a0f",
+  "--bg-profile-surface":           "#1a1a22",
+  "--border-profile":               "rgba(255, 255, 255, 0.25)",
+  "--text-profile-muted":           "rgba(255, 255, 255, 0.35)",
+  "--bg-profile-destructive-hover": "rgba(239, 68, 68, 0.08)",
+
+  /* Canvas */
+  "--canvas-ambient": "200, 210, 230",
+  "--canvas-orbit": "170, 210, 255",
+  "--canvas-icon": "#383838",
+  "--canvas-icon-text": "255, 255, 255",
+  "--canvas-reject": "248, 113, 113", // matches --ring-destructive
+};

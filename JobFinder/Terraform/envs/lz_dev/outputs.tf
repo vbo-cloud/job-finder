@@ -36,3 +36,8 @@ output "caj_identity_principal_id" {
   description = "Principal ID of the Container App Jobs User Assigned Managed Identity."
   value       = azurerm_user_assigned_identity.caj.principal_id
 }
+
+output "subnet_mgmt_id" {
+  description = "Resource ID of the management subnet (jumpbox, admin VMs)."
+  value       = module.subnet_mgmt.id
+}
